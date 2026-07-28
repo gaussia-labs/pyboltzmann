@@ -97,3 +97,16 @@ MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
 
 REF_NAME_ANNOTATION = "org.opencontainers.image.ref.name"
 """Standard annotation that names a manifest in an image index, so a tool can find it by tag."""
+
+
+ANNOTATION_SOURCE_SNAPSHOT = "ai.gaussia.boltzmann.source-snapshot"
+"""The publisher's full snapshot an artifact was projected from.
+
+Equal to the config digest for a complete publish. When a subset of modules is published the config
+carries a reduced snapshot, which by construction is not in the publisher's own history -- so without
+this a push of a projection back to the same tag would look like a divergence when nothing diverged.
+"""
+
+
+ANNOTATION_INDEX_KIND = "ai.gaussia.boltzmann.index-kind"
+"""Which kind of index a travelling index layer carries, so a consumer knows what it received."""

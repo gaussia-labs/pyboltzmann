@@ -96,6 +96,39 @@ class Index(Protocol):
         ...
 
 
+@runtime_checkable
+class TravellingIndex(Index, Protocol):
+    """An index that ships with its module because no client can rebuild it.
+
+    An index whose :attr:`Index.rebuildable` is ``False`` **must** satisfy this, or it cannot be
+    published: a module layer can only carry bytes, and there would be no way to produce them. The
+    vector index is the case the paper names (Section 6.3) -- rebuilding it needs an embedding model,
+    which a model-agnostic client does not carry -- so it travels and records what produced it.
+
+    The serialization is the implementation's own. Nothing here interprets these bytes; the protocol only
+    moves them and records the model tag alongside, so a consumer can tell whether the index it received
+    is comparable to one it could build itself.
+    """
+
+    def dump(self) -> bytes:
+        """
+        Serialize the index so it can travel with its module.
+
+        Returns:
+            bytes: The index, in whatever form this implementation reads back.
+        """
+        ...
+
+    def load(self, data: bytes) -> None:
+        """
+        Restore the index from bytes a peer published.
+
+        Args:
+            data (bytes): What :meth:`dump` produced, from an index with the same model tag.
+        """
+        ...
+
+
 class AbstractIndex(ABC):
     """
     Base for the indices this SDK ships.

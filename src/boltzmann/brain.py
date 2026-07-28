@@ -45,10 +45,15 @@ from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.distribution.layers import pack_module, unpack_layer
 from boltzmann.distribution.manifest import BrainManifest, Descriptor, build_manifest
 from boltzmann.distribution.media_types import (
+    ANNOTATION_EMBEDDING_MODEL,
+    ANNOTATION_INDEX_KIND,
+    ANNOTATION_MEMORY_TYPE,
+    ANNOTATION_SOURCE_SNAPSHOT,
     ARTIFACT_TYPE,
     CONFIG_MEDIA_TYPE,
     MANIFEST_MEDIA_TYPE,
     REF_NAME_ANNOTATION,
+    VECTOR_INDEX_MEDIA_TYPE,
 )
 from boltzmann.exceptions import (
     BlockNotFoundError,
@@ -60,6 +65,7 @@ from boltzmann.exceptions import (
 from boltzmann.identity.digest import BlockId, Digest, MerkleRoot, OciDigest
 from boltzmann.identity.serialization import canonicalize
 from boltzmann.identity.time import utc_timestamp
+from boltzmann.indices.base import TravellingIndex
 from boltzmann.ingest.commit import CommitResult
 from boltzmann.ingest.pipelines import get_pipeline
 from boltzmann.ingest.register import RegistrationRequest, RegistrationResult
@@ -1213,7 +1219,11 @@ class Brain:
 
     # --- Distribution ----------------------------------------------------------
 
-    def pack(self, tag: str | None = None) -> BrainManifest:
+    def pack(
+        self,
+        tag: str | None = None,
+        modules: Iterable[MemoryType] | None = None,
+    ) -> BrainManifest:
         """
         Materialize the current snapshot as an OCI artifact inside the local layout.
 
@@ -1224,31 +1234,155 @@ class Brain:
         This is what makes publishing a transfer rather than a conversion: :meth:`push` packs and then
         moves blobs that already exist.
 
+        **Publishing a subset.** A brain's sources can be gigabytes while its derived knowledge is
+        kilobytes, and the right to derive from a book is not the right to redistribute the book. So
+        ``modules`` narrows what is published -- but canonical cannot be omitted when a derived module is
+        included. The paper's R1 makes canonical evidence the root of re-derivation: an artifact carrying
+        semantic blocks whose citations point nowhere could not be audited or re-derived, only trusted,
+        which is precisely what Section 4.2 says is lost without it. Publishing canonical or episodic
+        alone is fine, because neither cites anything.
+
+        **An index that cannot be rebuilt travels.** A module whose registered index reports
+        ``rebuildable = False`` gets a second layer carrying that index's bytes, annotated with the model
+        that produced it. Every other index is a deterministic function of the blocks, so a consumer
+        regenerates it rather than downloading it (paper Section 6.3).
+
         Args:
             tag (str | None): Reference name to record in the index, so a tool can find the artifact
                 by name rather than by digest.
+            modules (Iterable[MemoryType] | None): Which modules to publish. Defaults to all installed.
 
         Returns:
             BrainManifest: The manifest, already stored as a blob.
+
+        Raises:
+            DistributionError: If a named module is not installed, or a derived module would be published
+                without the canonical evidence it cites.
         """
+        published = self._modules_to_publish(modules)
+
         layers = []
-        for memory_type in self._snapshot.installed:
+        for memory_type in published:
             module = self.module(memory_type)
             payload = pack_module(module)
             digest = self.store.put_bytes(payload)
-            layers.append(Descriptor.for_module(self._snapshot.modules[memory_type], digest, len(payload)))
+            reference = self._snapshot.modules[memory_type]
+            layers.append(Descriptor.for_module(reference, digest, len(payload)))
 
-        config_bytes = self._snapshot.canonical_bytes()
+            index_layer = self._pack_index(memory_type, reference)
+            if index_layer is not None:
+                layers.append(index_layer)
+
+        projected = self._projection(published)
+        config_bytes = projected.canonical_bytes()
         config = Descriptor(
             media_type=CONFIG_MEDIA_TYPE,
             digest=self.store.put_bytes(config_bytes),
             size=len(config_bytes),
         )
-        manifest = build_manifest(self._snapshot, config, layers)
+        manifest = build_manifest(
+            projected,
+            config,
+            layers,
+            annotations={ANNOTATION_SOURCE_SNAPSHOT: str(self._snapshot.digest)},
+        )
         manifest_bytes = manifest.to_bytes()
         manifest_digest = self.store.put_bytes(manifest_bytes)
         self._write_index(manifest_digest, len(manifest_bytes), tag)
         return manifest
+
+    def _modules_to_publish(self, modules: Iterable[MemoryType] | None) -> list[MemoryType]:
+        """Which modules an artifact will carry, refusing a subset that would strand a citation."""
+        if modules is None:
+            return list(self._snapshot.installed)
+
+        wanted = [kind for kind in MemoryType if kind in set(modules)]
+        absent = [kind.value for kind in wanted if not self._snapshot.has_module(kind)]
+        if absent:
+            installed = ", ".join(kind.value for kind in self._snapshot.installed) or "none"
+            raise DistributionError(f"cannot publish {', '.join(absent)}: not installed. Installed: {installed}")
+        if not wanted:
+            raise DistributionError("cannot publish an artifact with no modules")
+
+        derived = [kind for kind in wanted if kind.is_derived]
+        if derived and MemoryType.CANONICAL not in wanted:
+            raise DistributionError(
+                f"cannot publish {', '.join(kind.value for kind in derived)} without canonical: those "
+                f"blocks cite canonical evidence, and an artifact whose citations point nowhere could be "
+                f"trusted but neither audited nor re-derived. Include canonical, or publish only modules "
+                f"that cite nothing."
+            )
+        return wanted
+
+    def _projection(self, published: list[MemoryType]) -> Snapshot:
+        """
+        The snapshot an artifact carries.
+
+        For a complete publish this is the brain's own snapshot. For a subset it is a projection of it --
+        the same roots, fewer modules -- with no parent, because a projection is not a version in this
+        brain's history and chaining it would put a document nobody can resolve into the consumer's chain.
+        """
+        if set(published) == set(self._snapshot.installed):
+            return self._snapshot
+        return Snapshot(
+            boltzmann=self._snapshot.boltzmann,
+            modules={kind: self._snapshot.modules[kind] for kind in published},
+            created_at=self._snapshot.created_at,
+            labels=self._snapshot.labels,
+        )
+
+    def _pack_index(self, memory_type: MemoryType, reference: ModuleRef) -> Descriptor | None:
+        """A layer for the one index kind a consumer cannot rebuild, or ``None`` if there is none."""
+        travelling = [index for index in self.indices.get(memory_type, []) if not index.rebuildable]
+        if not travelling:
+            return None
+
+        index = travelling[0]
+        if not isinstance(index, TravellingIndex):
+            raise DistributionError(
+                f"the {index.kind.value} index for {memory_type.value} reports rebuildable=False but "
+                f"cannot dump: an index that no client can rebuild has to be publishable, or the module "
+                f"arrives without it and nothing can regenerate it"
+            )
+
+        payload = index.dump()
+        annotations = {
+            ANNOTATION_MEMORY_TYPE: memory_type.value,
+            ANNOTATION_INDEX_KIND: index.kind.value,
+        }
+        if index.model_tag is not None:
+            annotations[ANNOTATION_EMBEDDING_MODEL] = index.model_tag
+        elif reference.embedding_model is not None:
+            annotations[ANNOTATION_EMBEDDING_MODEL] = reference.embedding_model
+
+        return Descriptor(
+            media_type=VECTOR_INDEX_MEDIA_TYPE,
+            digest=self.store.put_bytes(payload),
+            size=len(payload),
+            annotations=annotations,
+        )
+
+    def _load_index(self, memory_type: MemoryType, layer: Descriptor) -> None:
+        """
+        Restore a travelling index a peer published, if this client registered one to receive it.
+
+        An index built by a different embedding model is refused rather than loaded. Vectors from two
+        models occupy different representation spaces, so mixing them would produce rankings that mean
+        nothing -- and the annotation exists precisely so a consumer can tell.
+        """
+        candidates = [index for index in self.indices.get(memory_type, []) if not index.rebuildable]
+        if not candidates:
+            return
+
+        index = candidates[0]
+        published_model = layer.annotations.get(ANNOTATION_EMBEDDING_MODEL)
+        if index.model_tag is not None and published_model is not None and index.model_tag != published_model:
+            raise DistributionError(
+                f"the published {memory_type.value} index was built by {published_model!r} but this client "
+                f"expects {index.model_tag!r}; loading it would mix representation spaces"
+            )
+        if isinstance(index, TravellingIndex):
+            index.load(self.store.get_bytes(layer.digest))
 
     def _write_index(self, digest: OciDigest, size: int, tag: str | None) -> None:
         """Point the layout's index at the manifest, replacing any entry for the same tag."""
@@ -1330,6 +1464,13 @@ class Brain:
                 )
             references.append(expected)
 
+            # The one derived structure a model-agnostic client cannot rebuild, so it travels.
+            index_layer = manifest.vector_index_for(memory_type)
+            if index_layer is not None:
+                if not self.store.is_resolvable(index_layer.digest):
+                    await client.pull_blob(reference, index_layer.digest, self.store)
+                self._load_index(memory_type, index_layer)
+
         complete = set(wanted) == set(manifest.modules)
         if complete:
             # Adopt the remote document verbatim. Rebuilding an equivalent one would give it a fresh
@@ -1358,6 +1499,7 @@ class Brain:
         reference: str | None = None,
         tag: str | None = None,
         force: bool = False,
+        modules: Iterable[MemoryType] | None = None,
     ) -> OciDigest:
         """
         Publish the current snapshot, refusing to overwrite work it does not contain.
@@ -1392,11 +1534,14 @@ class Brain:
             self._require_not_narrowing(target, target_tag)
             await self._require_fast_forward(client, target, target_tag)
 
-        manifest = self.pack(tag=target_tag)
+        manifest = self.pack(tag=target_tag, modules=modules)
         digest = await client.push(target, target_tag, manifest, self.store)
         self._advance(
             self._snapshot,
-            origin=Origin(reference=target, tag=target_tag, snapshot=self._state.snapshot),
+            # ``partial`` says this brain is missing modules the source had, which is what makes
+            # republishing dangerous. Choosing to publish a subset says nothing of the kind: the local
+            # brain is complete, so pushing the same projection again is a fast-forward, not a narrowing.
+            origin=Origin(reference=target, tag=target_tag, snapshot=manifest.config.digest),
         )
         return digest
 
@@ -1435,7 +1580,10 @@ class Brain:
         except DistributionError:
             return  # The tag does not exist yet, so there is nothing to overwrite.
 
-        remote = manifest.config.digest
+        # A projection's config is not a version in anyone's history, so the manifest records the full
+        # snapshot it came from and that is what the ancestry has to contain.
+        source = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
+        remote = OciDigest.parse(source) if source else manifest.config.digest
         ancestry = self.ancestry()
         if remote in ancestry:
             return
