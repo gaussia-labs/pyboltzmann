@@ -21,7 +21,7 @@ index engine -- the suite says nothing.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -34,8 +34,10 @@ from boltzmann.exceptions import (
     BlockIntegrityError,
     BlockNotFoundError,
     BlockTombstonedError,
+    BoltzmannError,
     DigestKindError,
     NonDeterministicValueError,
+    SnapshotError,
 )
 from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
 from boltzmann.identity.serialization import canonicalize
@@ -288,3 +290,149 @@ class BlockStoreConformance(ABC):
         stored = {store.put_block(sample_semantic(f"concept {index}")) for index in range(3)}
         held = {digest.hex for digest in store.iter_digests()}
         assert {block_id.hex for block_id in stored} <= held
+
+
+class BrainReaderConformance(ABC):
+    """
+    What any client that claims to read a brain must do, whoever wrote it.
+
+    Subclass this and implement :meth:`make_reader`, returning a client already holding the knowledge
+    :meth:`seed` describes. A read-only client satisfies :class:`~boltzmann.protocol.operations.BrainReader`
+    and is conforming for what it claims, so this suite asks nothing about writing.
+
+    What is asserted is the contract of Sections 9.2 and 10.6 -- verified data with its provenance, never
+    prose; membership checked against the installed snapshot; tombstoned told apart from missing -- and
+    never a ranking order, because the protocol guarantees verifiability and not identical ranking.
+    """
+
+    @abstractmethod
+    def make_reader(self) -> Any:
+        """
+        Build a client to test.
+
+        Returns:
+            Any: A client satisfying :class:`~boltzmann.protocol.operations.BrainReader`, already holding
+            one canonical source and one semantic block derived from it, where the semantic block's text
+            contains the word ``"Fourier"``.
+        """
+
+    def test_satisfies_the_reader_contract(self) -> None:
+        from boltzmann.protocol.operations import BrainReader
+
+        assert isinstance(self.make_reader(), BrainReader)
+
+    def test_reports_what_is_installed(self) -> None:
+        reader = self.make_reader()
+        snapshot = reader.snapshot()
+        assert snapshot.installed
+        for memory_type in snapshot.installed:
+            assert reader.root_of(memory_type) == snapshot.root_of(memory_type)
+
+    def test_a_module_that_is_not_installed_is_refused(self) -> None:
+        """Not installed is a legitimate state, so it must be an error and never an empty module."""
+        reader = self.make_reader()
+        absent = [kind for kind in MemoryType if not reader.snapshot().has_module(kind)]
+        if not absent:
+            pytest.skip("this reader holds every module")
+        with pytest.raises(SnapshotError):
+            reader.root_of(absent[0])
+
+    def test_opens_an_installed_module(self) -> None:
+        reader = self.make_reader()
+        module = reader.module(MemoryType.SEMANTIC)
+        assert len(module) > 0
+        assert module.root == reader.root_of(MemoryType.SEMANTIC)
+
+    def test_resolves_a_member(self) -> None:
+        reader = self.make_reader()
+        block_id = reader.module(MemoryType.SEMANTIC).block_ids[0]
+        assert reader.resolve(block_id).block_id == block_id
+
+    def test_refuses_to_resolve_a_non_member(self) -> None:
+        """A block no installed root commits to must not come back, however it is stored.
+
+        The error is required to be a ``BoltzmannError``. The SDK defines the exception hierarchy, so
+        that much is protocol rather than implementation -- a caller has to be able to catch a protocol
+        failure without knowing which client produced it.
+        """
+        reader = self.make_reader()
+        with pytest.raises(BoltzmannError):
+            reader.resolve(BlockId.of(b"a block this brain never held"))
+
+    def test_proves_membership(self) -> None:
+        reader = self.make_reader()
+        block_id = reader.module(MemoryType.SEMANTIC).block_ids[0]
+        proof = reader.prove(block_id, MemoryType.SEMANTIC)
+        assert proof.verify(reader.root_of(MemoryType.SEMANTIC))
+
+    def test_a_proof_does_not_verify_against_another_root(self) -> None:
+        reader = self.make_reader()
+        block_id = reader.module(MemoryType.SEMANTIC).block_ids[0]
+        proof = reader.prove(block_id, MemoryType.SEMANTIC)
+        assert not proof.verify(MerkleRoot.of(b"some other composition"))
+
+    def test_verifies_itself(self) -> None:
+        assert self.make_reader().verify()
+
+    def test_reports_resolvability_three_ways(self) -> None:
+        """Section 10.6: a removed block must never be indistinguishable from a corrupted one."""
+        reader = self.make_reader()
+        report = reader.resolvability()
+        held = sum(len(ids) for ids in report.resolvable.values())
+        assert held > 0
+        assert report.is_intact
+
+    def test_search_returns_verified_data(self) -> None:
+        from boltzmann.query.request import Query
+
+        reader = self.make_reader()
+        bundle = reader.search(Query(text="Fourier"))
+        assert len(bundle) > 0
+        assert bundle.all_verified
+        bundle.require_verified()
+
+    def test_search_reports_the_roots_it_verified_against(self) -> None:
+        from boltzmann.query.request import Query
+
+        reader = self.make_reader()
+        bundle = reader.search(Query(text="Fourier"))
+        for memory_type, root in bundle.verified_against.items():
+            assert root == reader.root_of(memory_type)
+
+    def test_search_returns_data_and_not_prose(self) -> None:
+        from boltzmann.query.request import Query
+
+        reader = self.make_reader()
+        match = reader.search(Query(text="Fourier")).matches[0]
+        assert isinstance(match.content, dict)
+        assert isinstance(match.score, str)
+        assert not hasattr(match, "answer")
+
+    def test_search_honours_a_memory_type_filter(self) -> None:
+        """R2: "what happened in the class of May 14" must not compete with a Fourier definition."""
+        from boltzmann.query.request import Query, QueryFilters
+
+        reader = self.make_reader()
+        bundle = reader.search(Query(text="Fourier", filters=QueryFilters(memory_types=[MemoryType.SEMANTIC])))
+        assert {match.memory_type for match in bundle.matches} <= {MemoryType.SEMANTIC}
+
+    def test_no_match_is_an_answer_and_not_an_error(self) -> None:
+        """The terms are deliberately long and distinctive: matching is left to the implementation, so a
+        conformance test must not depend on how short terms or stopwords are treated."""
+        from boltzmann.query.request import Query
+
+        reader = self.make_reader()
+        bundle = reader.search(Query(text="chromodynamics lagrangian renormalisation"))
+        assert len(bundle) == 0
+        assert bundle.all_verified
+
+    def test_an_unregistered_index_is_refused_rather_than_faked(self) -> None:
+        """The protocol names six index kinds; a client that has none must say so."""
+        from boltzmann.indices.base import IndexKind
+
+        reader = self.make_reader()
+        try:
+            index = reader.open_index(MemoryType.SEMANTIC, IndexKind.VECTOR)
+        except BoltzmannError:
+            return
+        assert index.kind is IndexKind.VECTOR

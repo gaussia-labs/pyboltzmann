@@ -3,6 +3,7 @@
 from boltzmann.conformance import golden
 from boltzmann.conformance.suite import (
     BlockStoreConformance,
+    BrainReaderConformance,
     CompositionConformance,
     IdentityConformance,
     MerkleConformance,
@@ -12,6 +13,7 @@ from boltzmann.conformance.suite import (
 
 __all__ = [
     "BlockStoreConformance",
+    "BrainReaderConformance",
     "CompositionConformance",
     "IdentityConformance",
     "MerkleConformance",
