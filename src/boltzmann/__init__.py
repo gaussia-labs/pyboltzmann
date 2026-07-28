@@ -63,7 +63,7 @@ from boltzmann.ingest import (
     Validator,
 )
 from boltzmann.merkle import InclusionProof, MerkleLayout, MerkleTree
-from boltzmann.module import Composition, Module, ModuleRef, Snapshot
+from boltzmann.module import Composition, Ledger, Module, ModuleRef, Snapshot
 from boltzmann.protocol import (
     PROTOCOL_VERSION,
     BoltzmannProtocol,
@@ -73,7 +73,17 @@ from boltzmann.protocol import (
     BrainWriter,
 )
 from boltzmann.query import EvidenceBundle, Match, Query, QueryFilters, QueryHints, QueryPlanner, RetrievalMode
-from boltzmann.retention import DropRequest, DropResult, RetentionPolicy
+from boltzmann.retention import (
+    CascadePlan,
+    DropRequest,
+    DropResult,
+    ProducerDropRequest,
+    PruneReport,
+    RedactionResult,
+    ResolvabilityReport,
+    RetentionPolicy,
+    SupersessionResult,
+)
 from boltzmann.store import BlockStore, MemoryBlockStore, OciLayoutStore
 
 __version__ = "0.1.0"
@@ -94,6 +104,7 @@ __all__ = [
     "BrainState",
     "BrainWriter",
     "Candidate",
+    "CascadePlan",
     "CandidateProposer",
     "CandidateSet",
     "CanonicalBlock",
@@ -101,9 +112,15 @@ __all__ = [
     "Composition",
     "DropRequest",
     "DropResult",
+    "ProducerDropRequest",
+    "PruneReport",
+    "RedactionResult",
+    "ResolvabilityReport",
+    "SupersessionResult",
     "EpisodicBlock",
     "EvidenceBundle",
     "InclusionProof",
+    "Ledger",
     "Index",
     "IndexKind",
     "Match",

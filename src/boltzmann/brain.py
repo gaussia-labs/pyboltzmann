@@ -30,12 +30,15 @@ from boltzmann.blocks.canonical import CanonicalBlock, NormalizedView
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import (
     Actor,
+    DemotionRecord,
     DerivationRecord,
     NormalizationRecord,
     Producer,
     ProducerKind,
     ProvenanceBlock,
     RegistrationRecord,
+    RemovalMechanism,
+    RemovalRecord,
     SupersessionRecord,
 )
 from boltzmann.constants import PROTOCOL_VERSION
@@ -54,7 +57,7 @@ from boltzmann.exceptions import (
     QueryError,
     SnapshotError,
 )
-from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
+from boltzmann.identity.digest import BlockId, Digest, MerkleRoot, OciDigest
 from boltzmann.identity.serialization import canonicalize
 from boltzmann.identity.time import utc_timestamp
 from boltzmann.ingest.commit import CommitResult
@@ -64,11 +67,23 @@ from boltzmann.ingest.schema import candidates_schema as _candidates_schema
 from boltzmann.ingest.task import PROPOSABLE_MEMORY_TYPES, ProcessingTask, TaskOperation
 from boltzmann.ingest.validation import ValidationReport, validate
 from boltzmann.module.composition import Composition
+from boltzmann.module.ledger import Ledger
 from boltzmann.module.module import Module
 from boltzmann.module.snapshot import ModuleRef, Snapshot
 from boltzmann.query.scan import scan
+from boltzmann.retention.cascade import plan_many
 from boltzmann.retention.policy import RetentionPolicy
-from boltzmann.retention.requests import ResolvabilityReport
+from boltzmann.retention.reachability import mark, sweep
+from boltzmann.retention.requests import (
+    CascadePlan,
+    DropRequest,
+    DropResult,
+    ProducerDropRequest,
+    PruneReport,
+    RedactionResult,
+    ResolvabilityReport,
+    SupersessionResult,
+)
 from boltzmann.store.oci_layout import OciLayoutStore
 
 if TYPE_CHECKING:
@@ -795,6 +810,7 @@ class Brain:
         self,
         blocks: dict[MemoryType, list[Block]],
         provenance: Sequence[ProvenanceBlock],
+        without: dict[MemoryType, list[BlockId]] | None = None,
     ) -> CommitResult:
         """
         Store blocks, advance the affected compositions, and publish a snapshot.
@@ -803,9 +819,14 @@ class Brain:
         directly to the Merkle DAGs or to the indices" a property of the code: there is one place that
         writes, and it is reached only after validation.
 
+        Adding and removing go through the same path, so a drop is one version just as a commit is: the
+        blocks it excludes and the removal record it writes land in a single snapshot rather than two.
+
         Args:
             blocks (dict[MemoryType, list[Block]]): Blocks to add, by module.
             provenance (Sequence[ProvenanceBlock]): Provenance entries to record alongside them.
+            without (dict[MemoryType, list[BlockId]] | None): Blocks to exclude from a composition. The
+                blocks themselves are untouched -- what changes is which composition names them.
 
         Returns:
             CommitResult: The new snapshot and the new roots.
@@ -814,15 +835,21 @@ class Brain:
         if provenance:
             by_module.setdefault(MemoryType.PROVENANCE, []).extend(provenance)
 
+        excluded = {kind: list(ids) for kind, ids in (without or {}).items()}
+        touched = [*by_module, *(kind for kind in excluded if kind not in by_module)]
+
         committed: list[BlockId] = []
         references: list[ModuleRef] = []
         roots: dict[MemoryType, MerkleRoot] = {}
 
-        for memory_type, items in by_module.items():
+        for memory_type in touched:
+            items = by_module.get(memory_type, [])
             for block in items:
                 self.store.put_block(block)
 
             module = self._module_or_empty(memory_type).with_blocks(block.block_id for block in items)
+            if memory_type in excluded:
+                module = module.without_blocks(excluded[memory_type])
             self._rebuild_indices(module)
             reference = module.persist(embedding_model=self._embedding_model(memory_type))
             references.append(reference)
@@ -856,6 +883,333 @@ class Brain:
                 return index.model_tag
         reference = self._snapshot.modules.get(memory_type)
         return reference.embedding_model if reference else None
+
+    # --- Retention -------------------------------------------------------------
+
+    def plan_drop(self, request: DropRequest) -> CascadePlan:
+        """
+        Work out what a drop would take with it, without writing anything.
+
+        Args:
+            request (DropRequest): What would be excluded.
+
+        Returns:
+            CascadePlan: The dependents, by module, and what could be re-derived instead.
+
+        Raises:
+            ProtocolError: If a named block is not in the module's composition.
+        """
+        self._require_members(request.blocks, request.memory_type)
+        return plan_many(
+            request.blocks,
+            request.memory_type,
+            self.modules(),
+            Ledger.of(self.modules()),
+            request.rederive_against,
+        )
+
+    def drop(self, request: DropRequest) -> DropResult:
+        """
+        Exclude blocks from a module, rebuilding its Merkle DAG and cascading through provenance.
+
+        Blocks are not mutated. What changes is the composition: a new Merkle DAG over the survivors, a
+        new root, indices rebuilt, and the removal recorded in provenance. Consumers of the new root
+        never see the dropped block, while older retained roots keep verifying exactly as before -- which
+        is the property that makes exclusion usable for wrong knowledge (paper Section 10.6).
+
+        A canonical drop is privileged and always cascades, so one logical removal of evidence can
+        publish several new module versions in a single commit.
+
+        Args:
+            request (DropRequest): What to exclude, by whom, and why.
+
+        Returns:
+            DropResult: The new snapshot, what left each module, and the new roots. When the cascade
+            exceeds the policy's review threshold nothing is written and ``review_required`` is set.
+
+        Raises:
+            RetentionPolicyError: If the policy forbids the drop.
+            AppendOnlyViolationError: If the module is append-only.
+            ProtocolError: If a named block is not in the module's composition.
+        """
+        self.policy.authorize(RemovalMechanism.DROP, request.memory_type)
+        plan = self.plan_drop(request)
+
+        if self.policy.requires_review(plan.size):
+            return DropResult(snapshot=self._snapshot, review_required=True)
+
+        dropped: dict[MemoryType, list[BlockId]] = {
+            request.memory_type: sorted(set(request.blocks), key=lambda value: value.hex)
+        }
+        for memory_type, blocks in plan.dependents.items():
+            merged = {*dropped.get(memory_type, []), *blocks}
+            dropped[memory_type] = sorted(merged, key=lambda value: value.hex)
+
+        # Every module the cascade reaches must permit the removal, or a canonical drop could rewrite an
+        # append-only module through the back door.
+        for memory_type in dropped:
+            self.policy.authorize(RemovalMechanism.DROP, memory_type)
+
+        now = utc_timestamp()
+        records = [
+            ProvenanceBlock(
+                record=RemovalRecord(
+                    blocks=blocks,
+                    mechanism=RemovalMechanism.DROP,
+                    memory_type=memory_type,
+                    actor=request.actor,
+                    at=now,
+                    reason=request.reason,
+                    policy=request.policy_name,
+                    cascaded_from=None if memory_type is request.memory_type else plan.origin,
+                )
+            )
+            for memory_type, blocks in dropped.items()
+        ]
+
+        commit = self._write(blocks={}, provenance=records, without=dropped)
+        return DropResult(
+            snapshot=commit.snapshot,
+            dropped=dropped,
+            roots=commit.roots,
+            provenance=commit.provenance,
+        )
+
+    def drop_by_producer(self, request: ProducerDropRequest) -> DropResult:
+        """
+        Drop everything a given producer made: batch invalidation (paper Section 10.3).
+
+        Because provenance records the producer of each derived block, a drop can be stated over a set --
+        everything from one ingestion, or everything one model version derived. That is the natural
+        response to deliberately wrong knowledge introduced in bulk, and it reuses the same cascade
+        rather than inventing a second mechanism.
+
+        Args:
+            request (ProducerDropRequest): Whose output to invalidate, where, and why.
+
+        Returns:
+            DropResult: The new snapshot, what left, and the new roots. Empty if the producer made
+            nothing in the named modules.
+        """
+        made = Ledger.of(self.modules()).made_by(request.producer)
+        if not made:
+            return DropResult(snapshot=self._snapshot)
+
+        dropped: dict[MemoryType, list[BlockId]] = {}
+        for memory_type in request.memory_types:
+            if not self._snapshot.has_module(memory_type):
+                continue
+            present = sorted(
+                (block_id for block_id in made if block_id in self.module(memory_type)),
+                key=lambda value: value.hex,
+            )
+            if present:
+                dropped[memory_type] = present
+
+        if not dropped:
+            return DropResult(snapshot=self._snapshot)
+
+        result = DropResult(snapshot=self._snapshot)
+        for memory_type, blocks in dropped.items():
+            result = self.drop(
+                DropRequest(
+                    blocks=blocks,
+                    memory_type=memory_type,
+                    actor=request.actor,
+                    reason=request.reason,
+                    policy_name=request.policy_name,
+                )
+            )
+        return result
+
+    def supersede(
+        self,
+        block: BlockId,
+        superseded: BlockId,
+        memory_type: MemoryType,
+        reason: str | None = None,
+    ) -> SupersessionResult:
+        """
+        Record that one block takes precedence over another, without changing membership.
+
+        The superseded block stays in the composition and keeps proving into the root; what changes is
+        accessibility, so a query holds it back unless asked for it. This is the only removal path
+        available to the episodic module, which is append-only by protocol.
+
+        Args:
+            block (BlockId): The block that takes precedence.
+            superseded (BlockId): The block it replaces.
+            memory_type (MemoryType): Which module both belong to.
+            reason (str | None): Why the earlier block was superseded.
+
+        Returns:
+            SupersessionResult: The new snapshot and the record written.
+
+        Raises:
+            ProtocolError: If either block is not in the module's composition, or they are the same block.
+        """
+        self.policy.authorize(RemovalMechanism.SUPERSEDE, memory_type)
+        if block == superseded:
+            raise ProtocolError(f"a block cannot supersede itself ({block.short})")
+        self._require_members([block, superseded], memory_type)
+
+        record = ProvenanceBlock(
+            record=SupersessionRecord(
+                block=block,
+                supersedes=superseded,
+                actor=self.actor,
+                at=utc_timestamp(),
+                reason=reason,
+            )
+        )
+        commit = self._write(blocks={}, provenance=[record])
+        return SupersessionResult(snapshot=commit.snapshot, provenance=commit.provenance)
+
+    def demote(
+        self,
+        block: BlockId,
+        memory_type: MemoryType,
+        reason: str | None = None,
+    ) -> SupersessionResult:
+        """
+        Lower a block's retrieval priority without removing it.
+
+        Recorded in the ledger rather than on the block, because a block is immutable: if accessibility
+        were a field, demoting a block would change its ``block_id`` and make it a different block.
+
+        The decay function is deliberately absent. The paper leaves it open (Section 12), so this records
+        the decision and how much a demoted block is penalized -- or whether the penalty fades -- is a
+        retrieval strategy the implementation owns. The built-in scan simply holds demoted blocks back.
+
+        Args:
+            block (BlockId): The block to demote.
+            memory_type (MemoryType): Which module it belongs to.
+            reason (str | None): Why.
+
+        Returns:
+            SupersessionResult: The new snapshot and the record written.
+        """
+        self.policy.authorize(RemovalMechanism.DEMOTE, memory_type)
+        self._require_members([block], memory_type)
+
+        record = ProvenanceBlock(
+            record=DemotionRecord(
+                block=block,
+                actor=self.actor,
+                at=utc_timestamp(),
+                reason=reason,
+            )
+        )
+        commit = self._write(blocks={}, provenance=[record])
+        return SupersessionResult(snapshot=commit.snapshot, provenance=commit.provenance)
+
+    def prune(self, dry_run: bool = True) -> PruneReport:
+        """
+        Reclaim blobs unreachable from every retained root.
+
+        Pruning never decides what to forget -- a drop already did. It reclaims what no retained
+        composition still needs, which is why it is irreversible yet harmless: nothing a retained root
+        names is touched.
+
+        Reachability follows what a snapshot names transitively, not only its block ids: the composition
+        documents, and the observed bytes a canonical block describes. Reclaiming a source blob because no
+        composition listed its digest directly would destroy evidence a retained root still points at.
+
+        Args:
+            dry_run (bool): Whether to report without deleting. Defaults to reporting, because pruning
+                cannot be undone.
+
+        Returns:
+            PruneReport: What was reachable and what was reclaimed.
+        """
+        retained = self.history()
+        keep = mark(retained, self.store)
+        reclaimable = sweep(keep, self.store)
+
+        if not dry_run:
+            for digest in reclaimable:
+                self.store.delete(digest)
+
+        return PruneReport(
+            retained_roots=len(retained),
+            reachable=len(keep),
+            reclaimed=reclaimable,
+            dry_run=dry_run,
+        )
+
+    def redact(self, block: BlockId, memory_type: MemoryType, reason: str) -> RedactionResult:
+        """
+        Destroy a block's bytes while a retained root still names it.
+
+        Redaction punches a hole in a composition that still names the block. The Merkle DAG references
+        identities, not bytes, so deleting the bytes changes no hash and membership still verifies -- but
+        reconstruction of that one block is forfeited. :meth:`resolvability` reports it as tombstoned
+        rather than missing, so a lawful erasure is never mistaken for a corrupt store.
+
+        This is not the cleanup path. Wrong or obsolete knowledge is dropped; redaction is for personal
+        data, credentials, or licensed material that must disappear even from retained history.
+
+        Two limits are worth restating. A hash of low-entropy content is not anonymous, so confirming a
+        guess may still be possible while the ``block_id`` is kept. And erasure does not propagate across
+        already-pulled copies: a revocation can be published, but a distributed brain can only signal
+        destruction, not guarantee it.
+
+        Args:
+            block (BlockId): The block to redact.
+            memory_type (MemoryType): Which module it belongs to.
+            reason (str): The legal or safety basis.
+
+        Returns:
+            RedactionResult: What was destroyed and the record written.
+
+        Raises:
+            RetentionPolicyError: If the policy declares no redactable content.
+            ProtocolError: If the block is not in the module's composition.
+        """
+        self.policy.authorize(RemovalMechanism.TOMBSTONE, memory_type)
+        self._require_members([block], memory_type)
+
+        destroyed: list[Digest] = [block]
+        if memory_type is MemoryType.CANONICAL:
+            evidence = self.module(memory_type).get(block)
+            if isinstance(evidence, CanonicalBlock):
+                destroyed.append(evidence.blob)
+                if evidence.normalized_view is not None:
+                    destroyed.append(evidence.normalized_view.blob)
+
+        record = ProvenanceBlock(
+            record=RemovalRecord(
+                blocks=[block],
+                mechanism=RemovalMechanism.TOMBSTONE,
+                memory_type=memory_type,
+                actor=self.actor,
+                at=utc_timestamp(),
+                reason=reason,
+            )
+        )
+        commit = self._write(blocks={}, provenance=[record])
+
+        # The record goes in first. A tombstone with no ledger entry would be indistinguishable from
+        # corruption, which is the one thing Section 10.6 forbids.
+        for digest in destroyed:
+            self.store.tombstone(digest, reason)
+
+        return RedactionResult(
+            mechanism=RemovalMechanism.TOMBSTONE,
+            redacted=destroyed,
+            provenance=commit.provenance,
+            snapshot=commit.snapshot,
+        )
+
+    def _require_members(self, blocks: Iterable[BlockId], memory_type: MemoryType) -> None:
+        """A removal has to name blocks the composition actually holds."""
+        module = self.module(memory_type)
+        absent = [block_id.short for block_id in blocks if block_id not in module]
+        if absent:
+            raise ProtocolError(
+                f"cannot remove from the {memory_type.value} module: {', '.join(absent)} "
+                f"{'is' if len(absent) == 1 else 'are'} not in its composition"
+            )
 
     # --- Distribution ----------------------------------------------------------
 
