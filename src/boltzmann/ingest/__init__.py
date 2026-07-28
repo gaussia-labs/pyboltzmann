@@ -12,6 +12,13 @@ from boltzmann.ingest.pipelines import (
 )
 from boltzmann.ingest.proposer import Candidate, CandidateProposer, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest, RegistrationResult
+from boltzmann.ingest.schema import (
+    block_schema,
+    candidates_schema,
+    evidence_bundle_schema,
+    processing_task_schema,
+    wire_schemas,
+)
 from boltzmann.ingest.task import PROPOSABLE_MEMORY_TYPES, ProcessingTask, TaskOperation
 from boltzmann.ingest.validation import (
     ValidatedCandidate,
@@ -40,6 +47,11 @@ __all__ = [
     "Validator",
     "DEFAULT_VALIDATORS",
     "build_block",
+    "block_schema",
+    "candidates_schema",
+    "evidence_bundle_schema",
+    "processing_task_schema",
+    "wire_schemas",
     "available_pipelines",
     "get_pipeline",
     "register_pipeline",

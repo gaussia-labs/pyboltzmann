@@ -60,6 +60,7 @@ from boltzmann.identity.time import utc_timestamp
 from boltzmann.ingest.commit import CommitResult
 from boltzmann.ingest.pipelines import get_pipeline
 from boltzmann.ingest.register import RegistrationRequest, RegistrationResult
+from boltzmann.ingest.schema import candidates_schema as _candidates_schema
 from boltzmann.ingest.task import PROPOSABLE_MEMORY_TYPES, ProcessingTask, TaskOperation
 from boltzmann.ingest.validation import ValidationReport, validate
 from boltzmann.module.composition import Composition
@@ -672,6 +673,24 @@ class Brain:
             instructions=instructions,
             task_id=task_id,
         )
+
+    def candidates_schema(self, task: ProcessingTask) -> dict[str, Any]:
+        """
+        The JSON Schema a proposer's answer to this task must satisfy.
+
+        ``task.output_schema`` names the schema; this returns it. Handing it to a model as structured
+        output is what turns "propose typed blocks" from a hope into a constraint: the payload is
+        resolved per memory type and narrowed to the types this task allows, so the model cannot even
+        express a proposal the validation gate would reject on shape.
+
+        Args:
+            task (ProcessingTask): The task the schema should describe.
+
+        Returns:
+            dict[str, Any]: A self-contained JSON Schema, generated from the same block classes the gate
+            validates against, so the two cannot disagree.
+        """
+        return _candidates_schema(task)
 
     def validate(self, candidates: CandidateSet, task: ProcessingTask) -> ValidationReport:
         """
