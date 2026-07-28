@@ -107,6 +107,10 @@ extend-exclude = [
     "dist",
     "*.egg-info",
     "examples",
+    # Ruff formats Python blocks inside Markdown, which collapses the aligned comment columns
+    # the README uses to read as a table. Prose alignment is an editorial choice, not a style
+    # violation, so documentation is left to its author.
+    "*.md",
 ]
 
 [tool.ruff.lint]
