@@ -1,0 +1,72 @@
+{
+  "boltzmann": 1,
+  "serialization": "jcs/1",
+  "hash": "sha256",
+  "description": "Values and their canonical serialization.",
+  "vectors": [
+    {
+      "name": "key_ordering",
+      "value": {
+        "b": 1,
+        "a": 2,
+        "A": 3
+      },
+      "canonical_bytes": "{\"A\":3,\"a\":2,\"b\":1}",
+      "sha256": "sha256:e36823485c211bdf27aa7bb577fe79ba2ad122cfbb95023ae886736fd48e9b7c"
+    },
+    {
+      "name": "nested",
+      "value": {
+        "outer": {
+          "z": [
+            1,
+            2,
+            3
+          ],
+          "a": {
+            "deep": true
+          }
+        }
+      },
+      "canonical_bytes": "{\"outer\":{\"a\":{\"deep\":true},\"z\":[1,2,3]}}",
+      "sha256": "sha256:7dad57e474fe13d435cddb0b7d5c71bda79d8d398c8b6bd8d7bfc34c5156dd76"
+    },
+    {
+      "name": "unicode_escapes",
+      "value": {
+        "label": "Fourier series",
+        "emoji": "🧠"
+      },
+      "canonical_bytes": "{\"emoji\":\"🧠\",\"label\":\"Fourier series\"}",
+      "sha256": "sha256:98f6277d19749f21205d819a19156d8833ad903f9bc90b022d294ed46cdefeac"
+    },
+    {
+      "name": "empty_containers",
+      "value": {
+        "list": [],
+        "object": {}
+      },
+      "canonical_bytes": "{\"list\":[],\"object\":{}}",
+      "sha256": "sha256:0f2034218f243dee164ba321f5794b7269ae3b24473afbd25a9a7f4fb1342756"
+    },
+    {
+      "name": "null_and_bool",
+      "value": {
+        "absent": null,
+        "yes": true,
+        "no": false
+      },
+      "canonical_bytes": "{\"absent\":null,\"no\":false,\"yes\":true}",
+      "sha256": "sha256:02166df34433eebc60955bdb6f4a7fb25c70fa61fd2b85480edef5762126c8dc"
+    },
+    {
+      "name": "safe_integer_bounds",
+      "value": {
+        "max": 9007199254740991,
+        "min": -9007199254740991
+      },
+      "canonical_bytes": "{\"max\":9007199254740991,\"min\":-9007199254740991}",
+      "sha256": "sha256:63546eb60913dcb1cdd5118f7bf4885beed344af930c8a9d5f38fad243fd4819"
+    }
+  ]
+}

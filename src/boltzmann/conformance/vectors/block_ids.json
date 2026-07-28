@@ -1,0 +1,185 @@
+{
+  "boltzmann": 1,
+  "serialization": "jcs/1",
+  "hash": "sha256",
+  "description": "Block envelopes and the block_id each must produce.",
+  "vectors": [
+    {
+      "name": "canonical_minimal",
+      "memory_type": "canonical",
+      "schema_version": 1,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "canonical",
+        "payload": {
+          "blob": "sha256:62a73a972c4b69bdfba88de9ba0c0b9e3b6c4248a0f5ffeaff61ea8e70a21163",
+          "media_type": "application/pdf",
+          "size": 42
+        },
+        "schema_version": 1,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"canonical\",\"payload\":{\"blob\":\"sha256:62a73a972c4b69bdfba88de9ba0c0b9e3b6c4248a0f5ffeaff61ea8e70a21163\",\"media_type\":\"application/pdf\",\"size\":42},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:55a91d321c9c71bac1580402142e69796ef2c6c147eec8588c811647cdfaff8b"
+    },
+    {
+      "name": "canonical_with_normalized_view",
+      "memory_type": "canonical",
+      "schema_version": 1,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "canonical",
+        "payload": {
+          "blob": "sha256:62a73a972c4b69bdfba88de9ba0c0b9e3b6c4248a0f5ffeaff61ea8e70a21163",
+          "media_type": "application/pdf",
+          "size": 42,
+          "normalized_view": {
+            "blob": "sha256:e962343d371be3b7bb825197fd133dcd65ed6417d4ef2f0de230ba0e06180232",
+            "media_type": "text/plain",
+            "size": 71
+          }
+        },
+        "schema_version": 1,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"canonical\",\"payload\":{\"blob\":\"sha256:62a73a972c4b69bdfba88de9ba0c0b9e3b6c4248a0f5ffeaff61ea8e70a21163\",\"media_type\":\"application/pdf\",\"normalized_view\":{\"blob\":\"sha256:e962343d371be3b7bb825197fd133dcd65ed6417d4ef2f0de230ba0e06180232\",\"media_type\":\"text/plain\",\"size\":71},\"size\":42},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:d193ee9e39d298011e393bd5347f9df4c538ca9898e4d66c65c59f430a1a09e1"
+    },
+    {
+      "name": "semantic_formula",
+      "memory_type": "semantic",
+      "schema_version": 1,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "semantic",
+        "payload": {
+          "kind": "formula",
+          "label": "Fourier series",
+          "statement": "f(x) = a0/2 + sum(a_n cos(nx) + b_n sin(nx))",
+          "subject": "signals",
+          "evidence": [
+            "sha256:62a73a972c4b69bdfba88de9ba0c0b9e3b6c4248a0f5ffeaff61ea8e70a21163"
+          ]
+        },
+        "schema_version": 1,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"semantic\",\"payload\":{\"evidence\":[\"sha256:62a73a972c4b69bdfba88de9ba0c0b9e3b6c4248a0f5ffeaff61ea8e70a21163\"],\"kind\":\"formula\",\"label\":\"Fourier series\",\"statement\":\"f(x) = a0/2 + sum(a_n cos(nx) + b_n sin(nx))\",\"subject\":\"signals\"},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:b08bc5accacd231706d7048e6097b5a3e1ebc9f62714369feb19f609d8906483"
+    },
+    {
+      "name": "semantic_with_relations",
+      "memory_type": "semantic",
+      "schema_version": 1,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "semantic",
+        "payload": {
+          "kind": "concept",
+          "label": "Periodicity",
+          "statement": "A function repeats its values at regular intervals.",
+          "relations": [
+            {
+              "predicate": "part_of",
+              "target": "sha256:ca2c599fca3a96e962f54c1ce879690f4ec00b5dd76c772e35e5ec5ea558d8bd"
+            }
+          ],
+          "aliases": [
+            "periodic function"
+          ]
+        },
+        "schema_version": 1,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"semantic\",\"payload\":{\"aliases\":[\"periodic function\"],\"kind\":\"concept\",\"label\":\"Periodicity\",\"relations\":[{\"predicate\":\"part_of\",\"target\":\"sha256:ca2c599fca3a96e962f54c1ce879690f4ec00b5dd76c772e35e5ec5ea558d8bd\"}],\"statement\":\"A function repeats its values at regular intervals.\"},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:54d4e4a335a410d65b172a8fea0427f21f7ddf64eecd8a008e8ff8e1b26f1556"
+    },
+    {
+      "name": "episodic_lecture",
+      "memory_type": "episodic",
+      "schema_version": 1,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "episodic",
+        "payload": {
+          "summary": "Lecture covering Fourier coefficients",
+          "occurred_at": "2026-05-14T14:00:00Z",
+          "ended_at": "2026-05-14T16:00:00Z",
+          "context": "Signals and Systems",
+          "participants": [
+            "professor",
+            "cohort 2026"
+          ],
+          "evidence": [
+            "sha256:62a73a972c4b69bdfba88de9ba0c0b9e3b6c4248a0f5ffeaff61ea8e70a21163"
+          ]
+        },
+        "schema_version": 1,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"episodic\",\"payload\":{\"context\":\"Signals and Systems\",\"ended_at\":\"2026-05-14T16:00:00Z\",\"evidence\":[\"sha256:62a73a972c4b69bdfba88de9ba0c0b9e3b6c4248a0f5ffeaff61ea8e70a21163\"],\"occurred_at\":\"2026-05-14T14:00:00Z\",\"participants\":[\"professor\",\"cohort 2026\"],\"summary\":\"Lecture covering Fourier coefficients\"},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:9ff1866c7a8f66fb5a94505898695ca0d411e6eb5119b7ab7ac0d4517eff0ebb"
+    },
+    {
+      "name": "procedural_coefficients",
+      "memory_type": "procedural",
+      "schema_version": 1,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "procedural",
+        "payload": {
+          "label": "Compute Fourier coefficients",
+          "goal": "Obtain a_n and b_n for a given periodic function",
+          "steps": [
+            {
+              "action": "Verify the function is periodic over the interval"
+            },
+            {
+              "action": "Integrate against cos(nx) over one period",
+              "uses": [
+                "sha256:b4bc6591de53d57b3cf3c747106a81cd979791797bb05e71edf1d852736946c8"
+              ]
+            },
+            {
+              "action": "Integrate against sin(nx) over one period"
+            }
+          ],
+          "success_criteria": [
+            "The reconstructed series converges to f(x)"
+          ]
+        },
+        "schema_version": 1,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"procedural\",\"payload\":{\"goal\":\"Obtain a_n and b_n for a given periodic function\",\"label\":\"Compute Fourier coefficients\",\"steps\":[{\"action\":\"Verify the function is periodic over the interval\"},{\"action\":\"Integrate against cos(nx) over one period\",\"uses\":[\"sha256:b4bc6591de53d57b3cf3c747106a81cd979791797bb05e71edf1d852736946c8\"]},{\"action\":\"Integrate against sin(nx) over one period\"}],\"success_criteria\":[\"The reconstructed series converges to f(x)\"]},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:9d16168e9e7e9799f44fabf2b586146f1da8a5ce067077af4d69895436a76904"
+    },
+    {
+      "name": "provenance_registration",
+      "memory_type": "provenance",
+      "schema_version": 1,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "provenance",
+        "payload": {
+          "record": {
+            "record_type": "registration",
+            "block": "sha256:62a73a972c4b69bdfba88de9ba0c0b9e3b6c4248a0f5ffeaff61ea8e70a21163",
+            "actor": {
+              "id": "alex",
+              "kind": "human",
+              "name": "Alex Fiorenza"
+            },
+            "at": "2026-07-24T09:30:00Z",
+            "origin": "https://example.edu/signals/lecture-07.pdf",
+            "license": "CC-BY-4.0"
+          }
+        },
+        "schema_version": 1,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"provenance\",\"payload\":{\"record\":{\"actor\":{\"id\":\"alex\",\"kind\":\"human\",\"name\":\"Alex Fiorenza\"},\"at\":\"2026-07-24T09:30:00Z\",\"block\":\"sha256:62a73a972c4b69bdfba88de9ba0c0b9e3b6c4248a0f5ffeaff61ea8e70a21163\",\"license\":\"CC-BY-4.0\",\"origin\":\"https://example.edu/signals/lecture-07.pdf\",\"record_type\":\"registration\"}},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:122f1f1bac534b5266136d0f53c5fcf08c3415e813601af9f90a65aaa6421105"
+    }
+  ]
+}
