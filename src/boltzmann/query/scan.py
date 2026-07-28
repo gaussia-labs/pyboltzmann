@@ -28,22 +28,21 @@ rather than only in a derived index:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from boltzmann.blocks.canonical import CanonicalBlock
 from boltzmann.blocks.episodic import EpisodicBlock
-from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.procedural import ProceduralBlock
-from boltzmann.blocks.provenance import DerivationRecord, ProvenanceBlock, SupersessionRecord
 from boltzmann.blocks.semantic import SemanticBlock
 from boltzmann.exceptions import DigestFormatError, DigestKindError
 from boltzmann.identity.digest import BlockId
+from boltzmann.module.ledger import Ledger
 from boltzmann.query.evidence import EvidenceBundle, Match, SourceRef
 from boltzmann.query.request import RetrievalMode
 
 if TYPE_CHECKING:
     from boltzmann.blocks.base import Block
+    from boltzmann.blocks.memory_type import MemoryType
     from boltzmann.module.module import Module
     from boltzmann.query.request import Query, QueryFilters
 
@@ -51,48 +50,8 @@ SCORE_PRECISION = 2
 """Decimal places in the coverage score. A string, because a wire format should not carry a float."""
 
 
-@dataclass
-class ProvenanceView:
-    """
-    What the ledger says about the blocks in a snapshot, read once per query.
-
-    Attributes:
-        locators (dict[BlockId, str]): Where in its source each derived block came from.
-        superseded_by (dict[BlockId, BlockId]): Blocks a newer one replaced, and by which.
-    """
-
-    locators: dict[BlockId, str] = field(default_factory=dict)
-    superseded_by: dict[BlockId, BlockId] = field(default_factory=dict)
-
-    @classmethod
-    def of(cls, modules: dict[MemoryType, Module]) -> ProvenanceView:
-        """
-        Read the ledger.
-
-        Args:
-            modules (dict[MemoryType, Module]): The installed modules. A brain with no provenance module
-                installed yields an empty view rather than an error: a partial install is legitimate.
-
-        Returns:
-            ProvenanceView: The locators and supersession edges found.
-        """
-        view = cls()
-        ledger = modules.get(MemoryType.PROVENANCE)
-        if ledger is None:
-            return view
-
-        for block_id in ledger.block_ids:
-            if not ledger.store.is_resolvable(block_id):
-                continue
-            entry = ledger.get(block_id)
-            if not isinstance(entry, ProvenanceBlock):
-                continue
-            record = entry.record
-            if isinstance(record, DerivationRecord) and record.locator is not None:
-                view.locators[record.block] = record.locator
-            elif isinstance(record, SupersessionRecord):
-                view.superseded_by[record.supersedes] = record.block
-        return view
+ProvenanceView = Ledger
+"""Kept as a name for the ledger view, which both the query and the retention paths read."""
 
 
 def searchable_text(block: Block) -> list[str]:
@@ -223,7 +182,7 @@ def scan(query: Query, modules: dict[MemoryType, Module]) -> EvidenceBundle:
         by membership in the installed snapshot; a block that fails either is left out rather than
         returned unverified.
     """
-    view = ProvenanceView.of(modules)
+    view = Ledger.of(modules)
     searched = _modules_to_search(query, modules)
 
     if query.hints.mode is RetrievalMode.EXACT:
@@ -241,7 +200,9 @@ def scan(query: Query, modules: dict[MemoryType, Module]) -> EvidenceBundle:
         candidates = _expand(candidates, searched, query.hints.expand_depth)
 
     if not query.filters.include_superseded:
-        candidates = {block_id: score for block_id, score in candidates.items() if block_id not in view.superseded_by}
+        # Supersession and demotion both change accessibility rather than membership, so a block held
+        # back here is still in the composition and still proves into the root.
+        candidates = {block_id: score for block_id, score in candidates.items() if view.is_accessible(block_id)}
 
     ordered = sorted(candidates.items(), key=lambda pair: (-pair[1], pair[0].hex))
     matches = [
@@ -277,7 +238,7 @@ def _to_match(
     block_id: BlockId,
     score: float,
     modules: dict[MemoryType, Module],
-    view: ProvenanceView,
+    view: Ledger,
 ) -> Match | None:
     """Build one verified match, or ``None`` if the block does not belong to any searched module."""
     for memory_type, module in modules.items():

@@ -8,6 +8,7 @@ from boltzmann.blocks.procedural import ProceduralBlock, Step
 from boltzmann.blocks.provenance import (
     Actor,
     ActorKind,
+    DemotionRecord,
     DerivationRecord,
     NormalizationRecord,
     Producer,
@@ -27,6 +28,7 @@ __all__ = [
     "ActorKind",
     "Block",
     "CanonicalBlock",
+    "DemotionRecord",
     "DerivationRecord",
     "EpisodicBlock",
     "MemoryType",

@@ -216,6 +216,41 @@ class SupersessionRecord(BaseModel):
     reason: str | None = None
 
 
+class DemotionRecord(BaseModel):
+    """
+    A block's retrieval priority was lowered without removing it.
+
+    Cognitive psychology separates the availability of a trace from its accessibility, and demotion is
+    that distinction: the block stays in the composition, still proves into the root, still resolves.
+    What changes is that it stops competing for the top of every ranking (paper Section 10.4).
+
+    Recording it in the ledger rather than in a mutable field on the block is what keeps blocks
+    immutable. A block's identity cannot depend on how accessible someone later decided it should be, or
+    demoting it would change its ``block_id`` and make it a different block.
+
+    The paper leaves the decay function that governs demotion open (Section 12), so this records the
+    decision and not a score: how much a demoted block is penalized, and whether the penalty fades, is
+    a retrieval strategy the implementation owns.
+
+    Attributes:
+        record_type (Literal["demotion"]): Discriminator.
+        block (BlockId): The block demoted.
+        actor (Actor): Who demoted it.
+        at (Timestamp): When.
+        reason (str | None): Why.
+        policy (str | None): Named policy that authorized it.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    record_type: Literal["demotion"] = "demotion"
+    block: BlockId
+    actor: Actor
+    at: Timestamp
+    reason: str | None = None
+    policy: str | None = None
+
+
 class RemovalRecord(BaseModel):
     """
     Knowledge left the brain, and by which mechanism.
@@ -251,7 +286,7 @@ class RemovalRecord(BaseModel):
 
 
 ProvenanceEntry = Annotated[
-    RegistrationRecord | DerivationRecord | NormalizationRecord | SupersessionRecord | RemovalRecord,
+    RegistrationRecord | DerivationRecord | NormalizationRecord | SupersessionRecord | DemotionRecord | RemovalRecord,
     Field(discriminator="record_type"),
 ]
 """One entry in the provenance ledger."""
