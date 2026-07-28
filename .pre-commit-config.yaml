@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
@@ -11,15 +11,17 @@ repos:
       - id: check-merge-conflict
       - id: detect-private-key
 
+  # Pinned to the same version as the dev dependency. When the two drift they disagree on
+  # rules, and the hook silently becomes either stricter or laxer than `uv run ruff check`.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.6
+    rev: v0.16.0
     hooks:
-      - id: ruff
+      - id: ruff-check
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
 
   - repo: https://github.com/commitizen-tools/commitizen
-    rev: v4.1.1
+    rev: v4.16.5
     hooks:
       - id: commitizen
         stages: [commit-msg]
