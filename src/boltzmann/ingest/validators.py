@@ -21,6 +21,7 @@ from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.semantic import SemanticBlock
 from boltzmann.exceptions import BlockSchemaError
+from boltzmann.identity.digest import BlockId
 from boltzmann.ingest.validation import ValidationIssue
 
 if TYPE_CHECKING:
@@ -370,6 +371,89 @@ class ContradictionValidator:
         return issues
 
 
+def conflicts_for(candidate: Candidate, modules: dict[MemoryType, Module]) -> list[BlockId]:
+    """
+    The held blocks a proposal contradicts, so a reviewer can see both sides.
+
+    A ``CONTRADICTED`` verdict that named no counterpart would tell a human that something disagrees
+    without saying with what, which is not enough to decide.
+
+    Args:
+        candidate (Candidate): The proposal.
+        modules (dict[MemoryType, Module]): The installed modules.
+
+    Returns:
+        list[BlockId]: The conflicting blocks, in a stable order.
+    """
+    module = modules.get(MemoryType.SEMANTIC)
+    if module is None or candidate.memory_type is not MemoryType.SEMANTIC:
+        return []
+    try:
+        proposed = build_block(candidate)
+    except (BlockSchemaError, ValueError):
+        return []
+    if not isinstance(proposed, SemanticBlock):
+        return []
+
+    return sorted(
+        (
+            block_id
+            for block_id in module.block_ids
+            if module.store.is_resolvable(block_id) and _same_claim(module.get(block_id), proposed)
+        ),
+        key=lambda value: value.hex,
+    )
+
+
+def _same_claim(held: object, proposed: SemanticBlock) -> bool:
+    """Whether two semantic blocks make the same claim in different words."""
+    return (
+        isinstance(held, SemanticBlock)
+        and held.label == proposed.label
+        and held.subject == proposed.subject
+        and held.kind is proposed.kind
+        and held.statement != proposed.statement
+    )
+
+
+class UndecidedValidator:
+    """A check that declines to decide, which is not the same as deciding against.
+
+    The protocol's own checks all decide, so nothing here produces this on its own. It exists because
+    ``PENDING_REVIEW`` has to be reachable: a deployment whose domain check cannot settle a proposal --
+    a claim needing a subject-matter expert, a licence question for a lawyer -- raises an issue with this
+    code, and the gate reports the proposal as awaiting a decision rather than rejected.
+
+    Subclass it, or simply emit an issue whose code is in :data:`REVIEW_CODES`.
+    """
+
+    code: ClassVar[str] = "pending-review"
+
+    def check(
+        self,
+        candidate: Candidate,
+        task: ProcessingTask,
+        modules: dict[MemoryType, Module],
+    ) -> list[ValidationIssue]:
+        """
+        Decline to decide.
+
+        Args:
+            candidate (Candidate): The proposal.
+            task (ProcessingTask): Unused.
+            modules (dict[MemoryType, Module]): Unused.
+
+        Returns:
+            list[ValidationIssue]: One issue marking the proposal as awaiting a decision.
+        """
+        return [
+            ValidationIssue(
+                code=self.code,
+                detail="this check cannot settle the proposal; a human or a policy has to",
+            )
+        ]
+
+
 DEFAULT_VALIDATORS = (
     AllowedTypeValidator(),
     SchemaValidator(),
@@ -383,3 +467,6 @@ DEFAULT_VALIDATORS = (
 
 CONTRADICTION_CODES = frozenset({ContradictionValidator.code})
 """Issue codes that mean ``CONTRADICTED`` rather than ``REJECTED``."""
+
+REVIEW_CODES = frozenset({UndecidedValidator.code})
+"""Issue codes that mean ``PENDING_REVIEW``: the check declined to decide, rather than deciding against."""

@@ -55,6 +55,7 @@ from boltzmann.distribution.media_types import (
     REF_NAME_ANNOTATION,
     VECTOR_INDEX_MEDIA_TYPE,
 )
+from boltzmann.distribution.registry import InstallPlan
 from boltzmann.exceptions import (
     BlockNotFoundError,
     DistributionError,
@@ -712,6 +713,55 @@ class Brain:
             validates against, so the two cannot disagree.
         """
         return _candidates_schema(task)
+
+    def define_rederivation(
+        self,
+        source: BlockId,
+        replacing: BlockId,
+        allowed: Iterable[MemoryType] | None = None,
+        task_id: str | None = None,
+    ) -> ProcessingTask:
+        """
+        Define a task that regenerates knowledge against a replacement source.
+
+        Re-derivation is never implicit. Section 8.1 is explicit that it runs only when the caller has
+        registered a replacement canonical or asks for one, because a block's citation is part of its
+        identity: one citing excluded evidence cannot be repaired in place, only replaced by a new block
+        citing the new source. So this is a distinct operation rather than a flag on a drop.
+
+        Args:
+            source (BlockId): The replacement canonical block to derive from.
+            replacing (BlockId): The canonical block whose derived knowledge is being regenerated. Named
+                in the task so the resulting provenance says what this run was replacing.
+            allowed (Iterable[MemoryType] | None): Which kinds of block may be proposed.
+            task_id (str | None): Identifier the resulting provenance records cite.
+
+        Returns:
+            ProcessingTask: A ``rederive`` task over the replacement source.
+
+        Raises:
+            ProtocolError: If the replacement is not installed, or is the block it would replace.
+        """
+        if source == replacing:
+            raise ProtocolError(f"cannot re-derive {source.short} against itself")
+        canonical = self._module_or_empty(MemoryType.CANONICAL)
+        if source not in canonical:
+            raise ProtocolError(
+                f"cannot re-derive against {source.short}: it is not in the canonical composition, so "
+                f"there is no new evidence to derive from"
+            )
+        return ProcessingTask(
+            operation=TaskOperation.REDERIVE,
+            source=source,
+            allowed_memory_types=sorted(allowed or PROPOSABLE_MEMORY_TYPES),
+            requirements=[
+                "cite source ranges",
+                "do not invent",
+                f"regenerate what was derived from {replacing}",
+            ],
+            instructions=f"The evidence {replacing} was excluded. Derive the equivalent knowledge from {source}.",
+            task_id=task_id,
+        )
 
     def validate(self, candidates: CandidateSet, task: ProcessingTask) -> ValidationReport:
         """
@@ -1405,6 +1455,65 @@ class Brain:
         index["manifests"] = [*kept, descriptor]
         self.store.write_index(index)
 
+    async def plan_pull(
+        self,
+        client: RegistryClient,
+        reference: str,
+        tag: str,
+        modules: Iterable[MemoryType] | None = None,
+    ) -> InstallPlan:
+        """
+        Work out what a pull would transfer, without downloading any module.
+
+        Resolving a manifest is cheap and downloading it does not imply downloading anything else, so the
+        cost of an install can be known before paying it. That is also the point of the incremental
+        update: layers already held locally are reused by digest, so a plan over an existing brain reports
+        only what actually moved.
+
+        Args:
+            client (RegistryClient): The transport.
+            reference (str): Repository reference.
+            tag (str): Which version to inspect.
+            modules (Iterable[MemoryType] | None): Which modules are wanted. Defaults to everything the
+                artifact carries.
+
+        Returns:
+            InstallPlan: What would be fetched and what would be reused.
+
+        Raises:
+            DistributionError: If a wanted module is not in the artifact.
+        """
+        manifest = await client.resolve(reference, tag)
+        wanted = list(modules) if modules is not None else manifest.modules
+        self._require_carried(manifest, wanted)
+
+        fetch: list[MemoryType] = []
+        reuse: list[MemoryType] = []
+        for memory_type in wanted:
+            layer = manifest.layer_for(memory_type)
+            assert layer is not None  # checked above
+            (reuse if self.store.is_resolvable(layer.digest) else fetch).append(memory_type)
+
+        indices = [
+            memory_type
+            for memory_type in wanted
+            if (layer := manifest.vector_index_for(memory_type)) is not None
+            and not self.store.is_resolvable(layer.digest)
+        ]
+
+        return InstallPlan(
+            modules=wanted,
+            fetch_layers=fetch,
+            reuse_layers=reuse,
+            fetch_vector_indices=indices,
+            rebuild_indices=[
+                index.kind.value
+                for memory_type in wanted
+                for index in self.indices.get(memory_type, [])
+                if index.rebuildable
+            ],
+        )
+
     async def pull(
         self,
         client: RegistryClient,
@@ -1438,11 +1547,7 @@ class Brain:
         """
         manifest = await client.resolve(reference, tag)
         wanted = list(modules) if modules is not None else manifest.modules
-
-        missing = [kind.value for kind in wanted if manifest.layer_for(kind) is None]
-        if missing:
-            carried = ", ".join(kind.value for kind in manifest.modules) or "none"
-            raise DistributionError(f"the artifact does not carry {', '.join(missing)}; it carries: {carried}")
+        self._require_carried(manifest, wanted)
 
         if not self.store.is_resolvable(manifest.config.digest):
             await client.pull_blob(reference, manifest.config.digest, self.store)
@@ -1544,6 +1649,14 @@ class Brain:
             origin=Origin(reference=target, tag=target_tag, snapshot=manifest.config.digest),
         )
         return digest
+
+    @staticmethod
+    def _require_carried(manifest: BrainManifest, wanted: Iterable[MemoryType]) -> None:
+        """An artifact cannot hand over a module it does not carry."""
+        missing = [kind.value for kind in wanted if manifest.layer_for(kind) is None]
+        if missing:
+            carried = ", ".join(kind.value for kind in manifest.modules) or "none"
+            raise DistributionError(f"the artifact does not carry {', '.join(missing)}; it carries: {carried}")
 
     def _push_target(self, reference: str | None, tag: str | None) -> tuple[str, str]:
         origin = self.origin

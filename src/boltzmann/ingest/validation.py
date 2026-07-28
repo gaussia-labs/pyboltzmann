@@ -187,7 +187,13 @@ def validate(
     Returns:
         ValidationReport: One verdict per proposal.
     """
-    from boltzmann.ingest.validators import CONTRADICTION_CODES, DEFAULT_VALIDATORS, build_block
+    from boltzmann.ingest.validators import (
+        CONTRADICTION_CODES,
+        DEFAULT_VALIDATORS,
+        REVIEW_CODES,
+        build_block,
+        conflicts_for,
+    )
 
     checks = DEFAULT_VALIDATORS if validators is None else validators
     results = []
@@ -206,8 +212,23 @@ def validate(
             )
             continue
 
-        # A contradiction on its own is not a defect; anything else is.
-        status = ValidationStatus.CONTRADICTED if codes <= CONTRADICTION_CODES else ValidationStatus.REJECTED
-        results.append(ValidatedCandidate(candidate=candidate, status=status, issues=issues))
+        # Three verdicts, and they are not a severity scale. A malformed proposal can never be committed.
+        # A contradiction is well-formed and disagrees with what is held, which is information rather than
+        # a defect. And a check may decline to decide, which is not the same as deciding against.
+        if codes <= CONTRADICTION_CODES:
+            status = ValidationStatus.CONTRADICTED
+        elif codes <= CONTRADICTION_CODES | REVIEW_CODES:
+            status = ValidationStatus.PENDING_REVIEW
+        else:
+            status = ValidationStatus.REJECTED
+
+        results.append(
+            ValidatedCandidate(
+                candidate=candidate,
+                status=status,
+                issues=issues,
+                conflicts_with=conflicts_for(candidate, modules) if codes & CONTRADICTION_CODES else [],
+            )
+        )
 
     return ValidationReport(results=results, producer=candidates.producer, task_id=task.task_id)
