@@ -97,6 +97,7 @@ oci = [
 dev = [
     { name = "commitizen" },
     { name = "hypothesis" },
+    { name = "jsonschema" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -119,6 +120,7 @@ provides-extras = ["oci"]
 dev = [
     { name = "commitizen", specifier = ">=4.0.0" },
     { name = "hypothesis", specifier = ">=6.100.0" },
+    { name = "jsonschema", specifier = ">=4.20.0" },
     { name = "mypy", specifier = ">=1.8.0" },
     { name = "pre-commit", specifier = ">=3.5.0" },
     { name = "pytest", specifier = ">=8.0.0" },
