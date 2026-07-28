@@ -1,0 +1,327 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "boltzmann"
+version = "0.1.0"
+description = "Boltzmann - SDK for the Boltzmann Protocol: portable, verifiable, model-agnostic knowledge"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Gaussia Labs"},
+]
+maintainers = [
+    {name = "Alex Fiorenza", email = "alexfiorenza2012@gmail.com"},
+]
+keywords = [
+    "knowledge-representation",
+    "content-addressing",
+    "merkle-dag",
+    "oci-artifacts",
+    "provenance",
+    "retrieval-augmented-generation",
+    "memory-systems",
+    "llm",
+    "protocol",
+]
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "pydantic>=2.0.0,<3.0.0",
+    "rfc8785>=0.1.4",
+]
+
+[project.optional-dependencies]
+# Network transport for publishing to and installing from an OCI registry. The core
+# needs no extra: the on-disk brain is already an OCI layout, so packing an artifact
+# and moving it between layouts works with the standard library alone. Index engines
+# and exposure layers ship no extra at all -- they are the implementation's choice.
+oci = [
+    "oras>=0.2.42",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-xdist>=3.5.0",
+    "hypothesis>=6.100.0",
+    "ruff>=0.8.0",
+    "mypy>=1.8.0",
+    "pre-commit>=3.5.0",
+    "commitizen>=4.0.0",
+    "python-semantic-release>=9.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/gaussia-labs/pyboltzmann"
+Repository = "https://github.com/gaussia-labs/pyboltzmann.git"
+"Bug Tracker" = "https://github.com/gaussia-labs/pyboltzmann/issues"
+Changelog = "https://github.com/gaussia-labs/pyboltzmann/releases"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/boltzmann"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/boltzmann/**/*.py",
+    "src/boltzmann/py.typed",
+    "src/boltzmann/conformance/vectors/**/*.json",
+    "README.md",
+    "LICENSE",
+]
+exclude = [
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/*.pyo",
+    "**/.DS_Store",
+    "**/test_*.py",
+    "tests/**",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+    "examples",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "N",
+    "W",
+    "UP",
+    "B",
+    "C4",
+    "DTZ",
+    "T10",
+    "EM",
+    "ISC",
+    "ICN",
+    "PIE",
+    "PT",
+    "RET",
+    "SIM",
+    "TID",
+    "TCH",
+    "ARG",
+    "PTH",
+    "PD",
+    "PL",
+    "TRY",
+    "RUF",
+]
+
+ignore = [
+    "E501",
+    "PLR0913",
+    "PLR0917",
+    "PLR0912",
+    "PLR0915",
+    "PLR0911",
+    "PLR2004",
+    "TRY003",
+    "B008",
+    "ISC001",
+    "EM101",
+    "EM102",
+    "PLC0415",
+    "SIM108",
+    "TRY300",
+    "RUF013",
+    "RUF012",
+    "ARG002",
+    "N806",
+    "DTZ005",
+    "PLW2901",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "E402", "RUF022"]
+"tests/**/*.py" = ["ARG", "PLR2004", "S101", "N802", "N806", "PTH", "DTZ", "B007", "UP038", "SIM117", "E402", "C401"]
+"examples/**/*.py" = ["ARG", "PTH", "B007", "C408", "T201", "PLR2004", "DTZ", "C401"]
+
+[tool.ruff.lint.flake8-type-checking]
+# Pydantic resolves annotations at runtime to build validators, so a model's field
+# types must stay importable outside a TYPE_CHECKING block.
+runtime-evaluated-base-classes = [
+    "pydantic.BaseModel",
+    "boltzmann.blocks.base.Block",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["boltzmann"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+extra_checks = true
+check_untyped_defs = true
+disallow_untyped_defs = false
+disallow_any_generics = false
+disallow_subclassing_any = false
+no_implicit_optional = true
+show_error_codes = true
+show_column_numbers = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = ["oras.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+addopts = [
+    "-v",
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=src/boltzmann",
+    "--cov-branch",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-report=html",
+    "--cov-report=xml",
+    "--cov-fail-under=50",
+    "--tb=short",
+    "--maxfail=5",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "requires_gpu: marks tests that require GPU",
+    "requires_api_key: marks tests that require API keys",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore::UserWarning:pkg_resources",
+    "ignore::SyntaxWarning",
+    "error",
+]
+
+[tool.coverage.run]
+source = ["src/boltzmann"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/venv/*",
+    "*/.venv/*",
+]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "if typing.TYPE_CHECKING:",
+    "@abstractmethod",
+    "@abc.abstractmethod",
+]
+precision = 2
+show_missing = true
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "v$version"
+version_scheme = "semver"
+version_provider = "pep621"
+update_changelog_on_bump = true
+changelog_file = "CHANGELOG.md"
+major_version_zero = true
+
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+version_variables = ["src/boltzmann/__init__.py:__version__"]
+build_command = "pip install build && python -m build"
+commit_message = "chore(release): v{version}"
+tag_format = "v{version}"
+
+[tool.semantic_release.branches.master]
+match = "master"
+prerelease = false
+
+[tool.semantic_release.branches.develop]
+match = "develop"
+prerelease = true
+prerelease_token = "b"
+
+[tool.semantic_release.changelog]
+exclude_commit_patterns = [
+    "^chore\\(release\\):",
+    "^Merge",
+]
+
+[tool.semantic_release.changelog.default_templates]
+changelog_file = "CHANGELOG.md"
+
+[tool.semantic_release.commit_parser_options]
+allowed_tags = [
+    "feat",
+    "fix",
+    "docs",
+    "style",
+    "refactor",
+    "perf",
+    "test",
+    "build",
+    "ci",
+    "chore",
+]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf"]
+
+[tool.semantic_release.remote]
+type = "github"
+token = { env = "GH_TOKEN" }
+
+[tool.semantic_release.publish]
+dist_glob_patterns = ["dist/*"]
+upload_to_vcs_release = true

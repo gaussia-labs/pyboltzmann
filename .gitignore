@@ -1,0 +1,54 @@
+.DS_Store
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+.env
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Distribution / packaging
+*.gz
+*.whl
+
+# Logs
+*.log
+
+# Jupyter
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Hypothesis
+.hypothesis/
