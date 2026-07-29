@@ -16,6 +16,7 @@ Two details worth stating, because both are protocol rules rather than preferenc
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
 
 from boltzmann.blocks.memory_type import MemoryType
@@ -94,9 +95,44 @@ def registry_client(settings: Settings) -> OrasRegistryClient:
     """
     _quiet_oras()
     client = OrasRegistryClient(insecure=settings.insecure)
+    _ignore_docker_config(client)
     if settings.authenticated:
         client.login(settings.username, settings.token)
     return client
+
+
+def _ignore_docker_config(client: OrasRegistryClient) -> None:
+    """Keep ORAS away from the Docker credential store, which can hang the process.
+
+    Before every request ORAS resolves credentials for the registry, and if ``~/.docker/config.json``
+    names a ``credsStore`` it shells out to the matching helper -- ``docker-credential-desktop`` on a Mac
+    running Docker Desktop. That ``subprocess.run`` carries **no timeout**, so a helper that blocks blocks
+    the whole run, with no output and no error: the symptom is a push that never returns.
+
+    Pre-seeding an empty credential set is what stops the lookup, because ORAS loads the config only once
+    and only when it has none. It costs nothing, because credentials here are explicit by design --
+    ``DOCKER_USERNAME`` and ``DOCKER_TOKEN``, or anonymous -- and an explicit ``login`` sets them by a
+    different path that this does not touch.
+
+    The consequence worth knowing: a prior ``docker login`` does **not** authenticate this sandbox. State
+    the token in the environment.
+
+    Args:
+        client (OrasRegistryClient): The client to isolate.
+    """
+    auth = getattr(client.registry, "auth", None)
+    if auth is None or not hasattr(auth, "_auth_config"):
+        # A newer ORAS that reorganized its auth backend. Not worth failing over, but worth saying out
+        # loud: without the workaround the symptom is a run that hangs with no output, which is a bad thing
+        # to have to rediscover.
+        print(
+            "warning: could not isolate ORAS from the Docker credential store. If a push or pull hangs "
+            "with no output, that is why -- see _ignore_docker_config in boltzmann_sandbox/brain.py",
+            file=sys.stderr,
+        )
+        return
+
+    auth._auth_config = {"auths": {}, "credsStore": None, "credHelpers": {}}
 
 
 def _quiet_oras() -> None:
