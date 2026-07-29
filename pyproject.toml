@@ -80,12 +80,15 @@ Changelog = "https://github.com/gaussia-labs/pyboltzmann/releases"
 packages = ["src/boltzmann"]
 
 [tool.hatch.build.targets.sdist]
+# Leading slashes anchor to the project root. Without them hatchling matches these
+# patterns by basename at any depth, so an unrelated README further down the tree --
+# sandbox/README.md, for one -- ends up inside the distribution.
 include = [
     "src/boltzmann/**/*.py",
     "src/boltzmann/py.typed",
     "src/boltzmann/conformance/vectors/**/*.json",
-    "README.md",
-    "LICENSE",
+    "/README.md",
+    "/LICENSE",
 ]
 exclude = [
     "**/__pycache__",
