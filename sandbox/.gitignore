@@ -1,0 +1,13 @@
+.env
+.venv/
+dist/
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Brains this sandbox creates. They are real OCI layouts, sometimes large, and always
+# reproducible from a demo run.
+brain/
+brains/

@@ -1,0 +1,123 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "boltzmann-sandbox"
+version = "0.1.0"
+description = "A sandbox for the Boltzmann SDK: an MCP server, example indices, and a real end-to-end run"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+
+dependencies = [
+    # The network transport is the whole point of this sandbox, so the [oci] extra is
+    # not optional here the way it is for the SDK.
+    "boltzmann[oci]",
+    "fastmcp>=3.0.0,<4.0.0",
+    # Configuration comes from .env, and fastmcp already pulls this in. Declared
+    # anyway: depending on a transitive dependency is how a working setup breaks on
+    # somebody else's machine.
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+boltzmann-mcp = "boltzmann_sandbox.server:main"
+boltzmann-doctor = "boltzmann_sandbox.doctor:main"
+boltzmann-demo = "boltzmann_sandbox.demo:main"
+
+[tool.uv.sources]
+# The SDK is not published yet, so it comes from the parent directory. uv builds it
+# with the same hatchling and the same pyproject.toml the release would use, and
+# installs the result as an ordinary package.
+#
+# `editable = false` is the point, not an oversight: this sandbox exists to exercise
+# the *packaged* SDK. A golden vector that fails to ship, or a missing py.typed, is
+# invisible to a test suite running inside the source tree and shows up here instead.
+# The cost is that editing ../src/boltzmann does not propagate until:
+#
+#     uv sync --reinstall-package boltzmann
+#
+# `boltzmann-doctor` warns when the installed copy has fallen behind the sources.
+# Once the SDK is on an index, delete this block; nothing else changes.
+boltzmann = { path = "..", editable = false }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.16.0",
+    "mypy>=1.8.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["boltzmann_sandbox"]
+
+# --- Tooling ------------------------------------------------------------------
+# Mirrors the SDK's configuration so that code written here is held to the same
+# standard as the code it exercises.
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv", "__pycache__", "dist", "*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "DTZ", "T10", "EM", "ISC", "ICN",
+          "PIE", "PT", "RET", "SIM", "TID", "TCH", "ARG", "PTH", "PL", "TRY", "RUF"]
+ignore = [
+    "E501",
+    "PLR0913",
+    "PLR0917",
+    "PLR0912",
+    "PLR0915",
+    "PLR0911",
+    "PLR2004",
+    "TRY003",
+    "B008",
+    "ISC001",
+    "EM101",
+    "EM102",
+    "PLC0415",
+    "SIM108",
+    "TRY300",
+    "ARG002",
+    "DTZ005",
+    # A sandbox reports to a terminal. Printing is the interface, not a leftover.
+    "T201",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**/*.py" = ["ARG", "PLR2004", "PTH", "DTZ", "B007"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["boltzmann_sandbox"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+strict_equality = true
+check_untyped_defs = true
+no_implicit_optional = true
+show_error_codes = true
+pretty = true
+exclude = ["\\.venv", "dist"]
+
+[[tool.mypy.overrides]]
+module = ["oras.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = ["-v", "-ra", "--strict-markers", "--tb=short"]
