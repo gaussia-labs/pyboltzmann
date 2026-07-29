@@ -179,9 +179,15 @@ class VectorIndex(AbstractIndex):
     from two models occupy different spaces and comparing them means nothing."""
 
     DIMS: ClassVar[int] = 256
+
     PRECISION: ClassVar[int] = 6
-    """Decimals kept in the dump. Rounding is what makes the serialized index byte-identical across
-    platforms, and therefore its layer digest reproducible."""
+    """Decimals kept in a vector.
+
+    Rounding is what makes the serialized index byte-identical across platforms, and therefore its layer
+    digest reproducible. It is applied when the vector is *built*, not only when it is dumped, so that a
+    consumer who loaded the index holds exactly what the publisher holds -- round only on the way out and
+    the two ends rank with different numbers, which is a disagreement waiting for a near-tie.
+    """
 
     def __init__(self) -> None:
         """Build an empty index."""
@@ -241,8 +247,7 @@ class VectorIndex(AbstractIndex):
             "model_tag": self.MODEL_TAG,
             "dims": self.DIMS,
             "vectors": {
-                str(block_id): [round(value, self.PRECISION) for value in vector]
-                for block_id, vector in sorted(self.vectors.items(), key=lambda pair: pair[0].hex)
+                str(block_id): vector for block_id, vector in sorted(self.vectors.items(), key=lambda pair: pair[0].hex)
             },
         }
         return json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
@@ -293,4 +298,4 @@ class VectorIndex(AbstractIndex):
         if norm == 0:
             # Every token cancelled out. Rare, and a zero vector matches nothing, which is correct.
             return buckets
-        return [value / norm for value in buckets]
+        return [round(value / norm, self.PRECISION) for value in buckets]
