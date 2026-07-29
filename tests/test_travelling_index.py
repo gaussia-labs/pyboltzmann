@@ -27,6 +27,7 @@ from boltzmann.identity.digest import BlockId
 from boltzmann.indices.base import AbstractIndex, Index, IndexKind, TravellingIndex
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
+from boltzmann.retention.policy import RetentionPolicy
 
 ALEX = Actor(id="alex", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
@@ -339,3 +340,89 @@ class TestSelectivePublish:
         full = await registry.resolve(REFERENCE, "full")
         lite = await registry.resolve(REFERENCE, "lite")
         assert len(full.modules) > len(lite.modules)
+
+
+class TestRebuildingWhatArrivedAnotherWay:
+    """A structural index has to reflect the installed version on every path, not only after a write.
+
+    The write path rebuilds what it touched, so an index is correct in the process that committed into it.
+    That leaves two ways for a composition to arrive without a write -- reopening a brain, and installing
+    a version -- and an index that is empty on those paths does not announce itself: a planner consulting
+    it gets no candidates and reports a confident nothing.
+    """
+
+    def test_reopening_rebuilds_a_structural_index(self, tmp_path: Path) -> None:
+        Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [RebuildableIndex()]})
+        seed(Brain.open(tmp_path / "a", actor=ALEX))
+
+        index = RebuildableIndex()
+        reopened = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [index]})
+
+        assert index.count == len(reopened.module(MemoryType.SEMANTIC).block_ids) == 1
+
+    def test_reopening_does_not_rebuild_a_travelling_index(self, tmp_path: Path) -> None:
+        """Regenerating it would replace what a peer published with whatever this client produced."""
+        seed(Brain.open(tmp_path / "a", actor=ALEX))
+
+        travelling = FakeVectorIndex()
+        Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [travelling]})
+
+        assert travelling.vectors == {}
+
+    async def test_installing_rebuilds_a_structural_index(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
+        """What ``plan_pull`` reports under ``rebuild_indices``, actually done."""
+        source = Brain.open(tmp_path / "a", actor=ALEX)
+        seed(source)
+        await source.push(registry, REFERENCE, "v1")
+
+        index = RebuildableIndex()
+        target = Brain.open(tmp_path / "b", actor=ALEX, indices={MemoryType.SEMANTIC: [index]})
+        plan = await target.plan_pull(registry, REFERENCE, "v1")
+        assert IndexKind.HASH_MAP.value in plan.rebuild_indices
+
+        await target.pull(registry, REFERENCE, "v1")
+        assert index.count == 1
+
+    async def test_installing_keeps_the_index_that_travelled(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        """The layer's vectors survive the rebuild that follows a pull."""
+        source = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        seed(source)
+        await source.push(registry, REFERENCE, "v1")
+        published = source.open_index(MemoryType.SEMANTIC, IndexKind.VECTOR)
+
+        landed = FakeVectorIndex()
+        target = Brain.open(
+            tmp_path / "b",
+            actor=ALEX,
+            indices={MemoryType.SEMANTIC: [landed, RebuildableIndex()]},
+        )
+        await target.pull(registry, REFERENCE, "v1")
+
+        assert landed.loads == 1
+        assert landed.vectors == published.vectors
+
+    def test_an_unresolvable_block_is_skipped_rather_than_raised(self, tmp_path: Path) -> None:
+        """A block can be a member of a version and still not be readable, and an index reads.
+
+        Redaction is the way to produce that state deliberately: the block stays in the composition and
+        keeps proving into the root, but its bytes are gone. An index that insisted on reading it would
+        make the brain impossible to reopen.
+        """
+        policy = RetentionPolicy(redactable_media_types=["application/pdf"])
+        brain = Brain.open(tmp_path / "a", actor=ALEX, policy=policy)
+        source = seed(brain)
+        brain.redact(source, MemoryType.CANONICAL, reason="unreadable now")
+
+        index = RebuildableIndex()
+        reopened = Brain.open(tmp_path / "a", actor=ALEX, policy=policy, indices={MemoryType.CANONICAL: [index]})
+
+        assert source in reopened.module(MemoryType.CANONICAL)
+        assert index.count == 0
+
+    def test_rebuilding_a_module_with_no_index_is_a_no_op(self, tmp_path: Path) -> None:
+        brain = Brain.open(tmp_path / "a", actor=ALEX)
+        seed(brain)
+        brain.rebuild_indices()
+        brain.rebuild_indices([MemoryType.EPISODIC])

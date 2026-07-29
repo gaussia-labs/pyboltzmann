@@ -208,6 +208,13 @@ class Brain:
         self._snapshot = snapshot if snapshot is not None else self._load_snapshot()
         self._modules: dict[MemoryType, Module] = {}
 
+        # A structural index is rebuilt on every write, so a brain that committed in this process has one
+        # that matches. A brain that was merely opened would not, and an empty index does not announce
+        # itself: a planner consulting it gets no candidates and reports a confident nothing. Rebuilding
+        # here costs what one commit costs, and makes "the index reflects the installed version" true on
+        # every path rather than only on the write path.
+        self.rebuild_indices()
+
     @classmethod
     def open(
         cls,
@@ -928,10 +935,55 @@ class Brain:
             roots=roots,
         )
 
+    def rebuild_indices(self, memory_types: Iterable[MemoryType] | None = None) -> None:
+        """
+        Regenerate the structural indices from the installed composition.
+
+        Every write already does this for the modules it touched, so this matters when the composition
+        arrived by another route: a brain reopened in a new process, or a version installed from a
+        registry. Both call it for you -- :meth:`open` and :meth:`pull` -- and it stays public because an
+        index the SDK is never seen to refresh is an index a caller has no way to refresh either.
+
+        **Only indices that report themselves rebuildable are touched.** An index with
+        ``rebuildable = False`` travels inside its module's layer precisely because no client can
+        regenerate it, so regenerating it here would replace what a peer published with whatever this
+        client's engine happened to produce -- which is the failure the travelling mechanism exists to
+        prevent (paper Section 6.3).
+
+        Only what is readable is indexed. A block can be a verifiable member of a version and still not be
+        resolvable, after a selective install or a redaction, and an index can only index what it can read.
+
+        Args:
+            memory_types (Iterable[MemoryType] | None): Which modules to rebuild. Defaults to every module
+                that has a registered index and is installed.
+        """
+        wanted = list(memory_types) if memory_types is not None else list(self.indices)
+        for memory_type in wanted:
+            if memory_type not in self._snapshot.modules:
+                continue
+            rebuildable = [index for index in self.indices.get(memory_type, []) if index.rebuildable]
+            if rebuildable:
+                self._build(self.module(memory_type), rebuildable)
+
     def _rebuild_indices(self, module: Module) -> None:
-        """Indices are derived, so they are rebuilt from the composition rather than patched."""
-        for index in self.indices.get(module.memory_type, []):
-            index.build(module.blocks())
+        """
+        Rebuild every index of a module, travelling ones included.
+
+        This is the write path, where rebuilding all of them is right: the blocks are new, and the only
+        client that can index them is this one. A travelling index left alone here would describe the
+        version before the commit.
+        """
+        self._build(module, self.indices.get(module.memory_type, []))
+
+    def _build(self, module: Module, indices: Sequence[Index]) -> None:
+        """Feed a module's readable blocks to each index, reading them once rather than once per index."""
+        if not indices:
+            return
+
+        blocks = [block_id for block_id in module.block_ids if module.store.is_resolvable(block_id)]
+        decoded = [module.get(block_id) for block_id in blocks]
+        for index in indices:
+            index.build(decoded)
 
     def _embedding_model(self, memory_type: MemoryType) -> str | None:
         for index in self.indices.get(memory_type, []):
@@ -1596,7 +1648,14 @@ class Brain:
             snapshot=manifest.config.digest,
             partial=not complete,
         )
-        return self._advance(installed, origin=origin)
+        advanced = self._advance(installed, origin=origin)
+
+        # What ``plan_pull`` reported under ``rebuild_indices``, actually done. The travelling index was
+        # loaded above because no client can regenerate it; the structural ones are regenerated here,
+        # because a consumer that installed a version and then searched it would otherwise query indices
+        # that hold the version it had before the pull -- or nothing at all.
+        self.rebuild_indices(wanted)
+        return advanced
 
     async def push(
         self,
