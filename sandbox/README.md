@@ -25,6 +25,17 @@ is excluded from both the wheel and the sdist.
 This sandbox closes all three, and doubles as a starting point if you are building
 against the SDK.
 
+### What it has already caught
+
+Four real defects, none of them visible from inside the SDK's own suite:
+
+| Where | What |
+|---|---|
+| `pyproject.toml` | The sdist's `include` patterns were unanchored, so hatchling matched `README.md` by basename at any depth and shipped `sandbox/README.md` inside the distribution |
+| `Brain` | Indices were rebuilt only by the write path. A brain reopened in a new process, or a version installed from a registry, held empty indices — and `plan_pull` was already reporting `rebuild_indices` with nothing acting on it |
+| `VectorIndex` | Vectors were rounded on the way out, so the publisher ranked with full precision and a consumer that loaded the index ranked with six decimals. The dumps matched, so it was invisible until a near-tie |
+| `oras-py` | It shells out to the Docker credential helper with no timeout, so on a Mac with Docker Desktop a push can hang forever with no output. Worked around in `brain.py` |
+
 ## Before you start
 
 **The server will not start without an OCI artifact to work against.** A brain that
@@ -52,6 +63,11 @@ $EDITOR .env
 To create the token: **Docker Hub → Account settings → Personal access tokens →
 Generate new token**, scope **Read & Write**. A read-only token cannot push. Docker
 Hub creates the repository on first push, so you do not need to make it beforehand.
+
+**A prior `docker login` does not authenticate this sandbox.** The credentials have to
+be in the environment. That is deliberate: reading them from `~/.docker/config.json`
+means letting ORAS invoke the platform credential helper, which it does with no
+timeout — see `_ignore_docker_config` in `boltzmann_sandbox/brain.py`.
 
 ### What bites you on Docker Hub
 
@@ -100,14 +116,57 @@ Useful for iterating, but note that `registry:2` is the reference implementation
 therefore the *easy* case: it accepting the artifact does not tell you Docker Hub
 will.
 
+## What is verified, and what is not
+
+**Verified** — the full lifecycle against a local `registry:2`, every step asserted:
+
+```
+1. Register and ingest        3 blocks from one source
+2. Re-register                same identity, dedup is a no-op
+3. Search                     hybrid ranking, all_verified
+4. Prove membership           1 hash for a tree of 3, verifies
+5. The travelling index       vector=False  inverted=True
+6. Replace the source         both still members
+7. Publish                    4 layers + config
+8. Install into an empty brain    same digest as published
+9. The index arrived          byte-identical dump, model tag intact
+10. Search the installed brain    verified
+11. Drop the evidence         privileged, cascades to all 3, all re-derivable
+12. Older roots               still verify
+13. Prune                     5 blobs reclaimed, both brains still verify
+```
+
+**Not verified: Docker Hub.** The question the sandbox exists to answer is whether a
+hosted registry accepts a manifest whose `artifactType` is
+`application/vnd.gaussia.boltzmann.brain.v1+json` with a config media type of
+`…snapshot.v1+json`. Docker documents OCI artifact support "by leveraging the config
+property on the image manifest", which is the mechanism this uses — but that is a
+promise, not a result. Run it with real credentials and record what happens here,
+including a failure: a rejection is the finding, not an embarrassment.
+
+## A known limitation
+
+**A reopened brain has an empty travelling index.** The structural indices are rebuilt
+on open, but the vector index cannot be: rebuilding it is what `rebuildable = False`
+denies. Its bytes are in the store after a pull, and its digest is not recoverable
+from the snapshot — only the manifest names index layers, and `pull` does not write
+the manifest into the layout's `index.json` the way `pack` does.
+
+The effect is bounded: retrieval loses one of three rankings, so results are ranked
+worse but never wrong, and nothing about verification changes. Two ways out, both
+worth deciding on rather than drifting into — have `pull` record the manifest so
+`open` can find the index layers, or have `ModuleRef` carry the index digest next to
+`embedding_model`.
+
 ## Adding it to an MCP client
 
 ```bash
 claude mcp add boltzmann -- uv run --directory /path/to/sandbox boltzmann-mcp
 ```
 
-The tools map one-to-one onto the protocol's operations. Ingestion is deliberately
-two calls:
+Eighteen tools, one per protocol operation. Read tools carry `readOnlyHint`; `drop`
+and `prune` carry `destructiveHint`, and `drop` additionally refuses without
+`confirm=true`. Ingestion is deliberately two calls:
 
 1. `open_task` returns a `ProcessingTask` **and the JSON Schema** its candidates must
    satisfy — the schema the SDK emits, not a description of one.
