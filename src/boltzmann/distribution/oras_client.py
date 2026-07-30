@@ -45,7 +45,7 @@ def _registry(insecure: bool) -> Any:
     try:
         import oras.provider
     except ModuleNotFoundError as error:  # pragma: no cover - depends on install extras
-        raise DistributionError("the ORAS transport needs the [oci] extra: pip install 'boltzmann[oci]'") from error
+        raise DistributionError("the ORAS transport needs the [oci] extra: pip install 'pyboltzmann[oci]'") from error
     return oras.provider.Registry(insecure=insecure)
 
 

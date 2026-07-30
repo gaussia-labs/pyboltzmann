@@ -28,7 +28,16 @@ FAIL: Final = "fail"
 
 _MARK: Final = {OK: "  ok  ", WARN: " warn ", FAIL: " FAIL "}
 
+SDK_DISTRIBUTION: Final = "pyboltzmann"
+"""What you install, and what ``importlib.metadata`` answers to."""
+
 SDK_PACKAGE: Final = "boltzmann"
+"""What you import, and the directory under ``src/``.
+
+The two differ because ``boltzmann`` on PyPI belongs to an unrelated package. Keeping them as separate
+constants is not pedantry: asking the metadata for the import name returns nothing, and looking for the
+sources under the distribution name finds nothing.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,15 +69,15 @@ def check_sdk() -> Iterator[Check]:
     catches the confusing case: code that was changed, and behaviour that did not follow.
     """
     try:
-        version = importlib.metadata.version(SDK_PACKAGE)
+        version = importlib.metadata.version(SDK_DISTRIBUTION)
     except importlib.metadata.PackageNotFoundError:
-        yield Check(FAIL, "boltzmann installed", "not installed. Run: uv sync")
+        yield Check(FAIL, "pyboltzmann installed", "not installed. Run: uv sync")
         return
 
     import boltzmann
 
     installed = Path(boltzmann.__file__).parent
-    yield Check(OK, "boltzmann installed", f"{version} from {installed.parent.name}/")
+    yield Check(OK, "pyboltzmann installed", f"{version} from {installed.parent.name}/")
 
     sources = Path(__file__).resolve().parent.parent.parent / "src" / SDK_PACKAGE
     if not sources.is_dir():
@@ -81,7 +90,7 @@ def check_sdk() -> Iterator[Check]:
         yield Check(
             WARN,
             "boltzmann is current",
-            "the sources are newer than the installed copy. Run: uv sync --reinstall-package boltzmann",
+            "the sources are newer than the installed copy. Run: uv sync --reinstall-package pyboltzmann",
         )
     else:
         yield Check(OK, "boltzmann is current", "matches ../src/boltzmann")

@@ -4,12 +4,12 @@ A place to run the Boltzmann SDK for real: against an installed wheel, against a
 OCI registry, with the pieces the protocol leaves to the implementer actually
 implemented.
 
-Not part of the `boltzmann` distribution. It lives outside the package on purpose and
+Not part of the `pyboltzmann` distribution. It lives outside the package on purpose and
 is excluded from both the wheel and the sdist.
 
 ## Why it exists
 
-`boltzmann`'s own test suite is thorough and proves nothing about three things:
+The SDK's own test suite is thorough and proves nothing about three things:
 
 1. **The package.** Every test runs against the source tree. A golden vector that
    fails to ship, a missing `py.typed`, an `__init__` that re-exports the wrong name —
@@ -201,12 +201,12 @@ or not at all.
 
 ## The SDK installs as a built wheel, not an editable
 
-`[tool.uv.sources]` points `boltzmann` at `..` with `editable = false`. That is the
+`[tool.uv.sources]` points `pyboltzmann` at `..` with `editable = false`. That is the
 point: the sandbox exercises the *packaged* SDK, which is how a missing data file
 becomes visible. The cost is that editing `../src/boltzmann` does not propagate until
 
 ```bash
-uv sync --reinstall-package boltzmann
+uv sync --reinstall-package pyboltzmann
 ```
 
 `boltzmann-doctor` warns when the installed copy is older than the sources. When the

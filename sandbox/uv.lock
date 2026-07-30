@@ -125,49 +125,12 @@ wheels = [
 ]
 
 [[package]]
-name = "boltzmann"
-version = "0.1.0"
-source = { directory = "../" }
-dependencies = [
-    { name = "pydantic" },
-    { name = "rfc8785" },
-]
-
-[package.optional-dependencies]
-oci = [
-    { name = "oras" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "oras", marker = "extra == 'oci'", specifier = ">=0.2.42" },
-    { name = "pydantic", specifier = ">=2.0.0,<3.0.0" },
-    { name = "rfc8785", specifier = ">=0.1.4" },
-]
-provides-extras = ["oci"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "commitizen", specifier = ">=4.0.0" },
-    { name = "hypothesis", specifier = ">=6.100.0" },
-    { name = "jsonschema", specifier = ">=4.20.0" },
-    { name = "mypy", specifier = ">=1.8.0" },
-    { name = "pre-commit", specifier = ">=3.5.0" },
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "pytest-asyncio", specifier = ">=0.23.0" },
-    { name = "pytest-cov", specifier = ">=5.0.0" },
-    { name = "pytest-xdist", specifier = ">=3.5.0" },
-    { name = "python-semantic-release", specifier = ">=9.0.0" },
-    { name = "ruff", specifier = ">=0.8.0" },
-]
-
-[[package]]
 name = "boltzmann-sandbox"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "boltzmann", extra = ["oci"] },
     { name = "fastmcp" },
+    { name = "pyboltzmann", extra = ["oci"] },
     { name = "python-dotenv" },
 ]
 
@@ -181,8 +144,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "boltzmann", extras = ["oci"], directory = "../" },
     { name = "fastmcp", specifier = ">=3.0.0,<4.0.0" },
+    { name = "pyboltzmann", extras = ["oci"], directory = "../" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
 ]
 
@@ -1114,6 +1077,43 @@ keyring = [
 ]
 memory = [
     { name = "cachetools" },
+]
+
+[[package]]
+name = "pyboltzmann"
+version = "0.1.0"
+source = { directory = "../" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "rfc8785" },
+]
+
+[package.optional-dependencies]
+oci = [
+    { name = "oras" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "oras", marker = "extra == 'oci'", specifier = ">=0.2.42" },
+    { name = "pydantic", specifier = ">=2.0.0,<3.0.0" },
+    { name = "rfc8785", specifier = ">=0.1.4" },
+]
+provides-extras = ["oci"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "commitizen", specifier = ">=4.0.0" },
+    { name = "hypothesis", specifier = ">=6.100.0" },
+    { name = "jsonschema", specifier = ">=4.20.0" },
+    { name = "mypy", specifier = ">=1.8.0" },
+    { name = "pre-commit", specifier = ">=3.5.0" },
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23.0" },
+    { name = "pytest-cov", specifier = ">=5.0.0" },
+    { name = "pytest-xdist", specifier = ">=3.5.0" },
+    { name = "python-semantic-release", specifier = ">=9.0.0" },
+    { name = "ruff", specifier = ">=0.8.0" },
 ]
 
 [[package]]

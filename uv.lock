@@ -80,58 +80,6 @@ wheels = [
 ]
 
 [[package]]
-name = "boltzmann"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "pydantic" },
-    { name = "rfc8785" },
-]
-
-[package.optional-dependencies]
-oci = [
-    { name = "oras" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "commitizen" },
-    { name = "hypothesis" },
-    { name = "jsonschema" },
-    { name = "mypy" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-xdist" },
-    { name = "python-semantic-release" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "oras", marker = "extra == 'oci'", specifier = ">=0.2.42" },
-    { name = "pydantic", specifier = ">=2.0.0,<3.0.0" },
-    { name = "rfc8785", specifier = ">=0.1.4" },
-]
-provides-extras = ["oci"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "commitizen", specifier = ">=4.0.0" },
-    { name = "hypothesis", specifier = ">=6.100.0" },
-    { name = "jsonschema", specifier = ">=4.20.0" },
-    { name = "mypy", specifier = ">=1.8.0" },
-    { name = "pre-commit", specifier = ">=3.5.0" },
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "pytest-asyncio", specifier = ">=0.23.0" },
-    { name = "pytest-cov", specifier = ">=5.0.0" },
-    { name = "pytest-xdist", specifier = ">=3.5.0" },
-    { name = "python-semantic-release", specifier = ">=9.0.0" },
-    { name = "ruff", specifier = ">=0.8.0" },
-]
-
-[[package]]
 name = "certifi"
 version = "2026.7.22"
 source = { registry = "https://pypi.org/simple" }
@@ -904,6 +852,58 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/7d/ea/39b988c938f75cb75d7045b5c69f8bfed47ee2152c8837fb403de29d6fb8/prompt_toolkit-3.0.53.tar.gz", hash = "sha256:9ec8a0ad96d5c56148b3f914aa79c1564c3fde5d2e6b876e7bc327e353cf8fa6", size = 435492, upload-time = "2026-07-26T20:56:14.758Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/6f/84908cad2d6aa5144abcf7b42709fe4fdb459bc640ec7ac5786e7693dabc/prompt_toolkit-3.0.53-py3-none-any.whl", hash = "sha256:01c0891d7f9237d5e339f7d3e42cdae80b7534abb1c7c0e3352efba6231492f2", size = 392288, upload-time = "2026-07-26T20:56:12.512Z" },
+]
+
+[[package]]
+name = "pyboltzmann"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "pydantic" },
+    { name = "rfc8785" },
+]
+
+[package.optional-dependencies]
+oci = [
+    { name = "oras" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "commitizen" },
+    { name = "hypothesis" },
+    { name = "jsonschema" },
+    { name = "mypy" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-xdist" },
+    { name = "python-semantic-release" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "oras", marker = "extra == 'oci'", specifier = ">=0.2.42" },
+    { name = "pydantic", specifier = ">=2.0.0,<3.0.0" },
+    { name = "rfc8785", specifier = ">=0.1.4" },
+]
+provides-extras = ["oci"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "commitizen", specifier = ">=4.0.0" },
+    { name = "hypothesis", specifier = ">=6.100.0" },
+    { name = "jsonschema", specifier = ">=4.20.0" },
+    { name = "mypy", specifier = ">=1.8.0" },
+    { name = "pre-commit", specifier = ">=3.5.0" },
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23.0" },
+    { name = "pytest-cov", specifier = ">=5.0.0" },
+    { name = "pytest-xdist", specifier = ">=3.5.0" },
+    { name = "python-semantic-release", specifier = ">=9.0.0" },
+    { name = "ruff", specifier = ">=0.8.0" },
 ]
 
 [[package]]

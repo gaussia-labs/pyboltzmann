@@ -3,9 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "boltzmann"
+# The distribution is `pyboltzmann`; the import package stays `boltzmann`. `boltzmann` on PyPI is taken by
+# an unrelated 0.0.1, so publishing under it is not available -- and the split matches the sibling repo,
+# where `pygaussia` provides `gaussia`. What a user types to install and what they type to import differ
+# by three letters, which is why the README says both.
+name = "pyboltzmann"
 version = "0.1.0"
-description = "Boltzmann - SDK for the Boltzmann Protocol: portable, verifiable, model-agnostic knowledge"
+description = "An SDK for the Boltzmann Protocol: portable, verifiable, model-agnostic knowledge"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
@@ -236,12 +240,11 @@ addopts = [
     "--tb=short",
     "--maxfail=5",
 ]
+# Only markers this suite uses. `requires_gpu` and `requires_api_key` came from a sibling project and mean
+# nothing here: the SDK embeds no model and calls no service, which is the point of Principle 5. With
+# --strict-markers, an unused marker is a name that looks available and is not.
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "integration: marks tests as integration tests",
-    "unit: marks tests as unit tests",
-    "requires_gpu: marks tests that require GPU",
-    "requires_api_key: marks tests that require API keys",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",

@@ -13,7 +13,7 @@ requires-python = ">=3.11"
 dependencies = [
     # The network transport is the whole point of this sandbox, so the [oci] extra is
     # not optional here the way it is for the SDK.
-    "boltzmann[oci]",
+    "pyboltzmann[oci]",
     "fastmcp>=3.0.0,<4.0.0",
     # Configuration comes from .env, and fastmcp already pulls this in. Declared
     # anyway: depending on a transitive dependency is how a working setup breaks on
@@ -36,11 +36,11 @@ boltzmann-demo = "boltzmann_sandbox.demo:main"
 # invisible to a test suite running inside the source tree and shows up here instead.
 # The cost is that editing ../src/boltzmann does not propagate until:
 #
-#     uv sync --reinstall-package boltzmann
+#     uv sync --reinstall-package pyboltzmann
 #
 # `boltzmann-doctor` warns when the installed copy has fallen behind the sources.
 # Once the SDK is on an index, delete this block; nothing else changes.
-boltzmann = { path = "..", editable = false }
+pyboltzmann = { path = "..", editable = false }
 
 [dependency-groups]
 dev = [

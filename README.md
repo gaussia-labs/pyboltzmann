@@ -125,8 +125,16 @@ The paper states these as rules. Here they are errors, each with a test in
 ## Installation
 
 ```bash
-pip install boltzmann
+pip install pyboltzmann          # the distribution
+pip install 'pyboltzmann[oci]'   # plus the network registry transport
 ```
+
+```python
+import boltzmann                 # the import package
+```
+
+The two names differ because `boltzmann` on PyPI belongs to an unrelated package. It is the same split as
+`pygaussia` providing `gaussia`.
 
 ## Usage
 
