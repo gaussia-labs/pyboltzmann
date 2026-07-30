@@ -25,6 +25,21 @@ TOKEN_URL: Final = "Docker Hub -> Account settings -> Personal access tokens"
 DEFAULT_TAG: Final = "latest"
 DEFAULT_BRAIN_PATH: Final = "./brain"
 
+HUB_INDEX_HOSTS: Final = frozenset({"docker.io", "index.docker.io"})
+"""How people write Docker Hub, and what the registry API is not.
+
+``docker.io`` is the *index* hostname. ``https://docker.io/v2/…`` serves Docker Hub's website, so a
+registry client that takes the name literally gets HTTP 200 and a page of HTML where it expected a
+manifest. The API lives at :data:`HUB_REGISTRY_HOST`.
+
+``docker pull docker.io/user/repo`` works because the Docker CLI performs this substitution for you. A
+library that does not is not wrong, but it is surprising, so the substitution happens here rather than
+being left as a footnote in the README.
+"""
+
+HUB_REGISTRY_HOST: Final = "registry-1.docker.io"
+"""Docker Hub's registry API endpoint."""
+
 
 class ConfigError(Exception):
     """Configuration that cannot be repaired at runtime, only fixed in ``.env``."""
@@ -42,13 +57,80 @@ def _text(name: str, default: str = "") -> str:
     return (os.environ.get(name) or "").strip() or default
 
 
+def _resolve(value: str, source: Path) -> Path:
+    """
+    A configured path, made absolute.
+
+    A relative path in a configuration file means relative to that file, not to whoever happened to start
+    the process. Without this an MCP client that launches the server from the user's project would create
+    the brain there, and ``./brain`` would name a different directory for every caller.
+
+    Args:
+        value (str): The configured path.
+        source (Path): The ``.env`` it came from.
+
+    Returns:
+        Path: An absolute path.
+    """
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return (source.parent / path).resolve()
+
+
+def _registry_endpoint(reference: str) -> str:
+    """
+    A repository reference the transport can actually reach.
+
+    Only Docker Hub needs this, and it needs it badly: ``docker.io`` is the index hostname, so a request to
+    ``https://docker.io/v2/…`` lands on the website and comes back HTTP 200 with HTML. Nothing about that
+    resembles a registry error, so the failure surfaces as a JSON parse error somewhere far from its cause.
+
+    Args:
+        reference (str): The repository as configured.
+
+    Returns:
+        str: The same repository, addressed at the registry API.
+    """
+    host, separator, rest = reference.partition("/")
+    if separator and host in HUB_INDEX_HOSTS:
+        return f"{HUB_REGISTRY_HOST}/{rest}"
+    return reference
+
+
+def default_env_file() -> Path:
+    """
+    Where to look for ``.env`` when the caller names no file.
+
+    Beside the project rather than beside the *caller*, for two reasons. An MCP client starts the server
+    with a working directory of its own choosing -- often the user's project, not this one -- so a relative
+    ``.env`` would simply not be found, and the server would refuse to start while the file sat right
+    there. And ``dotenv``'s own discovery walks the call stack, which raises rather than returns when there
+    is no calling frame to walk, as in ``python -`` or an embedded interpreter.
+
+    A ``.env`` in the current directory still wins if one is there, since a caller who put it there meant
+    it.
+
+    Returns:
+        Path: The ``.env`` to read.
+    """
+    local = Path.cwd() / ".env"
+    if local.is_file():
+        return local
+    return Path(__file__).resolve().parent.parent / ".env"
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     """
     Everything this sandbox needs, validated.
 
     Attributes:
-        registry (str): The repository the brain publishes to, ``<host>/<namespace>/<repo>``.
+        registry (str): The repository the brain publishes to, ``<host>/<namespace>/<repo>``, with Docker
+            Hub's index hostname already replaced by its registry endpoint. This is the string handed to
+            the transport; :attr:`configured` is what was written in ``.env``.
+        configured (str): The repository exactly as configured, for messages a human has to match against
+            what they typed.
         tag (str): Tag that push and pull default to.
         brain_path (Path): The on-disk OCI layout. This directory *is* the brain.
         actor (str): Who registers knowledge. Provenance records it on every write.
@@ -59,6 +141,7 @@ class Settings:
     """
 
     registry: str
+    configured: str
     tag: str
     brain_path: Path
     actor: str
@@ -84,12 +167,12 @@ class Settings:
         # A first segment is a host only if it looks like one; "library/redis" names no host.
         if "." in head or ":" in head or head == "localhost":
             return head
-        return "docker.io"
+        return HUB_REGISTRY_HOST
 
     @property
     def is_docker_hub(self) -> bool:
         """Whether this points at Docker Hub, whose free-tier limits are worth warning about."""
-        return self.host in {"docker.io", "index.docker.io", "registry-1.docker.io"}
+        return self.host in HUB_INDEX_HOSTS | {HUB_REGISTRY_HOST}
 
 
 def load(env_file: Path | str | None = None) -> Settings:
@@ -108,7 +191,8 @@ def load(env_file: Path | str | None = None) -> Settings:
     Raises:
         ConfigError: If a required value is missing or malformed.
     """
-    load_dotenv(env_file, override=False)
+    source = Path(env_file) if env_file is not None else default_env_file()
+    load_dotenv(source, override=False)
 
     registry = _text("BOLTZMANN_REGISTRY")
     if not registry:
@@ -141,9 +225,10 @@ def load(env_file: Path | str | None = None) -> Settings:
         )
 
     return Settings(
-        registry=registry,
+        registry=_registry_endpoint(registry),
+        configured=registry,
         tag=_text("BOLTZMANN_TAG", DEFAULT_TAG),
-        brain_path=Path(_text("BOLTZMANN_BRAIN_PATH", DEFAULT_BRAIN_PATH)).expanduser(),
+        brain_path=_resolve(_text("BOLTZMANN_BRAIN_PATH", DEFAULT_BRAIN_PATH), source),
         actor=_text("BOLTZMANN_ACTOR", _text("USER", "sandbox")),
         username=username,
         token=token,

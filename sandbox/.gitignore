@@ -10,4 +10,5 @@ __pycache__/
 # Brains this sandbox creates. They are real OCI layouts, sometimes large, and always
 # reproducible from a demo run.
 brain/
+brain-*/
 brains/

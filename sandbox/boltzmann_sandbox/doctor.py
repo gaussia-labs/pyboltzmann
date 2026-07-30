@@ -100,7 +100,13 @@ def check_settings() -> tuple[Settings | None, list[Check]]:
         return None, [Check(FAIL, "configuration", str(error))]
 
     checks = [
-        Check(OK, "artifact", settings.reference),
+        Check(
+            OK,
+            "artifact",
+            settings.reference
+            if settings.configured == settings.registry
+            else f"{settings.configured}:{settings.tag} -> {settings.reference}",
+        ),
         Check(
             OK if settings.authenticated else WARN,
             "credentials",
