@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind
-from boltzmann.exceptions import BoltzmannError
+from boltzmann.exceptions import BoltzmannError, DistributionError, ReferenceNotFoundError
 from boltzmann.indices.base import IndexKind
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
@@ -187,10 +187,14 @@ async def run(settings: Settings) -> None:
     Raises:
         DemoError: If any step does not hold.
     """
-    # A fresh publisher every run, so the digests printed are a function of the fixed inputs and nothing
-    # else. Reusing a directory would make the version chain depend on how many times this was run.
-    publisher_path = settings.brain_path
-    consumer_path = settings.brain_path.parent / f"{settings.brain_path.name}-consumer"
+    # Two brains of its own, wiped on every run so the digests printed are a function of the fixed inputs
+    # and nothing else -- reusing a directory would make the version chain depend on how many times this
+    # was run.
+    #
+    # Deliberately *not* BOLTZMANN_BRAIN_PATH. That is the brain the MCP server works against and where
+    # real knowledge accumulates, and a demo that deletes it could only be run once safely.
+    publisher_path = settings.brain_path.parent / f"{settings.brain_path.name}-demo"
+    consumer_path = settings.brain_path.parent / f"{settings.brain_path.name}-demo-consumer"
     for path in (publisher_path, consumer_path):
         shutil.rmtree(path, ignore_errors=True)
 
@@ -258,32 +262,43 @@ async def run(settings: Settings) -> None:
     step("7. Publish")
     before = roots(brain)
     published = brain.snapshot().digest
-    manifest = brain.pack(tag=settings.tag)
+    tag = f"{settings.tag}-demo"
+    manifest = brain.pack(tag=tag)
+    note("tag", tag)
     note("layers", f"{len(manifest.layers)} + config")
     for layer in manifest.layers:
         kind = layer.annotations.get("ai.gaussia.boltzmann.memory-type", "index")
         note(f"  {kind}", f"{layer.digest.short}  {layer.size:>7} bytes  {layer.media_type.split('.')[-1]}")
 
     try:
-        pushed = await brain.push(client, settings.registry, settings.tag)
-    except BoltzmannError as error:
+        # ``force`` because this brain is created empty on every run, so its history always diverges from
+        # whatever the previous run published. That is precisely the case the fast-forward guard exists to
+        # refuse -- and refusing it is right for a shared tag, which is why the demo publishes to one of its
+        # own rather than borrowing the configured tag and then forcing over somebody's version.
+        pushed = await brain.push(client, settings.registry, tag, force=True)
+    except ReferenceNotFoundError as error:
+        raise DemoError(f"the repository does not exist and could not be created: {error}") from error
+    except DistributionError as error:
         raise DemoError(
             f"the registry refused the artifact: {error}\n"
-            f"  This is the finding this demo exists to produce. A registry that rejects a manifest whose "
-            f"artifactType is application/vnd.gaussia.boltzmann.brain.v1+json does not support OCI "
-            f"artifacts the way the protocol needs. Record the status and the body in the README."
+            f"  If the refusal came from the registry rather than from this SDK, it is the finding this demo "
+            f"exists to produce: a registry that rejects a manifest whose artifactType is "
+            f"application/vnd.gaussia.boltzmann.brain.v1+json does not support OCI artifacts the way the "
+            f"protocol needs. Record the status and the body in the README."
         ) from error
+    except BoltzmannError as error:
+        raise DemoError(f"the SDK refused to publish: {error}") from error
     note("manifest", pushed.short)
     note("version", published.short)
 
     step("8. Install into an empty brain")
     consumer = open_brain(settings, consumer_path)
-    plan = await consumer.plan_pull(client, settings.registry, settings.tag)
+    plan = await consumer.plan_pull(client, settings.registry, tag)
     note("modules", ", ".join(kind.value for kind in plan.modules))
     note("layers to fetch", f"{len(plan.fetch_layers)}, reusing {len(plan.reuse_layers)} already held by digest")
     note("indices to rebuild", ", ".join(plan.rebuild_indices) or "none")
     note("indices that travel", ", ".join(kind.value for kind in plan.fetch_vector_indices) or "none")
-    installed = await consumer.pull(client, settings.registry, settings.tag)
+    installed = await consumer.pull(client, settings.registry, tag)
     note("installed version", installed.digest.short)
 
     note("same digest", installed.digest == published)
@@ -369,8 +384,9 @@ async def run(settings: Settings) -> None:
     require(brain.verify(), "the brain stopped verifying after a prune")
     require(consumer.verify(), "pruning the publisher broke the consumer")
 
-    print(f"\n\033[32mThe lifecycle held, against {settings.reference}.\033[0m")
+    print(f"\n\033[32mThe lifecycle held, against {settings.registry}:{tag}.\033[0m")
     print(f"  publisher {publisher_path}\n  consumer  {consumer_path}")
+    print(f"  the brain at {settings.brain_path} was not touched")
 
 
 def main() -> int:
