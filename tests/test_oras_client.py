@@ -12,6 +12,7 @@ was asked for.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -136,32 +137,46 @@ class FakeRegistry:
         self.session = FakeSession(self)
         self.write_scopes: list[str] = []
         self.blobs: dict[str, bytes] = {}
-        self.manifests: dict[str, dict[str, Any]] = {}
+        self.manifests: dict[str, bytes] = {}
         self.uploads: list[str] = []
         self.existence_checks: list[str] = []
         self.requests: list[str] = []
         self.serve: FakeResponse | None = None
-        """Set to answer the next manifest request with something specific."""
+        """Set to answer every request with something specific."""
+
+        self.serve_put: FakeResponse | None = None
+        """Set to answer only the manifest PUT, leaving reads working -- which is what a push needs, since
+        it reads the remote before it writes."""
 
     def get_container(self, target: str) -> FakeContainer:
         return FakeContainer(target)
 
     def do_request(self, url: str, method: str = "GET", **kwargs: Any) -> FakeResponse:
-        """Serve a manifest the way a registry does: by status code.
+        """Serve and store manifests the way a registry does: by status code, and by the bytes received.
 
-        The client reads the status rather than catching an exception, because "no such tag" and "your
-        credential was refused" have to be distinguishable. Modelling that here is what makes these tests
-        exercise the distinction instead of assuming it.
+        Storing what was *sent* rather than a re-serialization is the point. A digest is over bytes, so a
+        fake that keeps a dictionary and hands back its own JSON could never catch a client whose published
+        artifact is not the one it thinks it published.
         """
-        self.requests.append(url)
+        self.requests.append(f"{method} {url}")
         if self.serve is not None:
             return self.serve
 
         target = url.split("://", 1)[1].removeprefix("v2/")
+        if method == "PUT":
+            if self.serve_put is not None:
+                return self.serve_put
+            payload = kwargs.get("data") or b""
+            self.manifests[target] = payload
+            digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+            response = FakeResponse(b"", status_code=201, reason="Created")
+            response.headers["Docker-Content-Digest"] = digest
+            return response
+
         if target not in self.manifests:
             body = b'{"errors":[{"code":"MANIFEST_UNKNOWN","message":"manifest unknown"}]}'
             return FakeResponse(body, status_code=404, reason="Not Found")
-        return FakeResponse(json.dumps(self.manifests[target]).encode(), status_code=200, reason="OK")
+        return FakeResponse(self.manifests[target], status_code=200, reason="OK")
 
     def blob_exists(self, layer: dict[str, Any], container: FakeContainer) -> bool:
         self.existence_checks.append(layer["digest"])
@@ -171,10 +186,6 @@ class FakeRegistry:
         payload = Path(blob).read_bytes()
         self.blobs[layer["digest"]] = payload
         self.uploads.append(layer["digest"])
-        return FakeResponse()
-
-    def upload_manifest(self, manifest: dict[str, Any], container: FakeContainer) -> FakeResponse:
-        self.manifests[str(container)] = manifest
         return FakeResponse()
 
     def get_blob(self, container: str, digest: str, **kwargs: Any) -> FakeResponse:
@@ -230,31 +241,51 @@ class TestInterface:
 
 
 class TestWireShape:
-    """What this SDK writes has to be a manifest an OCI tool can read."""
+    """What this SDK publishes has to be a manifest an OCI tool can read.
 
-    async def test_the_manifest_is_oci_camel_case(
+    Every assertion here is against the bytes the registry received, not against a model. A manifest is a
+    document with a digest, and the only thing that can be wrong about it is what was actually sent.
+    """
+
+    async def test_the_published_document_is_an_oci_manifest(
         self, brain: Brain, client: OrasRegistryClient, fake: FakeRegistry
     ) -> None:
         await brain.push(client, REFERENCE, "v1")
-        document = fake.manifests[f"{REFERENCE}:v1"]
+        document = json.loads(fake.manifests[f"{REFERENCE}:v1"])
 
         assert document["schemaVersion"] == 2
         assert document["mediaType"] == MANIFEST_MEDIA_TYPE
         assert document["artifactType"] == ARTIFACT_TYPE
         assert set(document["config"]) >= {"mediaType", "digest", "size"}
-        assert document["annotations"][REF_NAME_ANNOTATION] == "v1"
+
+    async def test_nothing_snake_case_survives_into_the_document(
+        self, brain: Brain, client: OrasRegistryClient, fake: FakeRegistry
+    ) -> None:
+        """The failure this replaces: a layout whose index.json declared an OCI manifest and pointed at a
+        document with ``artifact_type`` and no ``schemaVersion``, which no OCI tool can read."""
+        await brain.push(client, REFERENCE, "v1")
+        document = json.loads(fake.manifests[f"{REFERENCE}:v1"])
+
+        def keys(value: object) -> list[str]:
+            if isinstance(value, dict):
+                return [*value, *(name for item in value.values() for name in keys(item))]
+            if isinstance(value, list):
+                return [name for item in value for name in keys(item)]
+            return []
+
+        assert [name for name in keys(document) if "_" in name and "." not in name] == []
 
     async def test_every_layer_is_a_descriptor(
         self, brain: Brain, client: OrasRegistryClient, fake: FakeRegistry
     ) -> None:
         await brain.push(client, REFERENCE, "v1")
-        for layer in fake.manifests[f"{REFERENCE}:v1"]["layers"]:
+        for layer in json.loads(fake.manifests[f"{REFERENCE}:v1"])["layers"]:
             assert set(layer) >= {"mediaType", "digest", "size", "annotations"}
             assert layer["digest"].startswith("sha256:")
             assert "ai.gaussia.boltzmann.merkle-root" in layer["annotations"]
 
     async def test_a_pushed_manifest_resolves_back(self, brain: Brain, client: OrasRegistryClient) -> None:
-        """The camelCase written on push must parse back into the same manifest on resolve."""
+        """What was written on push must parse back into the same manifest on resolve."""
         await brain.push(client, REFERENCE, "v1")
         resolved = await client.resolve(REFERENCE, "v1")
 
@@ -265,14 +296,41 @@ class TestWireShape:
             assert layer is not None
             assert layer.merkle_root == brain.root_of(memory_type)
 
-    async def test_the_tag_annotation_is_not_kept_as_manifest_content(
-        self, brain: Brain, client: OrasRegistryClient
+    async def test_the_tag_is_not_part_of_the_artifact(
+        self, brain: Brain, client: OrasRegistryClient, fake: FakeRegistry
     ) -> None:
-        """A tag is where an artifact sits, not part of what it is, so it must not change the digest."""
-        await brain.push(client, REFERENCE, "v1")
-        resolved = await client.resolve(REFERENCE, "v1")
-        assert REF_NAME_ANNOTATION not in resolved.annotations
-        assert resolved.digest == brain.pack(tag="v1").digest
+        """A tag is where an artifact sits, not part of what it is, so it must not change the digest.
+
+        Writing it into the manifest gave the same brain a different name under every tag it was published
+        as, and the digest the publisher computed matched neither.
+        """
+        first = await brain.push(client, REFERENCE, "v1")
+        second = await brain.push(client, REFERENCE, "latest")
+        assert first == second == brain.pack(tag="v1").digest
+
+        for tag in ("v1", "latest"):
+            document = json.loads(fake.manifests[f"{REFERENCE}:{tag}"])
+            assert REF_NAME_ANNOTATION not in document.get("annotations", {})
+
+    async def test_the_digest_is_the_one_the_registry_filed_it_under(
+        self, brain: Brain, client: OrasRegistryClient, fake: FakeRegistry
+    ) -> None:
+        """Otherwise pinning by digest -- the only way to name a version somebody else can move a tag away
+        from -- resolves to nothing."""
+        returned = await brain.push(client, REFERENCE, "v1")
+        stored = fake.manifests[f"{REFERENCE}:v1"]
+        assert str(returned) == "sha256:" + hashlib.sha256(stored).hexdigest()
+
+    async def test_a_registry_that_rewrites_the_manifest_is_reported(
+        self, brain: Brain, client: OrasRegistryClient, fake: FakeRegistry
+    ) -> None:
+        """Two names for one artifact is not something to paper over."""
+        response = FakeResponse(b"", status_code=201, reason="Created")
+        response.headers["Docker-Content-Digest"] = "sha256:" + "00" * 32
+        fake.serve_put = response
+
+        with pytest.raises(DistributionError, match="two names"):
+            await brain.push(client, REFERENCE, "v1")
 
 
 class TestUploads:
@@ -305,7 +363,7 @@ class TestUploads:
     async def test_a_failed_manifest_publish_is_reported(
         self, brain: Brain, client: OrasRegistryClient, fake: FakeRegistry
     ) -> None:
-        fake.upload_manifest = lambda *a, **k: FakeResponse(status_code=403)  # type: ignore[method-assign]
+        fake.serve_put = FakeResponse(b'{"errors":[]}', status_code=403, reason="Forbidden")
         with pytest.raises(DistributionError, match="failed with 403"):
             await brain.push(client, REFERENCE, "v1")
 
@@ -344,12 +402,14 @@ class TestDownloads:
             await client.resolve(REFERENCE, "nope")
 
     async def test_a_foreign_artifact_is_refused(self, client: OrasRegistryClient, fake: FakeRegistry) -> None:
-        fake.manifests[f"{REFERENCE}:v1"] = {
-            "schemaVersion": 2,
-            "artifactType": "application/vnd.oci.image.manifest.v1+json",
-            "config": {},
-            "layers": [],
-        }
+        fake.manifests[f"{REFERENCE}:v1"] = json.dumps(
+            {
+                "schemaVersion": 2,
+                "artifactType": "application/vnd.oci.image.manifest.v1+json",
+                "config": {},
+                "layers": [],
+            }
+        ).encode()
         with pytest.raises(DistributionError, match="not a Boltzmann brain"):
             await client.resolve(REFERENCE, "v1")
 
@@ -375,12 +435,17 @@ class TestFullCycleOverTheFakeTransport:
         assert len(again.module(MemoryType.SEMANTIC)) == 2
         assert again.verify()
 
-    async def test_the_manifest_is_json_serializable(
-        self, brain: Brain, client: OrasRegistryClient, fake: FakeRegistry
+    async def test_what_the_registry_stored_is_what_the_layout_holds(
+        self, brain: Brain, client: OrasRegistryClient, fake: FakeRegistry, tmp_path: Path
     ) -> None:
-        """ORAS puts the manifest on the wire as JSON, so nothing in it may resist encoding."""
-        await brain.push(client, REFERENCE, "v1")
-        json.dumps(fake.manifests[f"{REFERENCE}:v1"])
+        """One artifact, one set of bytes, one name -- which is what makes publishing a copy rather than a
+        conversion, as Section 7 requires of the on-disk format."""
+        digest = await brain.push(client, REFERENCE, "v1")
+        remote = fake.manifests[f"{REFERENCE}:v1"]
+
+        local = brain.pack(tag="v1")
+        assert local.to_bytes() == remote
+        assert local.digest == digest
 
 
 class TestTellingAbsenceFromFailure:

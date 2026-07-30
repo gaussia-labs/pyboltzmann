@@ -19,18 +19,14 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from boltzmann.distribution.manifest import BrainManifest, parse_manifest
-from boltzmann.distribution.media_types import (
-    ARTIFACT_TYPE,
-    MANIFEST_MEDIA_TYPE,
-    REF_NAME_ANNOTATION,
-)
+from boltzmann.distribution.manifest import parse_manifest
+from boltzmann.distribution.media_types import MANIFEST_MEDIA_TYPE
 from boltzmann.exceptions import DistributionError, ReferenceNotFoundError
 from boltzmann.identity.digest import OciDigest
 from boltzmann.store.oci_layout import OciLayoutStore
 
 if TYPE_CHECKING:
-    from boltzmann.distribution.manifest import Descriptor
+    from boltzmann.distribution.manifest import BrainManifest, Descriptor
     from boltzmann.store.base import BlockStore
 
 
@@ -106,8 +102,6 @@ class OrasRegistryClient:
             DistributionError: If the tag cannot be resolved for any other reason, or what it resolves to
                 is not a Boltzmann brain.
         """
-        import json
-
         # ORAS's own ``get_manifest`` reports every failure the same way, and the status code is what says
         # whether the tag is absent or the registry refused us. A caller has to be able to tell: absence
         # before a first push is expected, and a refusal that looks like absence disables the
@@ -120,16 +114,14 @@ class OrasRegistryClient:
                 f"cannot resolve {reference}:{tag}: {response.status_code} {response.reason} -- {response.text[:200]}"
             )
 
-        try:
-            document = response.json()
-        except ValueError as error:
+        if not response.content.lstrip().startswith(b"{"):
             raise DistributionError(
                 f"cannot resolve {reference}:{tag}: the registry answered {response.status_code} with "
                 f"{response.headers.get('content-type', 'no content type')} rather than a manifest. "
                 f"For Docker Hub the endpoint is registry-1.docker.io; docker.io serves the website"
-            ) from error
+            )
 
-        return parse_manifest(json.dumps(self._from_oci(document)).encode())
+        return parse_manifest(response.content)
 
     def _authorize_write(self, reference: str) -> None:
         """Obtain a token that can actually write, rather than trusting the registry's challenge.
@@ -234,15 +226,19 @@ class OrasRegistryClient:
             store (BlockStore): Where the blobs are read from.
 
         Returns:
-            OciDigest: Digest of the pushed manifest.
+            OciDigest: The digest the registry filed the manifest under, which is also the digest the local
+            layout holds it under -- one artifact, one name.
 
         Raises:
-            DistributionError: If an upload fails.
+            DistributionError: If an upload fails, or the registry stored something other than what was
+                sent.
         """
         container = self.registry.get_container(f"{reference}:{tag}")
 
         for descriptor in [manifest.config, *manifest.layers]:
-            layer = self._to_oci_descriptor(descriptor)
+            layer = descriptor.model_dump(mode="json", by_alias=True, exclude_defaults=False)
+            if not descriptor.annotations:
+                layer.pop("annotations", None)
             if self.registry.blob_exists(layer, container):
                 continue
             with self._as_file(descriptor, store) as path:
@@ -250,64 +246,66 @@ class OrasRegistryClient:
                 # cached for the write to fail with.
                 self._authorize_write(reference)
                 response = self.registry.upload_blob(str(path), container, layer)
-            if response.status_code not in (200, 201, 202):
+            if response.status_code not in OK_STATUSES:
                 raise DistributionError(
                     f"uploading {descriptor.digest.short} to {reference} failed with {response.status_code}"
                 )
 
-        document = self._to_oci(manifest, tag)
+        return self._upload_manifest(container, reference, tag, manifest)
+
+    def _upload_manifest(self, container: Any, reference: str, tag: str, manifest: BrainManifest) -> OciDigest:
+        """
+        Upload the manifest's own bytes, unaltered, and return the digest the registry filed them under.
+
+        Sending the bytes rather than a dictionary is what keeps the artifact's name the same in every
+        place it exists. Handing ORAS a dictionary would let ``requests`` serialize it, and a digest is over
+        bytes: the registry would file the artifact under a name the publisher could not reproduce, and
+        pinning by digest -- the only way to name a version somebody else can move a tag away from -- would
+        resolve to nothing.
+
+        The tag is deliberately *not* written into the manifest. It is a pointer to an artifact, not a
+        property of one; putting it inside would give the same brain a different digest under every tag it
+        is published as. The layout records the tag in ``index.json``, and the registry in the tag itself.
+
+        Args:
+            container (Any): The ORAS container for this reference and tag.
+            reference (str): Repository reference, for messages.
+            tag (str): The tag being published, for messages.
+            manifest (BrainManifest): What to publish.
+
+        Returns:
+            OciDigest: The digest the registry reported, checked against ours.
+
+        Raises:
+            DistributionError: If the upload fails, or the registry's digest disagrees with the bytes sent.
+        """
+        payload = manifest.to_bytes()
+        ours = OciDigest.of(payload)
+
         self._authorize_write(reference)
-        response = self.registry.upload_manifest(document, container)
-        if response.status_code not in (200, 201, 202):
-            raise DistributionError(f"publishing {reference}:{tag} failed with {response.status_code}")
-        return OciDigest.of(manifest.to_bytes())
+        response = self.registry.do_request(
+            f"{self.registry.prefix}://{container.manifest_url()}",
+            "PUT",
+            headers={"Content-Type": MANIFEST_MEDIA_TYPE},
+            data=payload,
+        )
+        if response.status_code not in OK_STATUSES:
+            raise DistributionError(
+                f"publishing {reference}:{tag} failed with {response.status_code} {response.reason} -- "
+                f"{response.text[:200]}"
+            )
 
-    # --- Wire shape -----------------------------------------------------------
-
-    def _to_oci_descriptor(self, descriptor: Descriptor) -> dict[str, Any]:
-        """A Boltzmann descriptor in OCI's camelCase wire shape."""
-        payload: dict[str, Any] = {
-            "mediaType": descriptor.media_type,
-            "digest": str(descriptor.digest),
-            "size": descriptor.size,
-        }
-        if descriptor.annotations:
-            payload["annotations"] = dict(descriptor.annotations)
-        return payload
-
-    def _to_oci(self, manifest: BrainManifest, tag: str) -> dict[str, Any]:
-        """The manifest in OCI's wire shape, which is camelCase and nests differently."""
-        return {
-            "schemaVersion": 2,
-            "mediaType": MANIFEST_MEDIA_TYPE,
-            "artifactType": manifest.artifact_type,
-            "config": self._to_oci_descriptor(manifest.config),
-            "layers": [self._to_oci_descriptor(layer) for layer in manifest.layers],
-            "annotations": {**manifest.annotations, REF_NAME_ANNOTATION: tag},
-        }
-
-    def _from_oci(self, document: dict[str, Any]) -> dict[str, Any]:
-        """OCI's wire shape back into this SDK's manifest fields."""
-        if document.get("artifactType") != ARTIFACT_TYPE:
-            raise DistributionError(f"not a Boltzmann brain: artifactType is {document.get('artifactType')!r}")
-
-        def descriptor(payload: dict[str, Any]) -> dict[str, Any]:
-            return {
-                "media_type": payload["mediaType"],
-                "digest": payload["digest"],
-                "size": payload["size"],
-                "annotations": payload.get("annotations", {}),
-            }
-
-        annotations = {
-            key: value for key, value in document.get("annotations", {}).items() if key != REF_NAME_ANNOTATION
-        }
-        return {
-            "artifact_type": document["artifactType"],
-            "config": descriptor(document["config"]),
-            "layers": [descriptor(layer) for layer in document.get("layers", [])],
-            "annotations": annotations,
-        }
+        stored = response.headers.get("Docker-Content-Digest")
+        if stored is None:
+            # The OCI spec requires the header on a manifest PUT. Without it there is nothing to check
+            # against, and our own digest is the best answer available.
+            return ours
+        if stored != str(ours):
+            raise DistributionError(
+                f"{reference}:{tag} was stored as {stored} but the bytes sent hash to {ours}; the registry "
+                f"rewrote the manifest, so the artifact has two names and neither side can pin it"
+            )
+        return ours
 
     def _as_file(self, descriptor: Descriptor, store: BlockStore) -> Any:
         """ORAS uploads a path. For a layout store that path already exists; otherwise, stage one."""

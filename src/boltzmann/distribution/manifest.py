@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.constants import PROTOCOL_VERSION
@@ -43,6 +43,7 @@ from boltzmann.distribution.media_types import (
     ANNOTATION_PROTOCOL_VERSION,
     ARTIFACT_TYPE,
     CONFIG_MEDIA_TYPE,
+    MANIFEST_MEDIA_TYPE,
     VECTOR_INDEX_MEDIA_TYPE,
     module_media_type,
 )
@@ -52,6 +53,11 @@ from boltzmann.identity.serialization import canonicalize
 
 if TYPE_CHECKING:
     from boltzmann.module.snapshot import ModuleRef, Snapshot
+
+
+OCI_SCHEMA_VERSION = 2
+"""What the OCI image-manifest specification fixes this at. Present in the document because the spec
+requires it, and because its absence is how a consumer's parser learns the document is not a manifest."""
 
 
 class Descriptor(BaseModel):
@@ -66,9 +72,13 @@ class Descriptor(BaseModel):
             root, which is the logical identity the digest says nothing about.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
-    media_type: str = Field(min_length=1)
+    media_type: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("mediaType", "media_type"),
+        serialization_alias="mediaType",
+    )
     digest: OciDigest
     size: int = Field(ge=0)
     annotations: dict[str, str] = Field(default_factory=dict)
@@ -124,15 +134,34 @@ class BrainManifest(BaseModel):
     The published form of a brain.
 
     Attributes:
+        schema_version (int): OCI's manifest schema version, which the spec fixes at 2.
+        media_type (str): This document's own media type, ``application/vnd.oci.image.manifest.v1+json``.
         artifact_type (str): Identifies this as a Boltzmann brain.
         config (Descriptor): Points at the snapshot document.
         layers (list[Descriptor]): One per installed module, plus any vector index layers.
         annotations (dict[str, str]): Manifest-level annotations.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
-    artifact_type: str = ARTIFACT_TYPE
+    # Validation accepts both spellings and serialization emits only OCI's. The snake_case alternatives
+    # exist because manifests written by an earlier version of this SDK are sitting in real layouts, and
+    # refusing to read one would strand a brain to no purpose.
+    schema_version: int = Field(
+        default=OCI_SCHEMA_VERSION,
+        validation_alias=AliasChoices("schemaVersion", "schema_version"),
+        serialization_alias="schemaVersion",
+    )
+    media_type: str = Field(
+        default=MANIFEST_MEDIA_TYPE,
+        validation_alias=AliasChoices("mediaType", "media_type"),
+        serialization_alias="mediaType",
+    )
+    artifact_type: str = Field(
+        default=ARTIFACT_TYPE,
+        validation_alias=AliasChoices("artifactType", "artifact_type"),
+        serialization_alias="artifactType",
+    )
     config: Descriptor
     layers: list[Descriptor] = Field(default_factory=list)
     annotations: dict[str, str] = Field(default_factory=dict)
@@ -178,12 +207,27 @@ class BrainManifest(BaseModel):
 
     def to_bytes(self) -> bytes:
         """
-        Serialize the manifest canonically for pushing.
+        Serialize the manifest as an OCI image manifest.
+
+        **These are the bytes everywhere.** The local layout stores them, a registry receives them
+        unaltered, and both therefore file the artifact under the same digest -- which is what makes the
+        paper's claim true rather than aspirational: the on-disk brain *is* an OCI artifact, so publishing
+        is a copy and not a conversion (Section 7). Serializing a private shape locally and translating it
+        on the way out would give one brain two names and leave a directory that no OCI tool can read.
+
+        Empty annotation maps are dropped. They carry nothing, and omitting them keeps the bytes identical
+        to what a conventional OCI producer would write for the same content.
 
         Returns:
-            bytes: The manifest as canonical JSON.
+            bytes: The manifest as canonical JSON, in OCI's wire shape.
         """
-        return canonicalize(self.model_dump(mode="json", exclude_none=True))
+        document = self.model_dump(mode="json", by_alias=True, exclude_none=True)
+        for descriptor in [document["config"], *document.get("layers", [])]:
+            if not descriptor.get("annotations"):
+                descriptor.pop("annotations", None)
+        if not document.get("annotations"):
+            document.pop("annotations", None)
+        return canonicalize(document)
 
     @property
     def digest(self) -> OciDigest:
@@ -249,8 +293,8 @@ def parse_manifest(data: bytes) -> BrainManifest:
         BrainManifest: The parsed manifest.
 
     Raises:
-        DistributionError: If the artifact is not a Boltzmann brain, or declares a protocol version
-            this client does not implement.
+        DistributionError: If the artifact is not a Boltzmann brain, does not declare OCI's schema
+            version, or declares a protocol version this client does not implement.
     """
     try:
         document: Any = json.loads(data)
@@ -260,9 +304,13 @@ def parse_manifest(data: bytes) -> BrainManifest:
     if not isinstance(document, dict):
         raise DistributionError(f"manifest must be an object, got {type(document).__name__}")
 
-    artifact_type = document.get("artifact_type")
+    artifact_type = document.get("artifactType", document.get("artifact_type"))
     if artifact_type != ARTIFACT_TYPE:
         raise DistributionError(f"not a Boltzmann brain: artifactType is {artifact_type!r}, expected {ARTIFACT_TYPE!r}")
+
+    version = document.get("schemaVersion", document.get("schema_version", OCI_SCHEMA_VERSION))
+    if version != OCI_SCHEMA_VERSION:
+        raise DistributionError(f"manifest declares schemaVersion {version!r}; OCI fixes it at {OCI_SCHEMA_VERSION}")
 
     declared = document.get("annotations", {}).get(ANNOTATION_PROTOCOL_VERSION)
     if declared is not None and declared != str(PROTOCOL_VERSION):
