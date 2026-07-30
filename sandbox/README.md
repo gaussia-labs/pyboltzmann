@@ -27,14 +27,19 @@ against the SDK.
 
 ### What it has already caught
 
-Four real defects, none of them visible from inside the SDK's own suite:
+Seven real defects. Not one was visible from inside the SDK's own suite, and the last
+three needed a hosted registry — `registry:2` is the reference implementation and
+therefore the easy case.
 
 | Where | What |
 |---|---|
 | `pyproject.toml` | The sdist's `include` patterns were unanchored, so hatchling matched `README.md` by basename at any depth and shipped `sandbox/README.md` inside the distribution |
 | `Brain` | Indices were rebuilt only by the write path. A brain reopened in a new process, or a version installed from a registry, held empty indices — and `plan_pull` was already reporting `rebuild_indices` with nothing acting on it |
 | `VectorIndex` | Vectors were rounded on the way out, so the publisher ranked with full precision and a consumer that loaded the index ranked with six decimals. The dumps matched, so it was invisible until a near-tie |
-| `oras-py` | It shells out to the Docker credential helper with no timeout, so on a Mac with Docker Desktop a push can hang forever with no output. Worked around in `brain.py` |
+| `oras-py` | It shells out to the Docker credential helper with no timeout. A helper that blocks — on macOS the first call can wait on a keychain dialog no headless process will ever see — takes the whole run with it, silently. Worked around in `brain.py` |
+| **`push`** | **The fast-forward check failed open.** It read any failure to resolve the remote as "nothing is published here", so an expired token or a 500 became permission to overwrite a version it could not see |
+| `resolve` | Discarded the HTTP status, so a JSON parse error was all a caller got when the request had in fact reached the wrong host entirely |
+| `push` | Requested exactly the token scope the registry's challenge advertised, which for Docker Hub's upload endpoint is `pull` |
 
 ## Before you start
 
@@ -63,6 +68,11 @@ $EDITOR .env
 To create the token: **Docker Hub → Account settings → Personal access tokens →
 Generate new token**, scope **Read & Write**. A read-only token cannot push. Docker
 Hub creates the repository on first push, so you do not need to make it beforehand.
+
+Write `BOLTZMANN_REGISTRY` as `docker.io/<namespace>/<repo>`, the way you would to
+`docker pull`. The sandbox substitutes `registry-1.docker.io` before talking to the
+registry, because `docker.io` is the index hostname and serves the website — the
+Docker CLI does the same substitution for you, quietly.
 
 **A prior `docker login` does not authenticate this sandbox.** The credentials have to
 be in the environment. That is deliberate: reading them from `~/.docker/config.json`
@@ -136,13 +146,25 @@ will.
 13. Prune                     5 blobs reclaimed, both brains still verify
 ```
 
-**Not verified: Docker Hub.** The question the sandbox exists to answer is whether a
-hosted registry accepts a manifest whose `artifactType` is
-`application/vnd.gaussia.boltzmann.brain.v1+json` with a config media type of
-`…snapshot.v1+json`. Docker documents OCI artifact support "by leveraging the config
-property on the image manifest", which is the mechanism this uses — but that is a
-promise, not a result. Run it with real credentials and record what happens here,
-including a failure: a rejection is the finding, not an embarrassment.
+**Verified: Docker Hub accepts a Boltzmann brain.** The same thirteen steps ran
+against `registry-1.docker.io/<namespace>/boltzmann-sandbox:v1` with a Personal
+Access Token, and the installed version carried the digest that was published.
+A manifest with `artifactType: application/vnd.gaussia.boltzmann.brain.v1+json`
+and a config media type of `application/vnd.gaussia.boltzmann.snapshot.v1+json`
+is accepted with `201 Created`, and the vector index layer comes back with its
+`ai.gaussia.boltzmann.embedding-model` annotation intact.
+
+Getting there took three fixes, all in the client and none in the protocol. They are
+in the table above; the two that only a hosted registry can expose are worth
+restating, because anyone building another Boltzmann client over `oras-py` will meet
+them:
+
+- **`docker.io` is not the registry.** It is the index hostname, and it serves the
+  Docker Hub *website*. A request to `https://docker.io/v2/…` returns 200 with HTML.
+- **The upload endpoint's challenge advertises `pull` alone.** A client that honours
+  `Www-Authenticate` literally gets a read-only token and is then refused by the same
+  registry, whose error names `pull` and `push`. The `docker` CLI never hits this
+  because it asks for `pull,push` when it intends to push.
 
 ## A known limitation
 
