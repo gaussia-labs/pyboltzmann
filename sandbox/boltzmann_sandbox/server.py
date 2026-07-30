@@ -200,6 +200,12 @@ def search(
         Field(description="Restrict to these kinds of memory: canonical, episodic, semantic, procedural, provenance."),
     ] = None,
     subject: Annotated[str | None, Field(description="Restrict to one domain.")] = None,
+    tags: Annotated[list[str] | None, Field(description="Restrict to blocks carrying all of these labels.")] = None,
+    since: Annotated[
+        str | None,
+        Field(description="Earliest time considered, as RFC 3339 UTC (2026-05-14T00:00:00Z). Episodic recency."),
+    ] = None,
+    until: Annotated[str | None, Field(description="Latest time considered, as RFC 3339 UTC.")] = None,
     limit: Annotated[int, Field(description="Maximum matches.", ge=1, le=100)] = 10,
     mode: Annotated[
         str,
@@ -223,15 +229,21 @@ def search(
         valid = ", ".join(item.value for item in RetrievalMode)
         raise ToolError(f"{mode!r} is not a retrieval mode. Valid: {valid}") from error
 
-    query = Query(
-        text=text,
-        filters=QueryFilters(
+    try:
+        filters = QueryFilters(
             memory_types=[_memory_type(name) for name in memory_types] if memory_types else None,
             subject=subject,
+            tags=tags,
+            since=since,
+            until=until,
             include_superseded=include_superseded,
-        ),
-        hints=QueryHints(mode=retrieval, limit=limit, expand_depth=expand_depth),
-    )
+        )
+    except ValueError as error:
+        # A malformed timestamp, almost always. The protocol fixes the format so that two clients agree on
+        # what "before May" means, and reporting it here is better than a filter that quietly matches nothing.
+        raise ToolError(f"invalid filter: {error}") from error
+
+    query = Query(text=text, filters=filters, hints=QueryHints(mode=retrieval, limit=limit, expand_depth=expand_depth))
     with session.lock:
         return wire.evidence(session.brain.search(query))
 
