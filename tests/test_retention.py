@@ -21,8 +21,9 @@ from boltzmann.blocks.provenance import (
     SupersessionRecord,
 )
 from boltzmann.brain import Brain
+from boltzmann.distribution.manifest import parse_manifest
 from boltzmann.exceptions import AppendOnlyViolationError, ProtocolError, RetentionPolicyError
-from boltzmann.identity.digest import BlockId
+from boltzmann.identity.digest import BlockId, OciDigest
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.module.ledger import Ledger
@@ -57,6 +58,14 @@ def commit(brain: Brain, source: BlockId, label: str, producer: Producer = MODEL
     report = brain.validate(fact(source, label, producer, **extra), task)
     assert report.is_clean, [issue.detail for r in report.results for issue in r.issues]
     return brain.commit(report).committed[0]
+
+
+def seeded(path: Path) -> Brain:
+    """A brain on disk with one source and one derived fact, so it has something to pack."""
+    brain = Brain.open(path, actor=ALEX, policy=PERMISSIVE_POLICY)
+    source = brain.register(b"%PDF-1.7 lecture 07", REQUEST).block_id
+    commit(brain, source, "Fourier")
+    return brain
 
 
 @pytest.fixture
@@ -690,3 +699,63 @@ class TestLedger:
 
     def test_a_brain_without_provenance_yields_an_empty_ledger(self) -> None:
         assert Ledger.of({}).dependents == {}
+
+
+class TestTagsAreRootsToo:
+    """A layout has two kinds of root, and only one of them was being honoured.
+
+    Snapshots name knowledge. They do not name the *artifact* built from it -- the manifest and the packed
+    layer per module -- and those are exactly what a tag names. Pruning without counting the tags left
+    index.json pointing at a manifest whose bytes had been reclaimed: a layout claiming a tag it could no
+    longer serve, which no OCI tool can read and which this SDK cannot reopen either.
+    """
+
+    def test_packing_then_pruning_keeps_the_manifest(self, tmp_path: Path) -> None:
+        brain = seeded(tmp_path / "brain")
+        manifest = brain.pack(tag="v1")
+
+        brain.prune(dry_run=False)
+
+        assert brain.store.is_resolvable(manifest.digest)
+        assert parse_manifest(brain.store.get_bytes(manifest.digest)) == manifest
+
+    def test_packing_then_pruning_keeps_every_layer(self, tmp_path: Path) -> None:
+        brain = seeded(tmp_path / "brain")
+        manifest = brain.pack(tag="v1")
+
+        brain.prune(dry_run=False)
+
+        for descriptor in [manifest.config, *manifest.layers]:
+            assert brain.store.is_resolvable(descriptor.digest), descriptor.media_type
+
+    def test_the_index_entry_still_resolves_after_pruning(self, tmp_path: Path) -> None:
+        """The symptom as a reader meets it: follow index.json and find the bytes."""
+        brain = seeded(tmp_path / "brain")
+        brain.pack(tag="v1")
+        brain.prune(dry_run=False)
+
+        entries = brain.store.index()["manifests"]
+        assert entries
+        for entry in entries:
+            digest = OciDigest.parse(entry["digest"])
+            assert brain.store.is_resolvable(digest)
+            assert len(brain.store.get_bytes(digest)) == entry["size"]
+
+    def test_a_replaced_tag_lets_its_old_manifest_go(self, tmp_path: Path) -> None:
+        """Only what the tags name *now* is kept, or a brain would accumulate every manifest it ever wrote."""
+        brain = seeded(tmp_path / "brain")
+        first = brain.pack(tag="v1")
+
+        commit(brain, brain.module(MemoryType.CANONICAL).block_ids[0], "Laplace")
+        second = brain.pack(tag="v1")
+        assert first.digest != second.digest
+
+        brain.prune(dry_run=False)
+
+        assert brain.store.is_resolvable(second.digest)
+        assert not brain.store.is_resolvable(first.digest)
+
+    def test_a_store_without_a_layout_index_prunes_as_before(self, brain: Brain) -> None:
+        source = brain.register(b"%PDF-1.7 lecture", REQUEST).block_id
+        commit(brain, source, "A")
+        assert brain.prune(dry_run=True).dry_run

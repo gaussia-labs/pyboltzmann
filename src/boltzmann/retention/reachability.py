@@ -78,6 +78,70 @@ def mark(snapshots: Iterable[Snapshot], store: BlockStore) -> set[str]:
     return keep
 
 
+def reachable_from_tags(store: BlockStore) -> set[str]:
+    """
+    Every digest the layout's own tags need.
+
+    A snapshot names knowledge. It does not name the *artifact* built from that knowledge: the manifest, and
+    the packed layer per module. Those are named by ``index.json``, which is the other root a layout has --
+    a tag is a reference, exactly as a retained snapshot is.
+
+    Without this, packing an artifact and then pruning leaves the layout claiming a tag whose manifest is
+    gone: an OCI tool reading ``index.json`` follows the descriptor and finds nothing. The bytes were
+    reclaimed because no snapshot mentioned them, which was true and beside the point.
+
+    Only what the tags name *now* is kept. Publishing the same tag twice replaces its entry, so the manifest
+    it used to name becomes collectable, which is what should happen.
+
+    Args:
+        store (BlockStore): The store to read. One with no layout index contributes nothing.
+
+    Returns:
+        set[str]: The manifests the tags name, with their configs and layers, as hex.
+    """
+    from boltzmann.distribution.manifest import parse_manifest
+
+    keep: set[str] = set()
+    for entry in _tagged_manifests(store):
+        digest = _parse_oci(entry.get("digest"))
+        if digest is None or not store.is_resolvable(digest):
+            continue
+        keep.add(digest.hex)
+        try:
+            manifest = parse_manifest(store.get_bytes(digest))
+        except Exception:
+            # A manifest this client cannot read is still a manifest a tag names, so its bytes stay. What
+            # it points at cannot be followed, and guessing would be worse than keeping one blob too few.
+            continue
+        keep.add(manifest.config.digest.hex)
+        keep.update(layer.digest.hex for layer in manifest.layers)
+    return keep
+
+
+def _tagged_manifests(store: BlockStore) -> list[dict[str, object]]:
+    """The layout index's manifest descriptors, or nothing for a store that has no index."""
+    reader = getattr(store, "index", None)
+    if reader is None:
+        return []
+    try:
+        entries = reader().get("manifests", [])
+    except Exception:
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _parse_oci(value: object) -> OciDigest | None:
+    from boltzmann.exceptions import IdentityError
+    from boltzmann.identity.digest import OciDigest as _OciDigest
+
+    if not isinstance(value, str):
+        return None
+    try:
+        return _OciDigest.parse(value)
+    except IdentityError:
+        return None
+
+
 def sweep(keep: set[str], store: BlockStore) -> list[OciDigest]:
     """
     What the store holds that nothing retained needs.

@@ -81,7 +81,7 @@ from boltzmann.module.snapshot import ModuleRef, Snapshot
 from boltzmann.query.scan import scan
 from boltzmann.retention.cascade import plan_many
 from boltzmann.retention.policy import RetentionPolicy
-from boltzmann.retention.reachability import mark, sweep
+from boltzmann.retention.reachability import mark, reachable_from_tags, sweep
 from boltzmann.retention.requests import (
     CascadePlan,
     DropRequest,
@@ -1232,7 +1232,10 @@ class Brain:
             PruneReport: What was reachable and what was reclaimed.
         """
         retained = self.history()
-        keep = mark(retained, self.store)
+        # A layout has two kinds of root: the snapshots it retains, and the tags it publishes. The second
+        # names the manifest and the packed layers, which no snapshot mentions -- so without it, packing an
+        # artifact and then pruning leaves index.json pointing at bytes that are gone.
+        keep = mark(retained, self.store) | reachable_from_tags(self.store)
         reclaimable = sweep(keep, self.store)
 
         if not dry_run:
