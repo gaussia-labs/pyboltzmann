@@ -135,3 +135,13 @@ class QueryError(ProtocolError):
 
 class DistributionError(ProtocolError):
     """Exception raised when publishing to or installing from a registry fails."""
+
+
+class ReferenceNotFoundError(DistributionError):
+    """Exception raised when a registry reports that a reference does not exist.
+
+    Distinct from its parent because "there is nothing published here" and "I could not find out" call for
+    opposite responses. Before a first push the absence is expected and a push proceeds; a refused
+    credential or a failing registry looks the same to a caller that cannot tell them apart, and a
+    fast-forward check that treats every failure as absence stops protecting anything.
+    """

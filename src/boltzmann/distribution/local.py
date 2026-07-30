@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from boltzmann.distribution.manifest import BrainManifest, parse_manifest
 from boltzmann.distribution.media_types import ARTIFACT_TYPE, MANIFEST_MEDIA_TYPE, REF_NAME_ANNOTATION
-from boltzmann.exceptions import DistributionError
+from boltzmann.exceptions import DistributionError, ReferenceNotFoundError
 from boltzmann.identity.digest import OciDigest
 from boltzmann.store.oci_layout import OciLayoutStore
 
@@ -72,9 +72,13 @@ class LocalLayoutRegistry:
             BrainManifest: The manifest.
 
         Raises:
-            DistributionError: If the reference or the tag is not published.
+            ReferenceNotFoundError: If the repository or the tag is not published. The same distinction the
+                network transport draws, so that a caller behaves identically against either.
         """
-        store = self.layout(reference)
+        try:
+            store = self.layout(reference)
+        except DistributionError as error:
+            raise ReferenceNotFoundError(f"{reference}:{tag} is not published") from error
         for entry in store.index().get("manifests", []):
             if entry.get("annotations", {}).get(REF_NAME_ANNOTATION) == tag:
                 return parse_manifest(store.get_bytes(OciDigest.parse(entry["digest"])))
@@ -82,7 +86,7 @@ class LocalLayoutRegistry:
             entry.get("annotations", {}).get(REF_NAME_ANNOTATION) for entry in store.index().get("manifests", [])
         ]
         tags = ", ".join(name for name in published if name) or "none"
-        raise DistributionError(f"{reference} has no tag {tag!r}; published tags: {tags}")
+        raise ReferenceNotFoundError(f"{reference} has no tag {tag!r}; published tags: {tags}")
 
     async def pull_blob(self, reference: str, digest: OciDigest, store: BlockStore) -> None:
         """

@@ -61,6 +61,7 @@ from boltzmann.exceptions import (
     DistributionError,
     ProtocolError,
     QueryError,
+    ReferenceNotFoundError,
     SnapshotError,
 )
 from boltzmann.identity.digest import BlockId, Digest, MerkleRoot, OciDigest
@@ -1749,8 +1750,11 @@ class Brain:
         """Refuse a push that would drop a remote snapshot this brain does not contain."""
         try:
             manifest = await client.resolve(reference, tag)
-        except DistributionError:
-            return  # The tag does not exist yet, so there is nothing to overwrite.
+        except ReferenceNotFoundError:
+            return  # Nothing is published here, so there is nothing to overwrite.
+        # Any other failure propagates. A guard that cannot read the remote has not checked anything, and
+        # one that treats "I could not tell" as "nothing is there" would let an expired credential or a
+        # failing registry turn into a push over somebody else's version.
 
         # A projection's config is not a version in anyone's history, so the manifest records the full
         # snapshot it came from and that is what the ancestry has to contain.

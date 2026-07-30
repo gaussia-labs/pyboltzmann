@@ -15,7 +15,7 @@ from boltzmann.brain import Brain, Origin
 from boltzmann.distribution.layers import pack_module, required_blobs, unpack_layer
 from boltzmann.distribution.local import LocalLayoutRegistry
 from boltzmann.distribution.media_types import ARTIFACT_TYPE, REF_NAME_ANNOTATION, memory_type_of
-from boltzmann.exceptions import DistributionError
+from boltzmann.exceptions import DistributionError, ReferenceNotFoundError
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.store.memory import MemoryBlockStore
@@ -191,8 +191,9 @@ class TestPushAndPull:
             await brain.push(registry, REFERENCE, "v1")
 
     async def test_an_unpublished_tag_is_refused(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
+        """Narrowly, so that a caller can tell absence from a transport it could not read at all."""
         brain = Brain.open(tmp_path / "b", actor=SAM)
-        with pytest.raises(DistributionError, match="no artifact published"):
+        with pytest.raises(ReferenceNotFoundError, match="not published"):
             await brain.pull(registry, REFERENCE, "v1")
 
     async def test_a_wrong_tag_lists_what_exists(

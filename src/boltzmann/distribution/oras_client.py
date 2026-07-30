@@ -25,13 +25,23 @@ from boltzmann.distribution.media_types import (
     MANIFEST_MEDIA_TYPE,
     REF_NAME_ANNOTATION,
 )
-from boltzmann.exceptions import DistributionError
+from boltzmann.exceptions import DistributionError, ReferenceNotFoundError
 from boltzmann.identity.digest import OciDigest
 from boltzmann.store.oci_layout import OciLayoutStore
 
 if TYPE_CHECKING:
     from boltzmann.distribution.manifest import Descriptor
     from boltzmann.store.base import BlockStore
+
+
+HTTP_NOT_FOUND = 404
+"""What a registry answers for a tag it does not have."""
+
+OK_STATUSES = (200, 201, 202)
+"""What counts as success across the registry API."""
+
+WRITE_AUTH_TIMEOUT = 30
+"""Seconds to wait for the challenge that precedes a write."""
 
 
 def _registry(insecure: bool) -> Any:
@@ -92,15 +102,97 @@ class OrasRegistryClient:
             BrainManifest: The manifest.
 
         Raises:
-            DistributionError: If the tag cannot be resolved or is not a Boltzmann brain.
+            ReferenceNotFoundError: If the registry reports no manifest under this tag.
+            DistributionError: If the tag cannot be resolved for any other reason, or what it resolves to
+                is not a Boltzmann brain.
         """
         import json
 
+        # ORAS's own ``get_manifest`` reports every failure the same way, and the status code is what says
+        # whether the tag is absent or the registry refused us. A caller has to be able to tell: absence
+        # before a first push is expected, and a refusal that looks like absence disables the
+        # fast-forward check that exists to stop a push from clobbering someone else's version.
+        response = self._request_manifest(reference, tag)
+        if response.status_code == HTTP_NOT_FOUND:
+            raise ReferenceNotFoundError(f"{reference}:{tag} is not published")
+        if response.status_code not in OK_STATUSES:
+            raise DistributionError(
+                f"cannot resolve {reference}:{tag}: {response.status_code} {response.reason} -- {response.text[:200]}"
+            )
+
         try:
-            document = self.registry.get_manifest(f"{reference}:{tag}")
-        except Exception as error:
-            raise DistributionError(f"cannot resolve {reference}:{tag}: {error}") from error
+            document = response.json()
+        except ValueError as error:
+            raise DistributionError(
+                f"cannot resolve {reference}:{tag}: the registry answered {response.status_code} with "
+                f"{response.headers.get('content-type', 'no content type')} rather than a manifest. "
+                f"For Docker Hub the endpoint is registry-1.docker.io; docker.io serves the website"
+            ) from error
+
         return parse_manifest(json.dumps(self._from_oci(document)).encode())
+
+    def _authorize_write(self, reference: str) -> None:
+        """Obtain a token that can actually write, rather than trusting the registry's challenge.
+
+        A bearer token is scoped to a set of actions, and ORAS asks for exactly the scope the
+        ``Www-Authenticate`` challenge names. Against Docker Hub that is not enough: the challenge its
+        upload endpoint returns advertises ``pull`` alone, so ORAS receives a read-only token, retries with
+        it, and is refused by the same registry -- whose error then names ``pull`` **and** ``push`` as the
+        actions required. The credentials were never the problem. The ``docker`` CLI does not hit this
+        because it asks for ``pull,push`` when it intends to push, whatever the challenge says.
+
+        So this asks for the write scope up front. The challenge is still read from the registry, for its
+        realm and service, and only the scope is replaced -- inventing the realm would be worse than
+        trusting it.
+
+        A registry that needs no authentication answers the probe without a challenge, and nothing happens.
+        If the token request fails, the token is left alone and the ordinary challenge-response path still
+        runs, so this can only improve on the previous behaviour.
+
+        Args:
+            reference (str): Repository reference, ``<host>/<namespace>/<repo>``.
+        """
+        auth = getattr(self.registry, "auth", None)
+        if auth is None or not hasattr(auth, "request_token"):
+            return
+
+        import oras.auth.utils as auth_utils
+
+        host, _, repository = reference.partition("/")
+        if not repository:
+            return
+
+        try:
+            probe = self.registry.session.get(f"{self.registry.prefix}://{host}/v2/", timeout=WRITE_AUTH_TIMEOUT)
+            challenge = probe.headers.get("Www-Authenticate")
+            if not challenge:
+                return  # No authentication in front of this registry.
+
+            header = auth_utils.parse_auth_header(challenge)
+            header.scope = f"repository:{repository}:pull,push"
+            token = auth.request_token(header)
+        except Exception:
+            # A failed optimisation must not fail the push: the ordinary path still runs.
+            return
+
+        if token:
+            if hasattr(auth, "set_token_auth"):
+                auth.set_token_auth(token)
+            else:
+                auth.token = token
+
+    def _request_manifest(self, reference: str, tag: str) -> Any:
+        """The raw manifest response, so that the status code survives."""
+        import oras.defaults
+
+        try:
+            container = self.registry.get_container(f"{reference}:{tag}")
+            url = f"{self.registry.prefix}://{container.manifest_url()}"
+            accept = ", ".join(oras.defaults.default_manifest_accepted_media_types)
+            return self.registry.do_request(url, "GET", headers={"Accept": accept})
+        except Exception as error:
+            # A transport failure rather than a rejection: no status code exists to classify.
+            raise DistributionError(f"cannot reach {reference}:{tag}: {error}") from error
 
     async def pull_blob(self, reference: str, digest: OciDigest, store: BlockStore) -> None:
         """
@@ -154,6 +246,9 @@ class OrasRegistryClient:
             if self.registry.blob_exists(layer, container):
                 continue
             with self._as_file(descriptor, store) as path:
+                # After the existence check, because that is a read and would leave a read-scoped token
+                # cached for the write to fail with.
+                self._authorize_write(reference)
                 response = self.registry.upload_blob(str(path), container, layer)
             if response.status_code not in (200, 201, 202):
                 raise DistributionError(
@@ -161,6 +256,7 @@ class OrasRegistryClient:
                 )
 
         document = self._to_oci(manifest, tag)
+        self._authorize_write(reference)
         response = self.registry.upload_manifest(document, container)
         if response.status_code not in (200, 201, 202):
             raise DistributionError(f"publishing {reference}:{tag} failed with {response.status_code}")
