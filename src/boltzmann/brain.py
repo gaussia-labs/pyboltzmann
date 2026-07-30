@@ -1034,8 +1034,16 @@ class Brain:
 
             for memory_type in self.indices:
                 layer = manifest.vector_index_for(memory_type)
-                if layer is not None and self.store.is_resolvable(layer.digest):
+                if layer is None or not self.store.is_resolvable(layer.digest):
+                    continue
+                try:
                     self._load_index(memory_type, layer)
+                except DistributionError:
+                    # Most likely an index built by a model this client no longer uses. Refusing it is
+                    # right; refusing to *open the brain* over it is not. Opening is not a request to
+                    # install anything, so the layer is skipped and the module simply has no vector index
+                    # -- which ``travelling_indices`` reports, and a repack replaces.
+                    continue
             return
 
     def _embedding_model(self, memory_type: MemoryType) -> str | None:

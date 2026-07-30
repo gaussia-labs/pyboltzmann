@@ -531,3 +531,41 @@ class TestSurvivingAReopen:
         brain = Brain(MemoryBlockStore(), actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         seed(brain)
         assert brain.verify()
+
+
+class TestOpeningIsNotInstalling:
+    """A layer this client will not load must not make the brain unopenable.
+
+    Refusing an index built by another embedding model is right on a pull -- the caller asked for that
+    artifact. On open, the layout merely happens to hold one, and raising there strands the brain: every
+    read, every write and every repack goes through opening it.
+    """
+
+    def test_an_index_from_another_model_does_not_block_opening(self, tmp_path: Path) -> None:
+        brain = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        seed(brain)
+        brain.pack(tag="v1")
+
+        class Newer(FakeVectorIndex):
+            def __init__(self) -> None:
+                super().__init__(model="qwen3-embedding@2.0")
+
+        reopened = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [Newer()]})
+
+        assert reopened.verify()
+        assert MemoryType.SEMANTIC not in reopened.travelling_indices
+        assert reopened.pack(tag="v2").vector_index_for(MemoryType.SEMANTIC) is None
+
+    async def test_a_pull_still_refuses_it(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
+        """Installing an artifact is a request, and mixing representation spaces is not what was asked."""
+        source = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        seed(source)
+        await source.push(registry, REFERENCE, "v1")
+
+        target = Brain.open(
+            tmp_path / "b",
+            actor=ALEX,
+            indices={MemoryType.SEMANTIC: [FakeVectorIndex(model="qwen3-embedding@2.0")]},
+        )
+        with pytest.raises(DistributionError, match="representation spaces"):
+            await target.pull(registry, REFERENCE, "v1")
