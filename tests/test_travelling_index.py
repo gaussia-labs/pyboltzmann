@@ -28,6 +28,7 @@ from boltzmann.indices.base import AbstractIndex, Index, IndexKind, TravellingIn
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.retention.policy import RetentionPolicy
+from boltzmann.store.memory import MemoryBlockStore
 
 ALEX = Actor(id="alex", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
@@ -426,3 +427,107 @@ class TestRebuildingWhatArrivedAnotherWay:
         seed(brain)
         brain.rebuild_indices()
         brain.rebuild_indices([MemoryType.EPISODIC])
+
+
+class TestPublishingOnlyWhatItCanVouchFor:
+    """A travelling index cannot be regenerated, so an index this brain never populated holds nothing.
+
+    Dumping it anyway publishes a layer that claims a vector index, carries none, and still names the model
+    that produced it. The consumer loads it without error, holds nothing, and has no way to tell -- which is
+    worse than no layer at all, because an absent layer is something ``plan_pull`` reports.
+    """
+
+    def test_an_empty_travelling_index_is_not_published(self, tmp_path: Path) -> None:
+        seed(Brain.open(tmp_path / "a", actor=ALEX))
+
+        reopened = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        manifest = reopened.pack(tag="v1")
+
+        assert manifest.vector_index_for(MemoryType.SEMANTIC) is None
+
+    def test_an_index_built_by_a_write_is_published(self, tmp_path: Path) -> None:
+        brain = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        seed(brain)
+
+        layer = brain.pack(tag="v1").vector_index_for(MemoryType.SEMANTIC)
+        assert layer is not None
+        assert layer.annotations[ANNOTATION_EMBEDDING_MODEL] == "qwen3-embedding@1.0"
+
+    async def test_an_index_loaded_from_a_layer_can_be_republished(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        """A consumer that installed a brain is as entitled to publish it as the brain that built it."""
+        source = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        seed(source)
+        await source.push(registry, REFERENCE, "v1")
+
+        target = Brain.open(tmp_path / "b", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        await target.pull(registry, REFERENCE, "v1")
+
+        republished = target.pack(tag="v2").vector_index_for(MemoryType.SEMANTIC)
+        original = source.pack(tag="v1").vector_index_for(MemoryType.SEMANTIC)
+        assert republished is not None
+        assert original is not None
+        assert republished.digest == original.digest
+
+
+class TestSurvivingAReopen:
+    """The index the layout already holds is the only one a reopened brain can get back."""
+
+    def test_reopening_restores_a_packed_travelling_index(self, tmp_path: Path) -> None:
+        brain = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        seed(brain)
+        brain.pack(tag="v1")
+        published = brain.open_index(MemoryType.SEMANTIC, IndexKind.VECTOR)
+
+        landed = FakeVectorIndex()
+        reopened = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [landed]})
+
+        assert landed.vectors == published.vectors
+        assert reopened.pack(tag="v1").vector_index_for(MemoryType.SEMANTIC) is not None
+
+    async def test_reopening_restores_an_installed_travelling_index(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        """The case the sandbox hit: ingest in one process, push from another, publish an empty index."""
+        source = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        seed(source)
+        await source.push(registry, REFERENCE, "v1")
+
+        target = Brain.open(tmp_path / "b", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        await target.pull(registry, REFERENCE, "v1")
+
+        landed = FakeVectorIndex()
+        reopened = Brain.open(tmp_path / "b", actor=ALEX, indices={MemoryType.SEMANTIC: [landed]})
+
+        assert landed.loads == 1
+        assert landed.vectors == source.open_index(MemoryType.SEMANTIC, IndexKind.VECTOR).vectors
+        assert reopened.verify()
+
+    def test_a_manifest_for_another_version_is_not_used(self, tmp_path: Path) -> None:
+        """Its index describes blocks this version may not have, and the digest of the config is what says
+        which version a manifest belongs to."""
+        brain = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        seed(brain)
+        brain.pack(tag="v1")
+        seed(brain, label="Laplace")  # moves the snapshot on, without packing again
+
+        landed = FakeVectorIndex()
+        Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [landed]})
+        assert landed.vectors == {}
+
+    def test_a_reclaimed_index_layer_is_skipped(self, tmp_path: Path) -> None:
+        brain = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        seed(brain)
+        layer = brain.pack(tag="v1").vector_index_for(MemoryType.SEMANTIC)
+        assert layer is not None
+        brain.store.delete(layer.digest)
+
+        landed = FakeVectorIndex()
+        Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [landed]})
+        assert landed.vectors == {}
+
+    def test_a_store_with_no_layout_index_opens_normally(self) -> None:
+        brain = Brain(MemoryBlockStore(), actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        seed(brain)
+        assert brain.verify()

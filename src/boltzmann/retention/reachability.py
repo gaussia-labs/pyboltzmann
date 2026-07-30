@@ -99,47 +99,20 @@ def reachable_from_tags(store: BlockStore) -> set[str]:
     Returns:
         set[str]: The manifests the tags name, with their configs and layers, as hex.
     """
-    from boltzmann.distribution.manifest import parse_manifest
+    from boltzmann.distribution.manifest import published_artifacts
 
     keep: set[str] = set()
-    for entry in _tagged_manifests(store):
-        digest = _parse_oci(entry.get("digest"))
-        if digest is None or not store.is_resolvable(digest):
+    for artifact in published_artifacts(store):
+        if not store.is_resolvable(artifact.digest):
             continue
-        keep.add(digest.hex)
-        try:
-            manifest = parse_manifest(store.get_bytes(digest))
-        except Exception:
-            # A manifest this client cannot read is still a manifest a tag names, so its bytes stay. What
-            # it points at cannot be followed, and guessing would be worse than keeping one blob too few.
+        keep.add(artifact.digest.hex)
+        if artifact.manifest is None:
+            # A manifest this client cannot read is still a manifest a tag names, so its bytes stay. What it
+            # points at cannot be followed, and guessing would be worse than keeping one blob too few.
             continue
-        keep.add(manifest.config.digest.hex)
-        keep.update(layer.digest.hex for layer in manifest.layers)
+        keep.add(artifact.manifest.config.digest.hex)
+        keep.update(layer.digest.hex for layer in artifact.manifest.layers)
     return keep
-
-
-def _tagged_manifests(store: BlockStore) -> list[dict[str, object]]:
-    """The layout index's manifest descriptors, or nothing for a store that has no index."""
-    reader = getattr(store, "index", None)
-    if reader is None:
-        return []
-    try:
-        entries = reader().get("manifests", [])
-    except Exception:
-        return []
-    return [entry for entry in entries if isinstance(entry, dict)]
-
-
-def _parse_oci(value: object) -> OciDigest | None:
-    from boltzmann.exceptions import IdentityError
-    from boltzmann.identity.digest import OciDigest as _OciDigest
-
-    if not isinstance(value, str):
-        return None
-    try:
-        return _OciDigest.parse(value)
-    except IdentityError:
-        return None
 
 
 def sweep(keep: set[str], store: BlockStore) -> list[OciDigest]:

@@ -28,6 +28,7 @@ for the interface an implementation provides.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
@@ -44,15 +45,17 @@ from boltzmann.distribution.media_types import (
     ARTIFACT_TYPE,
     CONFIG_MEDIA_TYPE,
     MANIFEST_MEDIA_TYPE,
+    REF_NAME_ANNOTATION,
     VECTOR_INDEX_MEDIA_TYPE,
     module_media_type,
 )
-from boltzmann.exceptions import DistributionError
+from boltzmann.exceptions import BlockNotFoundError, DistributionError, IdentityError
 from boltzmann.identity.digest import MerkleRoot, OciDigest
 from boltzmann.identity.serialization import canonicalize
 
 if TYPE_CHECKING:
     from boltzmann.module.snapshot import ModuleRef, Snapshot
+    from boltzmann.store.base import BlockStore
 
 
 OCI_SCHEMA_VERSION = 2
@@ -280,6 +283,73 @@ def build_manifest(
             f"them, so a consumer could not fetch what the manifest claims"
         )
     return manifest
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedArtifact:
+    """
+    One entry of a layout's ``index.json``, resolved as far as it can be.
+
+    Attributes:
+        digest (OciDigest): The manifest's own digest, as the index names it.
+        tag (str | None): The tag it is published under, if it carries one.
+        manifest (BrainManifest | None): The parsed manifest, or ``None`` when the bytes are absent or this
+            client cannot read them. Absent is not the same as unreadable, and neither is the same as
+            missing from the index, so a caller decides what to do rather than being told nothing.
+    """
+
+    digest: OciDigest
+    tag: str | None
+    manifest: BrainManifest | None
+
+
+def published_artifacts(store: BlockStore) -> list[PublishedArtifact]:
+    """
+    Every artifact the layout's own index names.
+
+    ``index.json`` is the second root a layout has -- the first being the snapshots it retains -- and it is
+    the only place that records what a *packed* brain consists of: the manifest, and the layer per module.
+    Two callers need that. Pruning has to keep what a tag names, and a reopened brain has to find the
+    travelling index it cannot rebuild.
+
+    Args:
+        store (BlockStore): The store to read. One with no layout index yields nothing.
+
+    Returns:
+        list[PublishedArtifact]: What the index names, in the order it names them.
+    """
+    reader = getattr(store, "index", None)
+    if reader is None:
+        return []
+    try:
+        entries = reader().get("manifests", [])
+    except Exception:
+        # A layout whose index cannot be read has no tags as far as anything here is concerned.
+        return []
+
+    artifacts: list[PublishedArtifact] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("digest"), str):
+            continue
+        try:
+            digest = OciDigest.parse(entry["digest"])
+        except IdentityError:
+            continue
+
+        manifest: BrainManifest | None = None
+        if store.is_resolvable(digest):
+            try:
+                manifest = parse_manifest(store.get_bytes(digest))
+            except (DistributionError, BlockNotFoundError):
+                manifest = None
+
+        tag = (
+            entry.get("annotations", {}).get(REF_NAME_ANNOTATION)
+            if isinstance(entry.get("annotations"), dict)
+            else None
+        )
+        artifacts.append(PublishedArtifact(digest=digest, tag=tag if isinstance(tag, str) else None, manifest=manifest))
+    return artifacts
 
 
 def parse_manifest(data: bytes) -> BrainManifest:

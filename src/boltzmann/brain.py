@@ -43,7 +43,7 @@ from boltzmann.blocks.provenance import (
 )
 from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.distribution.layers import pack_module, unpack_layer
-from boltzmann.distribution.manifest import BrainManifest, Descriptor, build_manifest
+from boltzmann.distribution.manifest import BrainManifest, Descriptor, build_manifest, published_artifacts
 from boltzmann.distribution.media_types import (
     ANNOTATION_EMBEDDING_MODEL,
     ANNOTATION_INDEX_KIND,
@@ -208,6 +208,13 @@ class Brain:
         self._state = self._read_state()
         self._snapshot = snapshot if snapshot is not None else self._load_snapshot()
         self._modules: dict[MemoryType, Module] = {}
+        self._vouched: set[MemoryType] = set()
+        """Memory types whose travelling index this brain built or loaded, and may therefore publish.
+
+        A travelling index cannot be regenerated -- that is what ``rebuildable = False`` means -- so an
+        index this brain never populated holds nothing, and dumping it would publish a layer that claims a
+        vector index and carries none.
+        """
 
         # A structural index is rebuilt on every write, so a brain that committed in this process has one
         # that matches. A brain that was merely opened would not, and an empty index does not announce
@@ -215,6 +222,7 @@ class Brain:
         # here costs what one commit costs, and makes "the index reflects the installed version" true on
         # every path rather than only on the write path.
         self.rebuild_indices()
+        self._restore_travelling()
 
     @classmethod
     def open(
@@ -936,6 +944,25 @@ class Brain:
             roots=roots,
         )
 
+    @property
+    def travelling_indices(self) -> frozenset[MemoryType]:
+        """
+        Which modules would carry their vector index if this brain were published.
+
+        A travelling index cannot be regenerated, so a brain holds one only if it built it in this process
+        or restored it from a layer the layout already had. Publishing a module whose index is absent is a
+        legitimate outcome, but it is one a caller should be able to see coming rather than discover from a
+        consumer whose semantic search quietly got worse.
+
+        The index is persisted when the artifact is materialized -- by :meth:`pack` or :meth:`push` -- so a
+        process that ingests and exits without doing either loses it, and the next process cannot get it
+        back. Pack before you exit, or push from the process that committed.
+
+        Returns:
+            frozenset[MemoryType]: Modules whose travelling index is present and publishable.
+        """
+        return frozenset(self._vouched)
+
     def rebuild_indices(self, memory_types: Iterable[MemoryType] | None = None) -> None:
         """
         Regenerate the structural indices from the installed composition.
@@ -985,6 +1012,31 @@ class Brain:
         decoded = [module.get(block_id) for block_id in blocks]
         for index in indices:
             index.build(decoded)
+            if not index.rebuildable:
+                # Built from this composition by this client's own engine, so it describes the version and
+                # can be published.
+                self._vouched.add(module.memory_type)
+
+    def _restore_travelling(self) -> None:
+        """Load the travelling indices this brain's own layout already holds.
+
+        A structural index is regenerated from the blocks. This one cannot be, so the only way a reopened
+        brain gets it back is to find the layer it was published in -- and the layout records that:
+        ``index.json`` names the manifests, and a manifest names its index layers.
+
+        Without this, opening a brain and pushing it republishes an empty index annotated with a model tag.
+        The consumer loads it, holds nothing, and has no way to tell.
+        """
+        for artifact in published_artifacts(self.store):
+            manifest = artifact.manifest
+            if manifest is None or manifest.config.digest != self._snapshot.digest:
+                continue  # Unreadable, or a manifest for some other version of this brain.
+
+            for memory_type in self.indices:
+                layer = manifest.vector_index_for(memory_type)
+                if layer is not None and self.store.is_resolvable(layer.digest):
+                    self._load_index(memory_type, layer)
+            return
 
     def _embedding_model(self, memory_type: MemoryType) -> str | None:
         for index in self.indices.get(memory_type, []):
@@ -1438,9 +1490,16 @@ class Brain:
         )
 
     def _pack_index(self, memory_type: MemoryType, reference: ModuleRef) -> Descriptor | None:
-        """A layer for the one index kind a consumer cannot rebuild, or ``None`` if there is none."""
+        """A layer for the one index kind a consumer cannot rebuild, or ``None`` if there is none.
+
+        ``None`` also when this brain cannot vouch for the index. An index that was never built here and
+        never loaded from a layer holds nothing, and dumping it would publish a layer that claims a vector
+        index, carries none, and still says which model produced it -- a consumer loads it, holds nothing,
+        and has no way to tell. Omitting the layer is the honest answer: ``plan_pull`` then reports no
+        travelling index, which is true.
+        """
         travelling = [index for index in self.indices.get(memory_type, []) if not index.rebuildable]
-        if not travelling:
+        if not travelling or memory_type not in self._vouched:
             return None
 
         index = travelling[0]
@@ -1489,6 +1548,8 @@ class Brain:
             )
         if isinstance(index, TravellingIndex):
             index.load(self.store.get_bytes(layer.digest))
+            # Loaded from a layer, so it describes a real version and may be republished.
+            self._vouched.add(memory_type)
 
     def _write_index(self, digest: OciDigest, size: int, tag: str | None) -> None:
         """Point the layout's index at the manifest, replacing any entry for the same tag."""
@@ -1653,6 +1714,12 @@ class Brain:
             partial=not complete,
         )
         advanced = self._advance(installed, origin=origin)
+
+        # Record the artifact in the layout, the way ``pack`` does. Without it, everything the manifest
+        # knows is lost when this process ends -- and the one thing only the manifest knows is where the
+        # travelling index lives, which is exactly the thing no client can rebuild.
+        document = manifest.to_bytes()
+        self._write_index(self.store.put_bytes(document), len(document), tag)
 
         # What ``plan_pull`` reported under ``rebuild_indices``, actually done. The travelling index was
         # loaded above because no client can regenerate it; the structural ones are regenerated here,
