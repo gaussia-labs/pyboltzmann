@@ -25,6 +25,7 @@ dependencies = [
 boltzmann-mcp = "boltzmann_sandbox.server:main"
 boltzmann-doctor = "boltzmann_sandbox.doctor:main"
 boltzmann-demo = "boltzmann_sandbox.demo:main"
+boltzmann-inspect = "boltzmann_sandbox.inspect:main"
 
 [tool.uv.sources]
 # The SDK is not published yet, so it comes from the parent directory. uv builds it

@@ -87,7 +87,8 @@ None of these are SDK bugs, and all three show up on the first real run:
 - Pulls are rate-limited per account.
 - The artifact shows in the Hub UI as an unrecognized type, because it is not a
   container image. `docker pull` on it will fail, correctly — use `pull_brain`, or
-  `oras pull`.
+  `oras pull`. Docker Hub does classify it as an ARTIFACT; what it cannot do is
+  render a type it has never heard of, which is what `boltzmann-inspect` is for.
 
 ## Running it
 
@@ -97,6 +98,7 @@ uv sync                      # builds and installs the SDK from ../ , plus fastm
 uv run boltzmann-doctor      # before anything else: what is missing, and does the registry answer
 uv run boltzmann-mcp         # the MCP server, over stdio
 uv run boltzmann-demo        # the whole lifecycle, no MCP, with assertions
+uv run boltzmann-inspect v1  # what a published brain contains, without downloading it
 uv run pytest                # the sandbox's own tests
 ```
 
