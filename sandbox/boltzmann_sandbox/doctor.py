@@ -127,26 +127,43 @@ def check_settings() -> tuple[Settings | None, list[Check]]:
     return settings, checks
 
 
-def check_brain(settings: Settings) -> Check:
-    """Whether the local brain opens, and what version it is on."""
+def check_brain(settings: Settings) -> Iterator[Check]:
+    """Whether the local brain opens, what version it is on, and what a push would carry."""
     try:
         from boltzmann_sandbox.brain import open_brain
 
         brain = open_brain(settings)
     except Exception as error:
-        return Check(FAIL, "local brain", f"{settings.brain_path} did not open: {error}")
+        yield Check(FAIL, "local brain", f"{settings.brain_path} did not open: {error}")
+        return
 
     snapshot = brain.snapshot()
     if not snapshot.modules:
-        return Check(OK, "local brain", f"{settings.brain_path} (empty; ready for a first commit)")
+        yield Check(OK, "local brain", f"{settings.brain_path} (empty; ready for a first commit)")
+        return
 
     blocks = sum(reference.block_count for reference in snapshot.modules.values())
-    return Check(
+    yield Check(
         OK,
         "local brain",
         f"{snapshot.digest.short} -- {len(snapshot.modules)} modules, {blocks} blocks, "
         f"{len(brain.ancestry())} versions",
     )
+
+    # An index that cannot be rebuilt is absent unless this process built it or the layout already held it,
+    # and a push would then publish the module without it. Honest, and easy to miss, so it is said here.
+    ready = brain.travelling_indices
+    expected = {memory_type for memory_type in brain.indices if memory_type in snapshot.modules}
+    missing = sorted(kind.value for kind in expected - ready)
+    if missing:
+        yield Check(
+            WARN,
+            "travelling index",
+            f"absent for {', '.join(missing)} -- a push from this process would publish those modules "
+            f"without their vector index. Pack from the process that committed, or pull first",
+        )
+    elif ready:
+        yield Check(OK, "travelling index", f"present for {', '.join(sorted(kind.value for kind in ready))}")
 
 
 async def check_registry(settings: Settings) -> Iterator[Check]:
@@ -218,7 +235,7 @@ async def diagnose() -> list[Check]:
     if settings is None or any(check.status == FAIL for check in configured):
         return checks
 
-    checks.append(check_brain(settings))
+    checks.extend(check_brain(settings))
     checks.extend(await check_registry(settings))
     return checks
 
