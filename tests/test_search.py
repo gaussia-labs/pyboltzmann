@@ -22,7 +22,7 @@ from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.ingest.validation import ValidationStatus
 from boltzmann.query.evidence import EvidenceBundle
 from boltzmann.query.request import Query, RetrievalMode
-from boltzmann.query.scan import ProvenanceView, searchable_text
+from boltzmann.query.scan import STOPWORDS, ProvenanceView, content_terms, searchable_text
 from boltzmann.store.memory import MemoryBlockStore
 
 ALEX = Actor(id="alex", kind=ActorKind.HUMAN)
@@ -164,6 +164,40 @@ class TestTermMatching:
         block = brain.module(MemoryType.CANONICAL).get(source)
         assert searchable_text(block) == ["application/pdf"]
         assert "Fourier series" not in labels(brain.search(Query(text="application/pdf")))
+
+
+class TestFunctionWords:
+    """A filter that admits nearly everything is not filtering.
+
+    The scan counted every whitespace-separated word as a term, so a query containing ``an`` matched any
+    block whose text contained ``an`` anywhere -- fourteen of fifteen, in a brain that knew nothing about
+    the subject asked for. Every one of them then carried a score, because coverage was above zero.
+    """
+
+    def test_a_query_the_brain_knows_nothing_about_matches_nothing(self, brain: Brain) -> None:
+        assert brain.search(Query(text="thermodynamic entropy of an ideal gas")).matches == []
+
+    def test_a_query_of_only_function_words_falls_back_to_them(self, brain: Brain) -> None:
+        """Deliberate. Dropping every term would answer "what is it" with nothing found, which is worse
+        than answering it badly -- and a caller who typed only function words gave nothing to narrow by."""
+        assert content_terms("of an the") == ["of", "an", "the"]
+        assert brain.search(Query(text="of an the")).matches
+
+    def test_the_denominator_counts_only_content_words(self, brain: Brain) -> None:
+        """Which is what fixes the ranking, not just the filtering: a block stops being rewarded for
+        sharing grammar."""
+        assert content_terms("what is the periodic function of a signal") == ["periodic", "function", "signal"]
+
+        bundle = brain.search(Query(text="what is a periodic function"))
+        assert bundle.matches[0].content["label"] == "Fourier series"
+        assert bundle.matches[0].score == "1.00"
+
+    def test_the_list_is_grammar_rather_than_frequency(self) -> None:
+        """A list built from frequency eventually swallows a term some brain treats as knowledge."""
+        assert "the" in STOPWORDS
+        assert "index" not in STOPWORDS
+        assert "memory" not in STOPWORDS
+        assert "block" not in STOPWORDS
 
 
 class TestFilters:

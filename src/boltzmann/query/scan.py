@@ -49,6 +49,38 @@ if TYPE_CHECKING:
 SCORE_PRECISION = 2
 """Decimal places in the coverage score. A string, because a wire format should not carry a float."""
 
+_DETERMINERS = ("a", "an", "the", "this", "that", "these", "those")
+_CONNECTIVES = ("and", "or", "but", "nor", "so", "then", "also", "if", "than")
+_PREPOSITIONS = (
+    "of", "to", "in", "on", "at", "by", "for", "from", "with", "without",
+    "into", "onto", "over", "under", "about", "as",
+)  # fmt: skip
+_AUXILIARIES = (
+    "is", "are", "was", "were", "be", "been", "being", "am",
+    "do", "does", "did", "done", "have", "has", "had", "having",
+    "can", "could", "may", "might", "must", "shall", "should", "will", "would",
+)  # fmt: skip
+_PRONOUNS = (
+    "i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us", "them",
+    "my", "your", "his", "its", "our", "their",
+)  # fmt: skip
+_INTERROGATIVES = ("what", "when", "where", "which", "who", "whom", "whose", "why", "how")
+_NEGATION_AND_PLACE = ("no", "not", "there", "here")
+
+STOPWORDS = frozenset(
+    _DETERMINERS + _CONNECTIVES + _PREPOSITIONS + _AUXILIARIES + _PRONOUNS + _INTERROGATIVES + _NEGATION_AND_PLACE
+)
+"""Words dropped from a query before matching.
+
+Function words, chosen by grammatical role rather than by frequency: a list built from frequency would
+eventually swallow a term some brain treats as knowledge, and a stopword too many is an answer nobody can
+find. Nothing domain-specific belongs here.
+
+They are excluded because including them makes the filter stop filtering -- ``an`` alone matched fourteen
+of fifteen blocks in a brain that knew nothing about the query's subject. An implementation with its own
+:class:`~boltzmann.query.planner.QueryPlanner` decides this for itself; this is what the built-in scan does.
+"""
+
 
 ProvenanceView = Ledger
 """Kept as a name for the ledger view, which both the query and the retention paths read."""
@@ -129,6 +161,31 @@ def _passes_filters(block: Block, filters: QueryFilters) -> bool:
     return True
 
 
+def content_terms(text: str) -> list[str]:
+    """
+    The words of a query that carry retrieval signal.
+
+    Function words are dropped, because counting them makes the filter stop filtering. A query mentioning
+    ``an`` matched fourteen of fifteen blocks in a brain that knew nothing about the subject, and every one
+    of them then had a score: the term was present, so coverage was above zero, so the block was a match.
+    Removing them also fixes the ranking, because the denominator stops rewarding a block for sharing
+    grammar rather than meaning.
+
+    A query that is nothing but function words keeps them. Answering ``"what is it"`` with nothing found
+    would be worse than answering it badly, and a caller who typed only function words has told us nothing
+    to narrow by.
+
+    Args:
+        text (str): The query as written.
+
+    Returns:
+        list[str]: The terms to match on, case-folded.
+    """
+    words = [word for word in text.casefold().split() if word]
+    content = [word for word in words if word not in STOPWORDS]
+    return content or words
+
+
 def _coverage(terms: list[str], block: Block) -> float:
     """The fraction of query terms present in a block's text. Coverage, not relevance."""
     if not terms:
@@ -188,7 +245,7 @@ def scan(query: Query, modules: dict[MemoryType, Module]) -> EvidenceBundle:
     if query.hints.mode is RetrievalMode.EXACT:
         candidates = _exact(query, searched)
     else:
-        terms = [term for term in query.text.casefold().split() if term]
+        terms = content_terms(query.text)
         candidates = {
             block_id: coverage
             for memory_type, module in searched.items()
