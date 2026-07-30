@@ -92,6 +92,10 @@ None of these are SDK bugs, and all three show up on the first real run:
 
 ## Running it
 
+**[docs/usage.md](docs/usage.md) is the walkthrough**: putting knowledge in, getting it out,
+proving it, publishing, installing, and taking it back out — with the real commands and the
+real output. What follows is the summary.
+
 ```bash
 uv sync                      # builds and installs the SDK from ../ , plus fastmcp
 
