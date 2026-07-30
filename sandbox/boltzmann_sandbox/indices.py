@@ -44,22 +44,68 @@ _WORD = re.compile(r"[a-z0-9]+")
 MIN_TOKEN_LENGTH: Final = 2
 """Single characters carry no retrieval signal and inflate every posting list."""
 
+MIN_STEM_LENGTH: Final = 4
+"""How much of a word a suffix rule has to leave behind.
+
+Below this, stripping does more harm than good: ``ties`` would become ``t`` and collide with everything.
+Four keeps ``removing`` -> ``remov`` while leaving ``uses`` and ``this`` alone.
+"""
+
+_SUFFIXES: Final = ("ional", "ings", "edly", "ing", "ies", "ely", "est", "ed", "es", "ly", "s", "e")
+"""Suffixes stripped, longest first so that ``ings`` wins over ``s``.
+
+English inflection and the handful of derivations that show up in the same sentence as their root. Ordered
+rather than sorted at import, because the order *is* the rule.
+
+The trailing ``e`` is what makes the family close. English drops it before ``-ing`` and ``-es``, so
+``remove`` keeps it while ``removing`` and ``removes`` lose it; stripping it from all three lands them on
+``remov``. Without that rule the stem of a verb never matches the stem of the same verb inflected, which
+was the miss this exists to fix.
+"""
+
 
 class IndexFormatError(Exception):
     """A published index that cannot be loaded into this one."""
 
 
+def stem(token: str) -> str:
+    """
+    A token reduced to its rough root, so that inflections of one word are one token.
+
+    Without this, ``remove`` and ``removing`` land in different posting lists and different hash buckets,
+    and a question asking what happens when you *remove* something gets no credit from the block that says
+    what happens when you *remove* it -- observed, and the wrong block won.
+
+    Suffix stripping only, shortest useful suffix last, and never below :data:`MIN_STEM_LENGTH` so that
+    short words survive intact. It is not Porter: ``was`` does not become ``be`` and ``better`` does not
+    become ``good``. It closes the gap between a word and its own inflections, which is where the misses
+    came from, and a real implementation would use a real stemmer -- or embeddings, which need none.
+
+    Args:
+        token (str): A single case-folded token.
+
+    Returns:
+        str: The stem, or the token unchanged when no suffix can be removed safely.
+    """
+    for suffix in _SUFFIXES:
+        if token.endswith(suffix) and len(token) - len(suffix) >= MIN_STEM_LENGTH:
+            # The stem need not be a word. ``removes`` becomes ``remov``, which is fine: the only property
+            # that matters is that the same rule runs over the query and over the block.
+            return token[: -len(suffix)]
+    return token
+
+
 def tokenize(text: str) -> list[str]:
     """
-    Split text into tokens.
+    Split text into stemmed tokens.
 
     Args:
         text (str): Any text.
 
     Returns:
-        list[str]: Case-folded tokens of at least :data:`MIN_TOKEN_LENGTH` characters, in order.
+        list[str]: Case-folded, stemmed tokens of at least :data:`MIN_TOKEN_LENGTH` characters, in order.
     """
-    return [token for token in _WORD.findall(text.casefold()) if len(token) >= MIN_TOKEN_LENGTH]
+    return [stem(token) for token in _WORD.findall(text.casefold()) if len(token) >= MIN_TOKEN_LENGTH]
 
 
 def block_tokens(block: Block) -> list[str]:
@@ -174,9 +220,15 @@ class VectorIndex(AbstractIndex):
     KIND: ClassVar[IndexKind] = IndexKind.VECTOR
     REBUILDABLE: ClassVar[bool] = False
 
-    MODEL_TAG: ClassVar[str] = "sandbox-hashing-bow/1"
+    MODEL_TAG: ClassVar[str] = "sandbox-hashing-bow/2"
     """What produced these vectors. A consumer refuses an index built by anything else, because vectors
-    from two models occupy different spaces and comparing them means nothing."""
+    from two models occupy different spaces and comparing them means nothing.
+
+    Bumped to ``/2`` when stemming entered the tokenizer. Nothing about the arithmetic changed, but the
+    tokens it hashes did, so a vector built by ``/1`` sits somewhere else in the same 256 dimensions --
+    which is exactly the case this tag exists to refuse. Anything that changes what gets hashed, or how,
+    changes the model.
+    """
 
     DIMS: ClassVar[int] = 256
 

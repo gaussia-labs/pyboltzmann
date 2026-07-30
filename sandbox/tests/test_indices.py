@@ -19,11 +19,13 @@ from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.store.memory import MemoryBlockStore
 
 from boltzmann_sandbox.indices import (
+    MIN_STEM_LENGTH,
     MIN_TOKEN_LENGTH,
     IndexFormatError,
     InvertedIndex,
     VectorIndex,
     block_tokens,
+    stem,
     tokenize,
 )
 
@@ -71,7 +73,7 @@ def blocks() -> list:
 
 class TestTokenizing:
     def test_case_is_folded(self) -> None:
-        assert tokenize("Fourier SERIES") == ["fourier", "series"]
+        assert tokenize("Fourier SERIES") == tokenize("fourier series")
 
     def test_punctuation_separates(self) -> None:
         assert tokenize("sin(x), cos(x)") == ["sin", "cos"]
@@ -80,6 +82,41 @@ class TestTokenizing:
         """They carry no retrieval signal and appear in nearly every block."""
         assert MIN_TOKEN_LENGTH == 2
         assert tokenize("a periodic function f") == ["periodic", "function"]
+
+
+class TestStemming:
+    """One word and its inflections have to become one token, or neither index credits the right block."""
+
+    @pytest.mark.parametrize(
+        ("word", "inflected"),
+        [
+            ("remove", "removing"),
+            ("remove", "removes"),
+            ("derive", "derived"),
+            ("publish", "publishing"),
+            ("version", "versions"),
+            ("block", "blocks"),
+            ("state", "states"),
+        ],
+    )
+    def test_a_word_and_its_inflection_share_a_stem(self, word: str, inflected: str) -> None:
+        assert stem(word) == stem(inflected)
+
+    def test_the_trailing_e_is_what_closes_the_verb_family(self) -> None:
+        """English drops it before -ing and -es, so without this rule a verb never matches itself."""
+        assert stem("remove") == stem("removing") == "remov"
+
+    def test_short_words_survive_intact(self) -> None:
+        """Stripping below the floor collides everything: `ties` would become `t`."""
+        assert MIN_STEM_LENGTH == 4
+        for word in ("the", "this", "is", "has", "ties", "uses"):
+            assert stem(word) == word
+
+    def test_it_does_not_pretend_to_be_porter(self) -> None:
+        """Irregular plurals and irregular verbs are out of reach of suffix stripping, and saying so is
+        better than a rule that half works."""
+        assert stem("indices") != stem("index")
+        assert stem("was") != stem("be")
 
     def test_a_canonical_block_contributes_only_its_media_type(self, blocks: list) -> None:
         """It is a descriptor over bytes, not prose, so it must not match a natural-language query."""
@@ -103,7 +140,7 @@ class TestTheInterface:
         assert InvertedIndex().rebuildable
         assert InvertedIndex().model_tag is None
         assert not VectorIndex().rebuildable
-        assert VectorIndex().model_tag == "sandbox-hashing-bow/1"
+        assert VectorIndex().model_tag == "sandbox-hashing-bow/2"
 
     def test_the_kinds_are_the_ones_they_serve(self) -> None:
         assert InvertedIndex().kind is IndexKind.INVERTED
