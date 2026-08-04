@@ -1,6 +1,32 @@
 # CHANGELOG
 
 
+## v0.1.1 (2026-08-04)
+
+### Bug Fixes
+
+- **conformance**: Let the golden vectors load without pytest
+  ([`f9350c8`](https://github.com/gaussia-labs/pyboltzmann/commit/f9350c8376aeeea3d467421ee167fe4499f752a7))
+
+The package holds two halves with opposite requirements. The golden vectors are plain JSON in the
+  wheel and need nothing, because the caller they exist for writes their client in another language.
+  The behavioural suites are pytest classes and need pytest.
+
+`__init__` imported both eagerly, so the pytest requirement of the suites reached the vectors: on a
+  plain `pip install pyboltzmann`, the one half designed to need nothing was the only part of the
+  package that would not import. Eleven of twelve subpackages loaded; conformance was the twelfth,
+  and it is the one written to be consumed by third parties.
+
+The suites now resolve through a module `__getattr__`, and say what to install when pytest is absent
+  instead of raising a bare ModuleNotFoundError from a file the caller never mentioned. The
+  `conformance` extra provides it.
+
+Found by installing the published wheel rather than testing the working tree, which is also how the
+  previous release's timestamp bug escaped. The new tests run in subprocesses for the same reason:
+  asking this suite whether the suites are loaded answers a different question, since it loaded
+  them.
+
+
 ## v0.1.0 (2026-08-04)
 
 ### Bug Fixes
