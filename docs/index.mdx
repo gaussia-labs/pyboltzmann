@@ -1,0 +1,66 @@
+---
+title: "Boltzmann Python SDK"
+description: "An SDK for the Boltzmann Protocol: portable, verifiable, model-agnostic knowledge."
+---
+
+`pyboltzmann` is a client for a **Boltzmann brain**. You open a directory, call methods, and they work
+against an OCI artifact. `Brain` implements the whole protocol — 23 of 23 operations across the four
+contracts.
+
+```python
+brain = Brain.open("./my-brain", actor=alex)
+brain.ingest(pdf, request, my_llm)          # register → delegate → validate → commit
+brain.search(Query(text="Fourier"))         # filter, resolve, verify
+brain.drop(DropRequest(...))                # rebuild the Merkle DAG, cascade, record
+await brain.push(client, "ghcr.io/org/brain", "v1")
+```
+
+<Note>
+  The brain conserves, validates, and retrieves knowledge. An external LLM processes, contextualizes,
+  and uses it. The SDK embeds no model — interpretation enters through one interface and nowhere else.
+</Note>
+
+## The line this SDK draws
+
+**The SDK does whatever the protocol defines mechanically; the implementer supplies whatever the paper
+assigns elsewhere.**
+
+| The SDK does | Because |
+| --- | --- |
+| Identity: canonical serialization, `block_id`, Merkle roots, inclusion proofs | Two clients that disagree on these do not share a brain at all |
+| The wire formats, and their JSON Schema | Two clients that disagree cannot hand work to the same model |
+| Ingestion, query, retention, distribution | You should not have to write hashing, cascades and mark-and-sweep yourself |
+| A conformance suite and golden vectors | So an implementation can prove it conforms, in any language |
+
+| You supply | Because |
+| --- | --- |
+| `CandidateProposer` | What knowledge a source yields is the external model's judgment |
+| `QueryPlanner` | Ranking and index selection are explicitly implementation-defined |
+| `Index` engines | Which engine backs an index is the implementation's choice |
+| An MCP server or CLI | Exposure layers, not protocol — build them on top |
+
+There are **no `NotImplementedError` stubs**, and a test enforces it. An unimplemented function is worse
+than an interface: it looks callable and is not. Nothing is declared and unreachable either — every
+type, enum member and constant is produced by something, and a test enforces that too.
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/sdks/boltzmann/installation">
+    The distribution is `pyboltzmann`; the import package is `boltzmann`.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/sdks/boltzmann/quickstart">
+    The whole lifecycle against a real OCI layout, in one file.
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/sdks/boltzmann/concepts/architecture">
+    Blocks, modules, compositions, snapshots.
+  </Card>
+  <Card title="Interfaces" icon="plug" href="/sdks/boltzmann/concepts/interfaces">
+    The protocol surface, and the four things you plug in.
+  </Card>
+</CardGroup>
+
+## Reference
+
+[*Boltzmann Brain: A Versioned, Distributable, and Model-Agnostic Knowledge
+Architecture*](https://github.com/gaussia-labs/papers) (Gaussia, 2026).

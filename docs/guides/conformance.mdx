@@ -1,0 +1,135 @@
+---
+title: "Conformance"
+description: "Prove an implementation conforms — in Python by inheriting the suite, in any language from the golden vectors."
+---
+
+An implementation in any language must reach the same identities. Conformance is therefore something you
+run, not something you claim.
+
+## Golden vectors, for any language
+
+The vectors ship **inside the wheel** as plain JSON, so a non-Python implementation can read them from an
+installed `pyboltzmann` without this SDK running any of its own code.
+
+```python
+from boltzmann.conformance import golden
+
+golden.VECTOR_FILES
+# ('block_ids.json', 'merkle_roots.json', 'inclusion_proofs.json', 'serialization.json')
+
+for vector in golden.load("block_ids.json")["vectors"]:
+    assert my_implementation.block_id(vector["envelope"]) == vector["block_id"]
+
+golden.load_all()   # every file, by name
+```
+
+| File | Fixes |
+| --- | --- |
+| `serialization.json` | The canonical byte sequence for a given payload |
+| `block_ids.json` | The identity of a given envelope |
+| `merkle_roots.json` | The root of a given set of block ids |
+| `inclusion_proofs.json` | The audit path for a given leaf and tree size |
+
+Those four cover the whole chain from a payload to a version identifier. Agree on all of them and two
+clients share a brain; disagree on any and they do not, whatever else they implement.
+
+## The behavioral suite, for Python
+
+A Python implementation inherits the suite directly. These are `pytest` classes — collect them and they
+run against your code.
+
+```python
+from boltzmann.conformance import BlockStoreConformance
+
+
+class TestMyStore(BlockStoreConformance):
+    def make_store(self):
+        return MyStore()
+```
+
+```python
+from boltzmann.conformance import BrainReaderConformance
+
+
+class TestMyClient(BrainReaderConformance):
+    def make_reader(self):
+        return MyClient(...)
+```
+
+Two suites need no hook at all, because they test the SDK's own invariants over your types:
+
+```python
+from boltzmann.conformance import CompositionConformance, IdentityConformance, MerkleConformance
+
+
+class TestIdentity(IdentityConformance): pass
+class TestMerkle(MerkleConformance): pass
+class TestComposition(CompositionConformance): pass
+```
+
+### What each suite asserts
+
+<AccordionGroup>
+  <Accordion title="IdentityConformance">
+    - The three levels of hashes are not interchangeable, and parsing refuses the wrong level rather than
+      coercing it.
+    - Canonicalization erases the order a mapping was built in.
+    - Floats and unsafe integers are refused inside a payload.
+    - `block_id` matches the published vectors, which other languages also read.
+  </Accordion>
+  <Accordion title="MerkleConformance">
+    - The root is a function of the *set*: two parties that assembled the same blocks obtain the same root.
+    - Duplicates collapse — a set of content-addressed blocks cannot hold the same block twice.
+    - An empty composition still has a well-defined root.
+    - Every leaf proves into the root, at every tree size.
+    - A proof does not verify against another root.
+  </Accordion>
+  <Accordion title="CompositionConformance">
+    - Dropping yields a new root, and does not disturb the earlier one.
+    - Episodic refuses to drop — append-only by protocol, not by policy.
+    - A diff reports exactly what an incremental update must fetch.
+  </Accordion>
+  <Accordion title="BlockStoreConformance">
+    - Storing identical bytes twice is a no-op.
+    - Every memory type round-trips, decoding back to an equal block with the same identity.
+    - A missing block is an error, not an empty result.
+    - Corruption is detected: bytes that do not hash to their digest are refused.
+    - A store must not normalize — non-canonical bytes do not decode.
+    - A tombstoned block is distinguishable from a missing one.
+    - Deleting reclaims both the bytes and the record of them.
+    - The store can enumerate what it holds, which is what mark-and-sweep needs.
+  </Accordion>
+  <Accordion title="BrainReaderConformance">
+    - Satisfies the `BrainReader` contract, and reports what is installed.
+    - A module that is not installed is an error, never an empty module.
+    - Resolves members; refuses to resolve a non-member however it is stored.
+    - Proves membership, and a proof does not verify against another root.
+    - Verifies itself, and reports resolvability three ways.
+    - `search` returns verified **data and not prose**, reports the roots it verified against, and honours
+      a memory-type filter.
+    - No match is an answer and not an error.
+    - An unregistered index is refused rather than faked.
+  </Accordion>
+</AccordionGroup>
+
+## Fixtures
+
+Two helpers build valid blocks, so a suite does not need your constructors:
+
+```python
+from boltzmann.conformance import sample_canonical, sample_semantic
+
+sample_semantic(label="Fourier series")
+sample_canonical(payload=b"%PDF-1.7 lecture notes")
+```
+
+## What the SDK asserts about itself
+
+Two tests in the repository are worth knowing about, because they constrain what this package may ever
+ship:
+
+- **No `NotImplementedError` stubs.** An unimplemented function is worse than an interface: it looks
+  callable and is not.
+- **Nothing declared and unreachable.** Every type, enum member and constant is produced by something.
+
+Together they mean the public surface is exactly what works — there is no aspirational API.

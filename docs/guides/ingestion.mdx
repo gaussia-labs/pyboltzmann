@@ -1,0 +1,222 @@
+---
+title: "Ingestion"
+description: "Preserve the source, delegate the interpretation, govern what is stored."
+---
+
+Ingestion is four steps, and the split is the design rather than a limitation. The brain does not decide
+what a document means — an external model does, and the protocol validates what it proposes. So the
+boundary is visible in the API: **there is no path that lets a model write to a Merkle DAG.**
+
+```
+register  →  define_task  →  (your model)  →  validate  →  commit
+```
+
+`brain.ingest()` runs all of it in one call. Use the separate calls when the model runs elsewhere — in
+another process, behind an MCP server, or on a human's desk.
+
+## 1. Register the source
+
+The bytes are preserved verbatim and addressed by their hash. This is canonical memory: what was actually
+observed, so every later claim can be traced back to it.
+
+```python
+from boltzmann.ingest import RegistrationRequest
+
+request = RegistrationRequest(
+    media_type="application/pdf",
+    actor=alex,
+    origin="https://example.org/lecture-07.pdf",
+    license="CC-BY-4.0",
+    retention_policy="course-materials",
+    normalize_with="pdf-to-text",     # a registered NormalizationPipeline, optional
+)
+
+result = brain.register(pdf_bytes, request)
+
+result.block_id
+result.duplicate       # True if these exact bytes were already held
+result.commit          # the CommitResult, or None when nothing changed
+```
+
+Registering the same bytes again is a **no-op that returns the same identity**, because identical content
+has one identity. Safe to retry.
+
+To register a newer edition of a source, use `replace` — a register plus a supersession edge, never a
+mutation of bytes already stored:
+
+```python
+result = brain.replace(new_bytes, request, supersedes=old_block_id)
+```
+
+### Normalization pipelines
+
+A normalized view is a *deterministic* transform of the original, recorded in provenance with the pipeline
+name and version.
+
+```python
+from boltzmann.ingest import available_pipelines, get_pipeline, register_pipeline
+
+class PdfToText:
+    name = "pdf-to-text"
+    version = "1"
+    output_media_type = "text/plain"
+
+    def accepts(self, media_type: str) -> bool:
+        return media_type == "application/pdf"
+
+    def normalize(self, data: bytes) -> bytes: ...
+
+register_pipeline(PdfToText())
+```
+
+## 2. Define the task
+
+```python
+task = brain.define_task(
+    source=result.block_id,
+    allowed=[MemoryType.SEMANTIC, MemoryType.PROCEDURAL],
+    requirements=["cite the section number as the locator"],
+    instructions="Extract the normative claims.",
+)
+
+task.operation           # TaskOperation.EXTRACT_KNOWLEDGE
+task.output_schema       # 'boltzmann.candidates/v1'
+task.task_id
+```
+
+<Warning>
+  Canonical and provenance can never be proposed. One is the source itself; the other is the brain's own
+  record of what happened — `define_task` refuses them.
+</Warning>
+
+The schema its candidates must satisfy is emitted by the SDK, not described by it. Hand it to your model
+as structured output:
+
+```python
+schema = brain.candidates_schema(task)
+```
+
+With one allowed memory type the schema names that variant directly; with several it uses `oneOf`. The
+other wire schemas are available the same way:
+
+```python
+from boltzmann.ingest import block_schema, candidates_schema, evidence_bundle_schema, wire_schemas
+
+wire_schemas()   # every schema the protocol exchanges, by name
+```
+
+## 3. Your model proposes
+
+```python
+from boltzmann import Producer
+from boltzmann.blocks import ProducerKind
+from boltzmann.ingest import Candidate, CandidateSet
+
+candidates = CandidateSet(
+    task_id=task.task_id,
+    producer=Producer(kind=ProducerKind.MODEL, id="claude-opus-5", version="2026-07"),
+    candidates=[
+        Candidate(
+            memory_type=MemoryType.SEMANTIC,
+            payload={"kind": "formula", "label": "Fourier series", "statement": "..."},
+            evidence=[task.source],       # at least one, always
+            locator="S6.3",
+            confidence="high",
+        )
+    ],
+)
+```
+
+<Note>
+  A `Candidate` is **not** a `Block` and has no `block_id`. An unvalidated proposal has no identity, so it
+  cannot be committed by accident. Recording `producer` at this granularity is what makes a later batch
+  invalidation possible.
+</Note>
+
+## 4. Validate
+
+Validation is the brain's, not yours. A candidate that fails comes back **rejected with a code** rather
+than stored — and rather than raised as an error.
+
+```python
+report = brain.validate(candidates, task)
+
+report.is_clean                                    # every proposal validated
+report.committable                                 # the ones that may proceed
+report.by_status(ValidationStatus.REJECTED)
+
+for result in report.results:
+    result.status        # validated | pending_review | rejected | contradicted
+    result.block         # the typed block, if it earned one
+    result.issues        # [ValidationIssue(code=..., detail=..., field=...)]
+    result.conflicts_with
+```
+
+### The validation gate
+
+`DEFAULT_VALIDATORS` runs seven checks, in this order:
+
+| Code | Refuses |
+| --- | --- |
+| `memory-type-not-allowed` | A proposal of a type the task did not invite |
+| `schema` | A payload that does not satisfy its memory type's schema |
+| `evidence-mismatch` | A payload whose own citations differ from the candidate's |
+| `evidence-not-found` | Cited evidence absent from the canonical composition |
+| `duplicate` | A block already in the target composition |
+| `relation-target-not-found` | A relation pointing at a block the snapshot does not hold |
+| `contradiction` | The same claim already stated a different way |
+
+<Note>
+  The duplicate case is worth understanding: identical knowledge **is** identical, so re-submitting a set
+  you already committed rejects all of it and commits nothing. That is correct, not a failure.
+</Note>
+
+A rejection is information. Fix the candidate and submit again. Add your own checks by passing
+`validators=[*DEFAULT_VALIDATORS, MyDomainCheck()]` to `Brain.open`.
+
+## 5. Commit
+
+The only write path, and one transaction: a failure part-way through leaves the previous snapshot as the
+current one.
+
+```python
+commit = brain.commit(report)
+
+commit.snapshot        # the new snapshot
+commit.committed       # the block ids that entered
+commit.provenance      # the ledger entries written alongside them
+commit.roots           # {MemoryType: MerkleRoot} -- the new roots
+commit.is_empty        # nothing changed, as when every candidate was a duplicate
+```
+
+An external model can reach `validate` but never `commit` without going through it.
+
+## Re-derivation
+
+When a source was wrong rather than unwanted, regenerate the knowledge against the corrected source
+instead of losing it:
+
+```python
+task = brain.define_rederivation(
+    source=corrected_block_id,
+    replacing=wrong_block_id,
+    allowed=[MemoryType.SEMANTIC],
+)
+task.operation   # TaskOperation.REDERIVE
+```
+
+That is the difference between a deletion and a re-derivation — see
+[Retention](/sdks/boltzmann/guides/retention#re-derivation-instead-of-loss).
+
+## Indices after a commit
+
+```python
+brain.rebuild_indices()          # regenerate the structural indices
+brain.travelling_indices         # which modules would carry a vector index if published now
+```
+
+<Warning>
+  A **travelling index cannot be regenerated** — that is what makes it travelling — and it is persisted
+  only when the artifact is materialized. If you ingest and the process exits without `pack` or `push`,
+  the vector index is lost. Push from the process that committed, or call `brain.pack()` before it exits.
+</Warning>

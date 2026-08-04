@@ -1,0 +1,172 @@
+---
+title: "Distribution"
+description: "Pack, push and pull: a brain moves between a remote artifact and a local layout."
+---
+
+The local brain **is** an OCI Image Layout, so publishing is a copy rather than a conversion, and
+selective installation falls out of the layout.
+
+```python
+from boltzmann.distribution import ARTIFACT_TYPE
+
+ARTIFACT_TYPE
+# 'application/vnd.gaussia.boltzmann.brain.v1+json'
+```
+
+One layer per installed module, the snapshot as the config blob. Any OCI tool can copy the result without
+this SDK.
+
+## Pack: no network at all
+
+```python
+manifest = brain.pack(tag="v1")
+
+manifest.digest              # the artifact's physical identity
+manifest.artifact_type
+manifest.modules             # which modules it carries, in canonical order
+manifest.layers
+manifest.config
+manifest.layer_for(MemoryType.SEMANTIC)
+manifest.vector_index_for(MemoryType.SEMANTIC)
+```
+
+`pack` materializes the current snapshot as an OCI artifact inside the local layout, with no registry
+involved. It is also what persists a **travelling index** — see the warning at the end of
+[Ingestion](/sdks/boltzmann/guides/ingestion#indices-after-a-commit).
+
+### Two identities per layer, and the pair is the point
+
+```python
+descriptor = manifest.layer_for(MemoryType.SEMANTIC)
+
+descriptor.digest         # OciDigest -- "do I already have these bytes?"
+descriptor.merkle_root    # MerkleRoot -- "is this the same knowledge?"
+descriptor.memory_type
+descriptor.is_vector_index
+descriptor.size
+```
+
+Two clients that packed the same blocks with different gzip settings have different layer digests and the
+same Merkle root. The digest drives transfer; the root drives meaning.
+
+## Push
+
+```python
+from boltzmann.distribution import OrasRegistryClient
+
+registry = OrasRegistryClient()
+registry.login(username, password)
+
+digest = await brain.push(registry, "ghcr.io/org/brain", "v1")
+```
+
+Only the blobs the registry lacks are uploaded, then the manifest. The digest it returns is the same name
+the registry filed it under — which is what makes `org/brain@sha256:…` resolvable, the only way to point
+at a version nobody can move a tag away from.
+
+<Warning>
+  A push **refuses to overwrite a remote whose snapshot is absent from the local history.** The protocol
+  defines no merge for divergent brains, so the safe behavior is to refuse and say where the two parted.
+
+  ```
+  v1 is at snapshot sha256:0ce547eb89f3, which is not in this brain's history;
+  the two diverged. Pull and re-commit, or pass force=True to overwrite the remote.
+  ```
+
+  Pass `force=True` only when you mean to replace the remote.
+</Warning>
+
+### Tags move; digests do not
+
+A tag is a pointer, like a git branch. Pushing to `v1` repeatedly moves it. Your local history keeps every
+version (ten by default, `RetentionPolicy.retained_roots`), each still verifying. **The remote does not** —
+when `v1` moves, the previous manifest is untagged, and registries collect untagged manifests.
+
+So the discipline is the one you already use for container images:
+
+| Tag | Meaning |
+| --- | --- |
+| `v1` | Moves. "The current one" |
+| `v1.0`, `v1.1` | Immutable. One per version anyone should be able to return to |
+
+## Plan a pull
+
+One manifest request, no layers:
+
+```python
+plan = await consumer.plan_pull(registry, "ghcr.io/org/brain", "v1")
+
+plan.modules                 # what the artifact carries
+plan.fetch_layers            # what you do not already hold
+plan.reuse_layers            # reused by digest, not transferred again
+plan.fetch_blocks
+plan.rebuild_indices         # structural indices, regenerated locally
+plan.fetch_vector_indices    # travelling indices, which must be transferred
+plan.is_noop                 # already at the target state
+```
+
+## Pull, selectively
+
+```python
+snapshot = await consumer.pull(
+    registry, "ghcr.io/org/brain", "v1",
+    modules=[MemoryType.SEMANTIC],
+)
+```
+
+<Note>
+  A selective install is a **first-class outcome, not a partial failure**. Taking the semantic module
+  without the canonical one is a real way to consume a brain, and the manifest records what was left out.
+  Asking for a module you did not install is an error, never an empty module.
+</Note>
+
+What you install carries the digest that was published, and the layers you already hold are reused by
+digest rather than transferred again.
+
+## Publishing without a registry
+
+`LocalLayoutRegistry` speaks the same `RegistryClient` protocol against directories on disk — useful for
+tests, air-gapped transfers, and understanding what a push does:
+
+```python
+from boltzmann.distribution import LocalLayoutRegistry
+
+registry = LocalLayoutRegistry("./registry")
+
+await brain.push(registry, "org/brain", "v1")
+registry.tags("org/brain")           # ['v1']
+manifest = await registry.resolve("org/brain", "v1")
+```
+
+## Supplying your own transport
+
+```python
+from boltzmann.distribution import BrainManifest, RegistryClient
+
+class MyTransport:
+    async def resolve(self, reference: str, tag: str) -> BrainManifest: ...
+    async def pull_blob(self, reference: str, digest: OciDigest, store: BlockStore) -> None: ...
+    async def push(self, reference: str, tag: str, manifest: BrainManifest, store: BlockStore) -> OciDigest: ...
+
+assert isinstance(MyTransport(), RegistryClient)
+```
+
+`OrasRegistryClient` requires the `oci` extra. The rest of distribution — packing, layer construction,
+local layouts — needs nothing beyond the standard library.
+
+## Inspecting an artifact
+
+A registry UI can only draw the types it was built to know, so a brain often shows up as an *unrecognized*
+artifact. Nothing is broken; read it through the manifest instead:
+
+```python
+from boltzmann.distribution import parse_manifest
+from boltzmann.distribution.manifest import published_artifacts
+
+for artifact in published_artifacts(brain_store):
+    artifact.tag, artifact.digest, artifact.manifest
+```
+
+<Warning>
+  `docker pull` on a brain will fail, correctly. It is an OCI artifact, not a container image.
+</Warning>

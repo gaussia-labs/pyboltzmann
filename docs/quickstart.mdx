@@ -1,0 +1,193 @@
+---
+title: "Quickstart"
+description: "The whole lifecycle against a real OCI layout: ingest, query, prove, publish, remove."
+---
+
+Everything on this page runs against a real brain on disk. The directory you open **is** an OCI Image
+Layout, so nothing here is a simulation of publishing.
+
+## Open a brain
+
+```python
+from boltzmann import Actor, Brain
+from boltzmann.blocks import ActorKind
+
+alex = Actor(id="alex", kind=ActorKind.HUMAN)
+brain = Brain.open("./my-brain", actor=alex)
+```
+
+`Brain.open` creates the layout if the directory is empty and reopens it otherwise. Opening a brain is
+not a request to install anything.
+
+## Supply the model
+
+You supply the model. The SDK embeds none: what knowledge a source yields is the model's judgment, and
+what gets stored is the protocol's.
+
+```python
+from boltzmann import MemoryType, Producer
+from boltzmann.blocks import ProducerKind
+from boltzmann.ingest import Candidate, CandidateSet
+
+
+def my_llm(task, source):
+    # task.output_schema names the schema; brain.candidates_schema(task) *is* it, with the payload
+    # resolved per memory type. Hand it to the model as structured output.
+    return CandidateSet(
+        producer=Producer(kind=ProducerKind.MODEL, id="claude-opus-5", version="2026-07"),
+        candidates=[
+            Candidate(
+                memory_type=MemoryType.SEMANTIC,
+                evidence=[task.source],
+                locator="p.147",
+                payload={
+                    "kind": "formula",
+                    "label": "Fourier series",
+                    "statement": "decomposes a periodic function into sines",
+                    "subject": "signals",
+                },
+            )
+        ],
+    )
+```
+
+A `CandidateProposer` is any callable with that shape. It is the only place interpretation enters.
+
+## Ingest
+
+```python
+from boltzmann.ingest import RegistrationRequest
+
+request = RegistrationRequest(media_type="application/pdf", actor=alex, license="CC-BY-4.0")
+pdf = b"%PDF-1.7 lecture 07: Fourier analysis"
+
+commit = brain.ingest(pdf, request, my_llm)
+
+print([b.short for b in commit.committed])
+# ['sha256:47ab4fe22b2d']
+print({k.value: v.short for k, v in commit.roots.items()})
+# {'semantic': 'sha256:a3a0c5d6b6b7', 'provenance': 'sha256:3cb60aa83eb0'}
+```
+
+`ingest` runs the four steps in order: register → delegate → validate → commit. Registering the same
+bytes twice is a no-op, so this is safe to retry. See [Ingestion](/sdks/boltzmann/guides/ingestion) for
+the steps as separate calls, which is what you want when the model runs elsewhere.
+
+## Query
+
+What comes back is an **Evidence Bundle**: data with its provenance, never prose.
+
+```python
+from boltzmann import Query
+
+bundle = brain.search(Query(text="periodic function"))
+
+assert bundle.all_verified
+print(bundle.matches[0].block_id.short, bundle.matches[0].score)
+# sha256:47ab4fe22b2d 1.00
+print(bundle.matches[0].sources[0].locator)
+# p.147
+```
+
+There is no answer field on the bundle. Not omitted — absent by design: composing prose is your work,
+and citing `block_id` is what keeps the answer checkable.
+
+Narrowing conditions live on `filters`, and advice a planner may ignore lives on `hints`:
+
+```python
+from boltzmann.query import QueryFilters, QueryHints
+
+bundle = brain.search(
+    Query(
+        text="periodic function",
+        filters=QueryFilters(memory_types=[MemoryType.SEMANTIC], subject="signals"),
+        hints=QueryHints(limit=3),
+    )
+)
+```
+
+## Prove what you got
+
+Membership is provable in `O(log n)`, without holding the rest of the module.
+
+```python
+block_id = commit.committed[0]
+proof = brain.prove(block_id, MemoryType.SEMANTIC)
+
+assert proof.verify(brain.root_of(MemoryType.SEMANTIC))
+print(proof.tree_size, len(proof.audit_path))
+# 1 0
+
+assert brain.verify()   # every root recomputed, every block's bytes rehashed
+```
+
+<Note>
+  `resolvable` and `member` are different questions. A block can be a verifiable member of a version and
+  still not be readable — after a selective install, or a redaction. Membership proves; resolution
+  reads. `brain.resolvability()` reports the three-way split.
+</Note>
+
+## Remove knowledge
+
+Always plan first. Dropping canonical evidence is privileged: it cascades to everything derived from it,
+because a claim whose source was removed can no longer be justified.
+
+```python
+from boltzmann.retention import DropRequest, RetentionPolicy
+
+source = brain.module(MemoryType.CANONICAL).block_ids[0]
+
+plan = brain.plan_drop(DropRequest(
+    blocks=[source], memory_type=MemoryType.CANONICAL, actor=alex, reason="ingested in error",
+))
+print(plan.privileged, plan.size)
+# True 1
+```
+
+A canonical drop is off by default, because excluding evidence forfeits re-derivation from it:
+
+```python
+brain = Brain.open("./my-brain", actor=alex, policy=RetentionPolicy(canonical_drop_allowed=True))
+result = brain.drop(DropRequest(
+    blocks=[source], memory_type=MemoryType.CANONICAL, actor=alex, reason="ingested in error",
+))
+print({k.value: len(v) for k, v in result.dropped.items()})
+# {'canonical': 1, 'semantic': 1}
+
+brain.prune(dry_run=False)   # reclaim what no retained root needs
+```
+
+One commit, several new roots. Older retained roots keep verifying exactly as before, and every removal
+is recorded in provenance — no configuration turns that off.
+
+## Publish
+
+```python
+manifest = brain.pack(tag="v1")
+print(manifest.digest.short, manifest.artifact_type)
+# sha256:28767d1451ba application/vnd.gaussia.boltzmann.brain.v1+json
+print([m.value for m in manifest.modules])
+# ['canonical', 'semantic', 'provenance']
+```
+
+`pack` involves no network at all — the directory becomes a real OCI artifact any tool can copy. To
+publish over the wire, and to install selectively:
+
+```python
+from boltzmann.distribution import LocalLayoutRegistry, OrasRegistryClient
+
+registry = OrasRegistryClient()                    # or LocalLayoutRegistry("./registry")
+await brain.push(registry, "ghcr.io/org/brain", "v1")
+
+consumer = Brain.open("./local", actor=alex)
+plan = await consumer.plan_pull(registry, "ghcr.io/org/brain", "v1")   # costs one manifest
+await consumer.pull(registry, "ghcr.io/org/brain", "v1", modules=[MemoryType.SEMANTIC])
+```
+
+A push refuses to overwrite a remote whose snapshot is absent from the local history: the paper defines
+no merge for divergent brains, so the safe move is to say where the two parted.
+
+<Card title="Distribution" icon="box" href="/sdks/boltzmann/guides/distribution">
+  Tags move and digests do not, why a layer carries two identities, and what a selective install leaves
+  behind.
+</Card>

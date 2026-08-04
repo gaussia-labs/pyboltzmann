@@ -1,0 +1,99 @@
+---
+title: "Merkle DAGs"
+description: "The layout the SDK commits to, why it sorts leaves, and how membership is proven."
+---
+
+Every module's version is committed by a single Merkle root. The layout is
+**[RFC 6962](https://www.rfc-editor.org/rfc/rfc6962) over lexicographically sorted leaves**:
+
+```python
+from boltzmann.merkle import LAYOUT_NAME
+
+LAYOUT_NAME
+# 'rfc6962-sorted/1'
+```
+
+Two decisions, each closing something the paper leaves open:
+
+- **Sorting** makes the root a pure function of the *set* of blocks, so two parties that assembled the
+  same knowledge in different orders agree.
+- **RFC 6962** avoids the duplicate-leaf ambiguity a naive tree admits
+  ([CVE-2012-2459](https://nvd.nist.gov/vuln/detail/CVE-2012-2459)), by hashing leaves and internal nodes
+  under different prefixes.
+
+Internal nodes are derived, not stored. A module with no blocks still has a well-defined root.
+
+## Computing a root
+
+```python
+from boltzmann.merkle import MerkleTree, merkle_root, sorted_leaves
+
+merkle_root([c, a, b]) == merkle_root([a, b, c])   # True -- order does not matter
+
+tree = MerkleTree([a, b, c])
+tree.root
+tree.name                      # 'rfc6962-sorted/1'
+tree.index_of(b)               # position among the sorted leaves
+tree.verify()                  # recompute every leaf's proof against the root
+```
+
+## Inclusion proofs
+
+Membership is provable in `O(log n)`, without holding the rest of the module.
+
+```python
+proof = brain.prove(block_id, MemoryType.SEMANTIC)
+
+proof.block_id
+proof.leaf_index
+proof.tree_size
+proof.audit_path               # the sibling hashes needed to recompute the root
+
+proof.verify(root)             # -> bool
+proof.require(root)            # raises InclusionProofError instead of returning False
+```
+
+A proof binds a block to **one** composition, not to any composition: verifying it against a different
+root fails. That is what makes a root a version identifier rather than a checksum.
+
+## Swapping the layout
+
+`MerkleLayout` is a protocol, so a deployment can commit to a different tree — but both sides must agree,
+which is why the layout name travels in every `ModuleRef`.
+
+```python
+from boltzmann.merkle import DEFAULT_LAYOUT, MerkleLayout, SortedRfc6962Layout
+
+class MyLayout:
+    @property
+    def name(self) -> str: ...
+    def root(self, block_ids) -> MerkleRoot: ...
+    def inclusion_proof(self, block_ids, target) -> InclusionProof: ...
+
+assert isinstance(MyLayout(), MerkleLayout)
+```
+
+<Warning>
+  Two implementations can only compare roots if they agree on the layout. A `ModuleRef` records
+  `layout` for exactly that reason — a root computed under another layout is not a smaller or larger
+  number, it is a different question's answer.
+</Warning>
+
+## Diffing two versions
+
+What a consumer must fetch to move between versions falls out of the composition, with no server-side
+computation:
+
+```python
+from boltzmann.merkle import diff
+
+d = diff(before_ids, after_ids)
+
+d.before, d.after              # the two roots
+d.added, d.removed, d.unchanged
+d.transfer_size                # how many blocks a consumer must fetch
+d.is_empty                     # whether the two compositions are identical
+```
+
+This is the mechanism behind an incremental update: the layers whose root did not change are reused by
+digest rather than transferred again.

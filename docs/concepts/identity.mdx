@@ -1,0 +1,112 @@
+---
+title: "Identity"
+description: "Canonical serialization, the three levels of hashes, and the values a payload refuses."
+---
+
+Two clients that disagree on identity do not share a brain at all. So identity is the part of the
+protocol this SDK implements rather than delegates, and the part the paper leaves open that an SDK
+cannot.
+
+## Canonical serialization
+
+The canonical form is **JCS ([RFC 8785](https://www.rfc-editor.org/rfc/rfc8785))**, tagged in every
+envelope so it stays versionable:
+
+```python
+from boltzmann.identity.serialization import SERIALIZATION_ID
+
+SERIALIZATION_ID
+# 'jcs/1'
+```
+
+Chosen over a binary encoding because a block is a small record and the protocol targets several
+languages: a canonical form a human can read and `grep` beats compactness here.
+
+Canonicalization erases the order a mapping was built in, which is what makes `block_id` a function of
+the content and nothing else:
+
+```python
+a = SemanticBlock(kind=SemanticKind.FACT, label="x", statement="y")
+b = SemanticBlock(statement="y", label="x", kind=SemanticKind.FACT)
+
+a.block_id == b.block_id   # True
+```
+
+## Values a payload refuses
+
+<Warning>
+  **Floats and unsafe integers are refused inside a payload.** A `float` fails at construction, not at
+  commit.
+
+  ```python
+  from boltzmann.exceptions import NonDeterministicValueError
+  from boltzmann.identity.serialization import MAX_SAFE_INTEGER
+
+  MAX_SAFE_INTEGER   # 2**53 - 1
+  ```
+</Warning>
+
+JCS defines float serialization through ECMAScript rules that are hard to reproduce identically across
+languages, and integers outside the IEEE-754 safe range lose precision in any double-backed JSON parser.
+Either divergence would mean two conforming clients computing different `block_id` values for the same
+knowledge — which is the one failure the protocol cannot tolerate.
+
+If you need a number with a fraction, store it as a string or as a scaled integer and say which in the
+payload.
+
+## Three levels of hashes are three types
+
+None is a `str`, and none is interchangeable with another.
+
+| Type | Answers | Computed over |
+| --- | --- | --- |
+| `BlockId` | *Is this the same knowledge?* | A block's canonical serialization |
+| `MerkleRoot` | *Is this the same version?* | A module's composition |
+| `OciDigest` | *Do I already have these bytes?* | A published blob or manifest |
+
+```python
+from boltzmann import BlockId, MerkleRoot, OciDigest
+
+block_id = BlockId.of(canonical_bytes)
+block_id.algorithm     # 'sha256'
+block_id.hex
+block_id.short         # 'sha256:47ab4fe22b2d' -- for logs and error messages
+block_id.raw           # the raw digest bytes, as Merkle hashing consumes them
+```
+
+Offering one level where another is expected is refused, not coerced:
+
+```python
+from boltzmann.exceptions import DigestKindError
+
+BlockId.parse("sha256:...")     # fine
+BlockId.parse(some_merkle_root) # DigestKindError
+```
+
+That distinction matters in practice. Two clients that packed the same blocks with different gzip
+settings have **different layer digests and the same Merkle root**: the `OciDigest` says the bytes
+differ, the `MerkleRoot` says the knowledge does not.
+
+## Hashing primitives
+
+```python
+from boltzmann.identity.hashing import ALGORITHM, LEAF_PREFIX, NODE_PREFIX, hash_leaf, hash_node
+
+ALGORITHM       # 'sha256'
+LEAF_PREFIX     # b'\x00'
+NODE_PREFIX     # b'\x01'
+```
+
+The domain-separating prefixes are what stop a leaf hash from being replayed as an internal node — see
+[Merkle DAGs](/sdks/boltzmann/concepts/merkle).
+
+## Timestamps
+
+```python
+from boltzmann import utc_timestamp
+
+utc_timestamp()
+```
+
+One function, always UTC, so two clients recording the same event do not disagree about when it happened
+because of a local timezone.

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Boltzmann - Python SDK",
+  "colors": {
+    "primary": "#ab412d",
+    "light": "#ab412d",
+    "dark": "#c8a787"
+  },
+  "background": {
+    "light": "#f5f0e8",
+    "dark": "#231e20"
+  },
+  "favicon": "/favicon.svg",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guides",
+        "groups": [
+          {
+            "group": "Getting started",
+            "pages": [
+              "index",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/memory-types",
+              "concepts/identity",
+              "concepts/merkle",
+              "concepts/interfaces"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/ingestion",
+              "guides/query",
+              "guides/retention",
+              "guides/distribution",
+              "guides/conformance"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/gaussia-labs/pyboltzmann"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "PyPI",
+      "href": "https://pypi.org/project/pyboltzmann/"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/gaussia-labs"
+    }
+  }
+}

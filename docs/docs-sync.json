@@ -1,0 +1,39 @@
+{
+  "target_repo": "gaussia-labs/docs",
+  "target_branch": "main",
+  "source_dir": "docs",
+  "target_dir": "sdks/boltzmann",
+  "navigation": {
+    "tab": "Boltzmann SDK",
+    "groups": [
+      {
+        "group": "Getting started",
+        "pages": [
+          "sdks/boltzmann/index",
+          "sdks/boltzmann/installation",
+          "sdks/boltzmann/quickstart"
+        ]
+      },
+      {
+        "group": "Core concepts",
+        "pages": [
+          "sdks/boltzmann/concepts/architecture",
+          "sdks/boltzmann/concepts/memory-types",
+          "sdks/boltzmann/concepts/identity",
+          "sdks/boltzmann/concepts/merkle",
+          "sdks/boltzmann/concepts/interfaces"
+        ]
+      },
+      {
+        "group": "Guides",
+        "pages": [
+          "sdks/boltzmann/guides/ingestion",
+          "sdks/boltzmann/guides/query",
+          "sdks/boltzmann/guides/retention",
+          "sdks/boltzmann/guides/distribution",
+          "sdks/boltzmann/guides/conformance"
+        ]
+      }
+    ]
+  }
+}

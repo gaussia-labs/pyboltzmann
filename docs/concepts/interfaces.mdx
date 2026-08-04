@@ -1,0 +1,181 @@
+---
+title: "Interfaces"
+description: "The protocol surface a client satisfies, and the four things you plug in."
+---
+
+The protocol is stated as `Protocol` classes, so "conforming" is something a type checker can verify.
+**Nothing in `boltzmann.protocol` is implemented** — those are the operations an implementation provides;
+the SDK provides the types they exchange, the identities they compute, and the invariants they must not
+break.
+
+## The protocol surface
+
+The surface is split because *read* and *extend* are separable, and most consumers only read.
+
+| Contract | Operations |
+| --- | --- |
+| `BrainReader` | `snapshot`, `root_of`, `module`, `open_index`, `resolve`, `prove`, `resolvability`, `verify`, `search` |
+| `BrainWriter` | `register`, `replace`, `define_task`, `validate`, `commit` |
+| `BrainRetention` | `drop`, `drop_by_producer`, `supersede`, `demote`, `prune`, `redact` |
+| `BrainDistribution` | `pack`, `push`, `pull` |
+| `BoltzmannProtocol` | all four |
+
+Every one is `runtime_checkable`:
+
+```python
+from boltzmann import BoltzmannProtocol, Brain, BrainReader
+
+assert isinstance(my_client, BrainReader)
+assert isinstance(Brain.open("./b", actor=alex), BoltzmannProtocol)
+```
+
+<Note>
+  A read-only client that satisfies `BrainReader` **is conforming**. It does not have to pretend to
+  support writes it will refuse. Conforming to `BoltzmannProtocol` is not required.
+</Note>
+
+## What you plug in
+
+Where the paper leaves something to the implementation — ranking, fusion, index engines, cascade depth,
+retention thresholds — so does this SDK.
+
+```python
+from boltzmann import Brain, MemoryType
+from boltzmann.ingest import DEFAULT_VALIDATORS
+
+brain = Brain.open(
+    "./my-brain",
+    actor=alex,
+    planner=MyPlanner(),                              # ranking
+    indices={MemoryType.SEMANTIC: [MyVectorIndex()]}, # engines
+    validators=[*DEFAULT_VALIDATORS, MyDomainCheck()],
+    policy=RetentionPolicy(...),                      # retention thresholds
+)
+```
+
+### CandidateProposer
+
+Interprets a source and proposes typed blocks. Implemented by the caller, never here — it is the only
+place interpretation enters.
+
+```python
+from boltzmann.ingest import CandidateProposer, CandidateSet, ProcessingTask
+
+class MyProposer:
+    def __call__(self, task: ProcessingTask, source: bytes) -> CandidateSet: ...
+
+assert isinstance(MyProposer(), CandidateProposer)
+```
+
+### QueryPlanner
+
+Turns a declarative query into a verified Evidence Bundle. Ranking and index selection are explicitly
+implementation-defined.
+
+```python
+from boltzmann.query import EvidenceBundle, Query, QueryPlanner
+
+class MyPlanner:
+    def plan(self, query: Query, modules: dict[MemoryType, Module]) -> EvidenceBundle: ...
+
+assert isinstance(MyPlanner(), QueryPlanner)
+```
+
+Without one, the brain falls back to `boltzmann.query.scan` — a deliberately simple term scan that is
+correct and unranked, not a retrieval engine.
+
+### Index
+
+A derived view over a module's composition. Which engine backs an index is the implementation's choice, so
+none ships here.
+
+```python
+from boltzmann.indices import AbstractIndex, Index, IndexKind, TravellingIndex
+
+[k.value for k in IndexKind]
+# ['hash_map', 'btree', 'inverted', 'vector', 'graph', 'bitmap']
+
+class MyVectorIndex(AbstractIndex):
+    KIND = IndexKind.VECTOR
+    REBUILDABLE = False
+
+    def build(self, blocks): ...
+    def search(self, query, limit=10) -> list[tuple[BlockId, float]]: ...
+```
+
+<Warning>
+  An index that reports `rebuildable = False` **must** also satisfy `TravellingIndex`, because no client
+  can regenerate it — it ships with its module.
+
+  ```python
+  class MyVectorIndex(AbstractIndex):
+      def dump(self) -> bytes: ...
+      def load(self, data: bytes) -> None: ...
+
+  assert isinstance(MyVectorIndex(), TravellingIndex)
+  ```
+
+  `model_tag` is what stops a consumer from mixing two representation spaces: a vector index built by
+  another model is refused on pull rather than silently ranked against yours.
+</Warning>
+
+A query never names an index. `open_index` exists for tooling that inspects or rebuilds a brain, not for
+retrieval.
+
+### Validator
+
+One check applied to a candidate before it can be committed.
+
+```python
+from boltzmann.ingest import ValidationIssue, Validator
+
+class MyDomainCheck:
+    code = "my-domain-rule"
+
+    def check(self, candidate, task, modules) -> list[ValidationIssue]:
+        return []
+
+assert isinstance(MyDomainCheck(), Validator)
+```
+
+The seven checks in `DEFAULT_VALIDATORS` are described in
+[Ingestion](/sdks/boltzmann/guides/ingestion#the-validation-gate).
+
+### Others
+
+| Interface | For |
+| --- | --- |
+| `BlockStore` | Where block bytes live. `OciLayoutStore` and `MemoryBlockStore` ship |
+| `MerkleLayout` | The tree that commits a composition. `SortedRfc6962Layout` ships |
+| `RegistryClient` | Registry transport. `OrasRegistryClient` and `LocalLayoutRegistry` ship |
+| `NormalizationPipeline` | Deterministic transforms of observed bytes. Register your own |
+
+## Invariants made structural
+
+The paper states these as rules. Here they are errors, each with a test:
+
+- A `Candidate` is not a `Block` and has no `block_id` — an unvalidated proposal has no identity, so it
+  cannot be committed by accident.
+- `ProcessingTask` refuses to let a model propose canonical or provenance blocks.
+- `Module` exposes no write method; deriving returns a new module.
+- `EvidenceBundle` has no answer field. Not omitted — absent by design.
+- `Composition.drop()` on the episodic module raises, and **no policy can permit it**.
+- `RetentionPolicy.record_removals` is a property that is always `True` — no configuration turns
+  auditability off.
+- A `float` in a payload fails at construction.
+
+## Exceptions
+
+Every error derives from `BoltzmannError`, in five families:
+
+```python
+from boltzmann import BoltzmannError
+```
+
+| Family | Members |
+| --- | --- |
+| `IdentityError` | `DigestFormatError`, `DigestKindError`, `SerializationError`, `NonDeterministicValueError` |
+| `BlockError` | `BlockSchemaError`, `BlockNotFoundError`, `BlockIntegrityError`, `BlockTombstonedError` |
+| `MerkleError` | `InclusionProofError` |
+| `ModuleError` | `MemoryTypeError`, `AppendOnlyViolationError`, `SnapshotError`, `MembershipError` |
+| `ProtocolError` | `ValidationError`, `CommitError`, `RetentionPolicyError`, `QueryError`, `DistributionError`, `ReferenceNotFoundError` |

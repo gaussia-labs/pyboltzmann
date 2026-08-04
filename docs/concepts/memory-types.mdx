@@ -1,0 +1,159 @@
+---
+title: "Memory types"
+description: "The five typed blocks, what each one is for, and which rules each module obeys."
+---
+
+`MemoryType` is both the module a block lives in and the type of the block itself.
+
+```python
+from boltzmann import MemoryType
+
+[m.value for m in MemoryType]
+# ['canonical', 'episodic', 'semantic', 'procedural', 'provenance']
+```
+
+Each type answers three questions structurally, not by configuration:
+
+| Memory type | Append-only | Droppable | Derived |
+| --- | --- | --- | --- |
+| `canonical` | no | yes | no |
+| `episodic` | **yes** | **no** | no |
+| `semantic` | no | yes | **yes** |
+| `procedural` | no | yes | **yes** |
+| `provenance` | no | yes | no |
+
+```python
+MemoryType.EPISODIC.is_append_only   # True  -- refuses `drop`
+MemoryType.SEMANTIC.is_derived       # True  -- an interpretation that cites canonical evidence
+```
+
+<Warning>
+  Only `semantic`, `procedural` and `episodic` may ever be **proposed** by a model. Canonical is the
+  source itself; provenance is the brain's own record of what happened. `ProcessingTask` refuses to let a
+  model propose either.
+
+  ```python
+  from boltzmann.ingest import PROPOSABLE_MEMORY_TYPES
+  # frozenset({<MemoryType.EPISODIC>, <MemoryType.SEMANTIC>, <MemoryType.PROCEDURAL>})
+  ```
+</Warning>
+
+## Canonical
+
+Evidence that a source was incorporated and preserved: the bytes as observed, addressed by their hash, so
+every later claim can be traced back.
+
+```python
+from boltzmann import CanonicalBlock
+from boltzmann.blocks import NormalizedView
+
+CanonicalBlock(
+    blob=digest,                    # OciDigest of the stored bytes
+    media_type="application/pdf",
+    size=76381,
+    normalized_view=NormalizedView(blob=other, media_type="text/plain", size=4210),
+)
+```
+
+A `normalized_view` is a *deterministic* transform of the original — never a replacement for it. Which
+transform ran, and at which version, is recorded in provenance.
+
+## Semantic
+
+A unit of consolidated general knowledge.
+
+```python
+from boltzmann import SemanticBlock, SemanticKind
+from boltzmann.blocks import Relation
+
+SemanticBlock(
+    kind=SemanticKind.FORMULA,
+    label="Fourier series",
+    statement="decomposes a periodic function into sines",
+    subject="signals",
+    evidence=[source_block_id],
+    relations=[Relation(predicate="generalizes", target=other_block_id)],
+    aliases=["Fourier decomposition"],
+)
+```
+
+`kind` is one of `concept`, `fact`, `formula`, `relation`, `constraint`. A `Relation` is an explicit
+symbolic edge; its target must resolve in the snapshot, or the candidate is rejected.
+
+## Procedural
+
+A way of performing a task.
+
+```python
+from boltzmann import ProceduralBlock, Step
+
+ProceduralBlock(
+    label="publish a brain",
+    goal="make a snapshot installable by a consumer",
+    steps=[
+        Step(action="pack the current snapshot"),
+        Step(action="push to the registry", condition="credentials are present"),
+    ],
+    preconditions=["every module verifies"],
+    success_criteria=["the tag resolves remotely"],
+    subject="distribution",
+    evidence=[source_block_id],
+)
+```
+
+`steps` must hold at least one `Step`. A step may name `alternatives` and the blocks it `uses`.
+
+## Episodic
+
+A concrete experience, situated in time.
+
+```python
+from boltzmann import EpisodicBlock, utc_timestamp
+
+EpisodicBlock(
+    summary="lecture 07 covered Fourier analysis",
+    occurred_at=utc_timestamp(),
+    ended_at=None,
+    context="signals course",
+    participants=["alex"],
+    outcome="the class derived the series",
+    evidence=[source_block_id],
+    tags=["lecture"],
+)
+```
+
+<Note>
+  Episodic memory is **append-only by protocol, not by policy**. An episode is a record of what happened
+  and cannot be rewritten, so `drop` raises and no policy can permit it. `demote` is the only removal
+  path available.
+</Note>
+
+## Provenance
+
+A single immutable entry in the provenance ledger. You do not construct these — the brain writes them,
+and every one of the six record types is discriminated on `record_type`:
+
+| Record | Written when |
+| --- | --- |
+| `registration` | A canonical source was incorporated |
+| `derivation` | A derived block was produced from canonical evidence |
+| `normalization` | A normalized view was produced from an original blob |
+| `supersession` | A block takes precedence over an earlier one |
+| `demotion` | A block's retrieval priority was lowered |
+| `removal` | Knowledge left the brain, and by which mechanism |
+
+Reading the ledger back is what makes cascades and accessibility computable:
+
+```python
+from boltzmann.module import Ledger
+
+ledger = Ledger.of(brain.modules())
+
+ledger.locators[block_id]          # where in the source a claim came from
+ledger.evidence[block_id]          # what it cites
+ledger.dependents[block_id]        # what cites it
+ledger.closure(source_id)          # everything that cites it, transitively
+ledger.made_by(producer)           # every derived block one producer made
+ledger.superseded_by[block_id]
+ledger.is_accessible(block_id)     # whether it should surface in retrieval by default
+```

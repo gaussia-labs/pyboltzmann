@@ -1,0 +1,205 @@
+---
+title: "Retention"
+description: "Four distinct removal mechanisms, the cascade a drop requires, and what pruning reclaims."
+---
+
+Removal is not one operation. The protocol keeps four mechanisms distinct because they answer different
+questions, and collapsing them would make an audit unanswerable.
+
+| Mechanism | Changes | Recoverable | Use |
+| --- | --- | --- | --- |
+| `drop` | Membership — a new root | From evidence, if kept | The knowledge is wrong or unwanted |
+| `supersede` | Accessibility only | Yes | A newer block takes precedence |
+| `demote` | Retrieval priority only | Yes | No longer relevant, still true |
+| `prune` | Storage only | No | Reclaim what no retained root needs |
+| `redact` | The bytes themselves | **No** | Law and safety, never cleanup |
+
+```python
+from boltzmann.blocks import RemovalMechanism
+
+[m.value for m in RemovalMechanism]
+# ['drop', 'supersede', 'demote', 'prune', 'tombstone', 'crypto_shred', 'lineage_rewrite']
+```
+
+<Note>
+  Every removal is recorded in provenance — what was removed, by whom, why.
+  `RetentionPolicy.record_removals` is a property that is always `True`: no configuration turns
+  auditability off.
+</Note>
+
+## Always plan first
+
+Dropping canonical evidence is **privileged**: it cascades to everything derived from it, because a claim
+whose source was removed can no longer be justified.
+
+```python
+from boltzmann.retention import DropRequest
+
+plan = brain.plan_drop(DropRequest(
+    blocks=[source_id],
+    memory_type=MemoryType.CANONICAL,
+    actor=alex,
+    reason="ingested in error",
+))
+
+plan.privileged          # True for a canonical drop
+plan.size                # how many blocks go with it, across every module
+plan.dependents          # {MemoryType: [BlockId]}
+plan.rederivable         # what could be regenerated instead of lost
+plan.provenance_edges
+```
+
+Nothing is written. The cascade is computed from the provenance ledger, so it is exact rather than
+estimated.
+
+## Drop
+
+```python
+result = brain.drop(DropRequest(
+    blocks=[source_id], memory_type=MemoryType.CANONICAL, actor=alex, reason="ingested in error",
+))
+
+result.snapshot
+result.dropped           # {MemoryType: [BlockId]}
+result.roots             # one commit, several new roots
+result.provenance
+result.review_required
+```
+
+Older retained roots keep verifying exactly as before, because nothing about them changed.
+
+A canonical drop is **off by default**, since excluding evidence forfeits re-derivation from it:
+
+```python
+from boltzmann.retention import PERMISSIVE_POLICY, RetentionPolicy
+
+brain = Brain.open("./my-brain", actor=alex, policy=RetentionPolicy(canonical_drop_allowed=True))
+# or, equivalently, policy=PERMISSIVE_POLICY
+```
+
+### Batch invalidation
+
+When a producer turns out to have been wrong — a bad model version, a broken pipeline run — drop
+everything it made:
+
+```python
+from boltzmann.retention import ProducerDropRequest
+
+brain.drop_by_producer(ProducerDropRequest(
+    producer=Producer(kind=ProducerKind.MODEL, id="claude-opus-5", version="2026-06"),
+    memory_types=[MemoryType.SEMANTIC, MemoryType.PROCEDURAL],
+    actor=alex,
+    reason="the extraction prompt cited the wrong section",
+))
+```
+
+This is why `Producer` records a `version`: without it, invalidating one model release would mean
+invalidating every one.
+
+### Re-derivation instead of loss
+
+Naming a replacement makes the difference between a deletion and a re-derivation:
+
+```python
+plan = brain.plan_drop(DropRequest(
+    blocks=[wrong_source], memory_type=MemoryType.CANONICAL, actor=alex,
+    reason="the source was a draft",
+    rederive_against=corrected_source,
+))
+plan.rederivable   # the blocks that can be regenerated against the corrected source
+```
+
+Then run a re-derivation task — see
+[Ingestion](/sdks/boltzmann/guides/ingestion#re-derivation).
+
+## Supersede and demote
+
+Two gentler options, which change *accessibility* rather than membership. The block stays in the
+composition and keeps proving into the root.
+
+```python
+brain.supersede(block=newer, superseded=older, memory_type=MemoryType.SEMANTIC, reason="corrected")
+brain.demote(block=one, memory_type=MemoryType.EPISODIC, reason="no longer relevant")
+```
+
+<Warning>
+  **Demotion is the only option for episodic memory.** The chronological record is append-only by
+  protocol, not by policy: an episode is a record of what happened and cannot be rewritten. `drop` raises
+  `AppendOnlyViolationError`, and no policy can permit it.
+</Warning>
+
+The decay function that governs demotion is a policy decision, not a protocol one.
+
+## Prune
+
+Pruning never decides what to forget; a drop already did. It reclaims what no retained composition still
+needs.
+
+```python
+report = brain.prune(dry_run=True)      # always look first -- pruning cannot be undone
+
+report.retained_roots
+report.reachable
+report.reclaimed
+report.reclaimed_count
+report.dry_run
+
+brain.prune(dry_run=False)
+```
+
+Nothing a retained root names is touched, and neither is anything a **published tag** names: a layout that
+published `v1` keeps the manifest and layers `v1` points at.
+
+```python
+from boltzmann.retention import mark, reachable_from, reachable_from_tags, sweep
+```
+
+## Redact
+
+For law and safety, not for cleanup. Wrong or obsolete knowledge is *dropped*; redaction destroys bytes
+that a retained root still names.
+
+```python
+result = brain.redact(block_id, MemoryType.CANONICAL, reason="GDPR erasure request")
+
+result.mechanism
+result.redacted
+result.invalidates_prior_roots
+```
+
+Membership still verifies afterwards, but reconstruction of that block is forfeited. The block becomes a
+**tombstone**, which is distinguishable from missing — a removed block must never look like a corrupted
+one:
+
+```python
+report = brain.resolvability()
+
+report.resolvable        # {MemoryType: [BlockId]}
+report.tombstoned        # redacted: named by a root, bytes destroyed
+report.missing           # not held: a selective install, or damage
+report.is_intact         # every block resolves or is accounted for by a tombstone
+```
+
+Redaction requires explicit policy, or it raises `RetentionPolicyError`.
+
+## The policy
+
+```python
+from boltzmann.retention import DEFAULT_RETAINED_ROOTS, RetentionPolicy
+
+policy = RetentionPolicy(
+    droppable_modules=[MemoryType.CANONICAL, MemoryType.SEMANTIC, MemoryType.PROCEDURAL, MemoryType.PROVENANCE],
+    canonical_drop_allowed=False,
+    cascade_review_threshold=50,      # a cascade this large needs human review first
+    retained_roots=10,
+    redactable_media_types=None,      # None means nothing is redactable
+    allowed_mechanisms=None,          # None means every mechanism the module permits
+)
+
+policy.record_removals               # always True
+policy.requires_review(cascade_size)
+policy.authorize(RemovalMechanism.DROP, MemoryType.SEMANTIC)   # raises if forbidden
+```
+
+The policy holds the deployment's answers to the questions the protocol leaves open — thresholds and
+permissions, never invariants.

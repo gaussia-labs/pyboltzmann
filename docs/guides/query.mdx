@@ -1,0 +1,137 @@
+---
+title: "Query"
+description: "Ask for data with its provenance, never prose, and verify every match against the snapshot."
+---
+
+A query says **what** you want and never names an index. Choosing and combining indices is the
+implementation's job, and treating no single index as authoritative is a protocol requirement.
+
+```python
+from boltzmann import Query
+
+bundle = brain.search(Query(text="why can a client not rebuild the vector index"))
+```
+
+## The request
+
+```python
+from boltzmann.query import Query, QueryFilters, QueryHints, RetrievalMode
+
+Query(
+    text="publish a brain",
+    filters=QueryFilters(
+        memory_types=[MemoryType.PROCEDURAL],
+        subject="distribution",
+        since=start, until=end,          # a recency window, for episodic memory
+        tags=["lecture"],
+        evidence=[source_block_id],      # only what cites this source
+        include_superseded=False,
+    ),
+    hints=QueryHints(
+        mode=RetrievalMode.AUTO,
+        limit=10,
+        expand_depth=0,                  # follow relations outward
+    ),
+)
+```
+
+Three parts, and the split is deliberate:
+
+| Part | Meaning |
+| --- | --- |
+| `text` | The terms. May be empty |
+| `filters` | Narrowing conditions over the installed snapshot. **Binding** |
+| `hints` | Advice a planner may follow or ignore |
+
+```python
+query.is_filter_only    # True when there are no terms, so only the filters narrow it
+query.limit             # the requested limit
+```
+
+Filters work with no text at all — `Query(filters=QueryFilters(memory_types=[MemoryType.PROCEDURAL]))`
+returns everything procedural.
+
+<Note>
+  `mode` names a **strategy, never an engine**: `auto`, `exact`, `lexical`, `semantic`, `associative`. A
+  conforming implementation may ignore it and still be conforming — that is why it lives under `hints`.
+</Note>
+
+## The Evidence Bundle
+
+```python
+bundle.matches
+bundle.verified_against     # {MemoryType: MerkleRoot} -- what the matches were checked against
+bundle.truncated            # whether the limit cut results off
+bundle.all_verified         # every match verified by hash and by membership
+bundle.require_verified()   # raises instead of returning False
+```
+
+<Warning>
+  `EvidenceBundle` has **no answer field**. Not omitted — absent by design. Composing prose is your work,
+  and citing `block_id` is what keeps the answer checkable.
+</Warning>
+
+Each match carries everything needed to audit it:
+
+```python
+match = bundle.matches[0]
+
+match.block_id
+match.memory_type
+match.content            # the payload
+match.score              # a decimal string, so a score never changes under serialization
+match.sources            # [SourceRef(block_id=..., locator='p.147')]
+match.verified           # hash and membership checked against the snapshot
+match.resolvable         # whether the bytes can still be read
+match.superseded_by      # set when a later block takes precedence
+```
+
+`score` is a string rather than a float for the same reason a payload refuses floats: a value that
+round-trips differently in two languages is not a value two clients can compare. See
+[Identity](/sdks/boltzmann/concepts/identity#values-a-payload-refuses).
+
+<Note>
+  No match is an **answer**, not an error. An empty bundle means the brain holds nothing matching — and
+  since matching is left to the implementation, that is a legitimate result.
+</Note>
+
+## Supplying a planner
+
+```python
+from boltzmann.query import EvidenceBundle, Query, QueryPlanner
+
+class MyPlanner:
+    def plan(self, query: Query, modules: dict[MemoryType, Module]) -> EvidenceBundle:
+        ...
+
+brain = Brain.open("./my-brain", actor=alex, planner=MyPlanner())
+```
+
+A planner must return knowledge blocks with their provenance and a retrieval score, must verify every
+returned block against the installed snapshot, and must treat no single index as authoritative.
+
+## The built-in scan
+
+Without a planner, the brain falls back to a term scan:
+
+```python
+from boltzmann.query import scan, searchable_text
+from boltzmann.query.scan import STOPWORDS, content_terms
+```
+
+It drops function words before matching, and it is deliberately not a retrieval engine — correct and
+unranked. It will not find a synonym. Supply a planner and a vector `Index` for real semantic retrieval.
+
+## Accessibility
+
+By default a superseded or demoted block does not surface. That is a retrieval decision, not a membership
+one — the block is still in the composition and still proves into the root.
+
+```python
+from boltzmann.module import Ledger
+
+ledger = Ledger.of(brain.modules())
+ledger.is_accessible(block_id)
+```
+
+Pass `include_superseded=True` to see them anyway, which is what an audit wants.

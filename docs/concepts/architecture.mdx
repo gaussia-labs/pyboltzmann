@@ -1,0 +1,130 @@
+---
+title: "Architecture"
+description: "Blocks, modules, compositions and snapshots: the four layers a brain is made of."
+---
+
+Knowledge is stored as typed, content-addressed **blocks** organized into five memory **modules**. Each
+module bundles its blocks, a Merkle DAG that pins the exact composition of a version, and the indices
+needed to query it.
+
+```
+Block          one typed, content-addressed record        → block_id
+Composition    an immutable set of block identities       → merkle_root
+Module         a composition + a store + its indices      → ModuleRef
+Snapshot       one root per installed module              → OciDigest
+```
+
+## Blocks
+
+A block is a small immutable record with a `payload` wrapped in an envelope. The envelope is what
+`block_id` is computed over, and it has exactly five keys:
+
+```python
+from boltzmann.blocks import ENVELOPE_KEYS
+
+print(sorted(ENVELOPE_KEYS))
+# ['boltzmann', 'memory_type', 'payload', 'schema_version', 'serialization']
+```
+
+```python
+block.payload()          # the payload as a JSON-shaped mapping
+block.envelope()         # the full envelope block_id is computed over
+block.canonical_bytes()  # the exact bytes that are hashed and stored
+block.block_id           # the content-addressed identity
+```
+
+Blocks are never mutated. Every operation that looks like a change produces a new block, a new
+composition, or a new snapshot. See [Memory types](/sdks/boltzmann/concepts/memory-types) for the five
+schemas.
+
+## Compositions
+
+A `Composition` is an immutable set of block identities committed by a single Merkle root. Deriving one
+returns a new one:
+
+```python
+from boltzmann import MemoryType
+from boltzmann.module import Composition
+
+version_1 = Composition(MemoryType.SEMANTIC, [a, b, c])
+version_2 = version_1.drop([b])
+
+version_1.root != version_2.root       # excluding a block publishes a different composition
+version_1.verify()                     # and version_1 keeps verifying, unchanged
+```
+
+Because the root is computed over **sorted** leaves, it is a pure function of the *set* of blocks: two
+parties that assembled the same blocks in different orders obtain the same root.
+
+```python
+diff = version_1.diff(version_2)
+diff.added, diff.removed, diff.unchanged
+diff.transfer_size                     # how many blocks a consumer must fetch
+```
+
+A root can be verified but not inverted, so the leaf list is stored alongside it as a **composition
+document** (`composition.json`). Without it a snapshot would identify a version it could not reopen.
+
+## Modules
+
+A `Module` is one memory module at one version: a composition, the store its bytes live in, and its
+indices.
+
+```python
+module = brain.module(MemoryType.SEMANTIC)
+
+module.root                            # this version's identity
+module.block_ids                       # canonical leaf order
+module.get(block_id)                   # read, verifying membership in *this* version
+list(module.blocks())                  # iterate every block of this version
+module.resolvable()                    # which blocks can still be read
+module.verify()                        # every membership proof, and every block's bytes
+```
+
+`with_blocks` and `without_blocks` derive new versions. `Module` exposes no write method at all —
+extending a brain goes through `commit`, which is the only write path.
+
+## Snapshots
+
+A `Snapshot` is the state of a brain: one `ModuleRef` per installed module, plus a `parent` pointer that
+forms an auditable chain of versions.
+
+```python
+snapshot = brain.snapshot()
+
+snapshot.modules                       # {MemoryType: ModuleRef}
+snapshot.parent                        # the snapshot this one succeeds
+snapshot.created_at
+snapshot.boltzmann                     # protocol version
+```
+
+Each `ModuleRef` carries the module's `root`, the `composition` digest, the `block_count`, the Merkle
+`layout` identifier, and the `embedding_model` behind a travelling vector index when one ships with it.
+
+<Note>
+  A brain may hold a **subset** of modules. Selective installation is the point of packaging each module
+  separately, so "not installed" is a legitimate state — and therefore an error rather than an empty
+  module when you ask for one you do not have.
+</Note>
+
+The one piece of mutable state a brain has is which snapshot is current:
+
+```python
+brain.state()          # the mutable pointer, for tooling that inspects a layout
+brain.history()         # the retained snapshots, most recent first
+brain.ancestry()        # snapshot digests reachable by walking `parent`
+brain.origin            # where this brain was pulled from, if it was
+```
+
+## The store
+
+Blocks live in a `BlockStore`. Two ship with the SDK:
+
+| Store | Backing | Use |
+| --- | --- | --- |
+| `OciLayoutStore` | An OCI Image Layout on disk | What `Brain.open` uses. Publishing is a copy, not a conversion |
+| `MemoryBlockStore` | A dict | Tests, and ephemeral brains |
+
+A store must not normalize: bytes that are not canonical do not decode, and bytes that do not hash to
+the digest they are filed under are refused. A redacted block is **tombstoned**, never silently missing —
+a removed block must never look like a corrupted one.

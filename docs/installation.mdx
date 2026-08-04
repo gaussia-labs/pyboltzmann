@@ -1,0 +1,91 @@
+---
+title: "Installation"
+description: "Install pyboltzmann, and understand why the install name and the import name differ."
+---
+
+## Install
+
+<CodeGroup>
+
+```bash pip
+pip install pyboltzmann
+```
+
+```bash uv
+uv add pyboltzmann
+```
+
+</CodeGroup>
+
+```python
+import boltzmann
+```
+
+<Warning>
+  The distribution is **`pyboltzmann`**; the import package is **`boltzmann`**. `boltzmann` on PyPI
+  belongs to an unrelated package, so publishing under it is not available. It is the same split as
+  `pygaussia` providing `gaussia`.
+</Warning>
+
+## Requirements
+
+- Python 3.11, 3.12 or 3.13
+- The core needs only `pydantic` and `rfc8785`
+
+## Extras
+
+The core needs no extra. The on-disk brain is already an OCI layout, so packing an artifact and moving
+it between layouts works with the standard library alone.
+
+| Extra | Adds | For |
+| --- | --- | --- |
+| `oci` | `oras` | Publishing to and installing from a network OCI registry |
+
+<CodeGroup>
+
+```bash pip
+pip install 'pyboltzmann[oci]'
+```
+
+```bash uv
+uv add 'pyboltzmann[oci]'
+```
+
+</CodeGroup>
+
+Index engines and exposure layers ship no extra at all — they are the implementation's choice.
+
+## Verify the install
+
+```python
+import boltzmann
+from boltzmann import Brain, BrainReader
+
+print(boltzmann.__version__)
+print(boltzmann.PROTOCOL_VERSION)
+assert isinstance(Brain, type) and issubclass(Brain, object)
+```
+
+Every interface is `runtime_checkable`, so conformance is asserted rather than hoped for:
+
+```python
+from boltzmann import BrainReader
+
+assert isinstance(my_client, BrainReader)
+```
+
+## Development install
+
+```bash
+git clone https://github.com/gaussia-labs/pyboltzmann.git
+cd pyboltzmann
+uv sync
+uv run pre-commit install && uv run pre-commit install --hook-type commit-msg
+
+uv run ruff check . && uv run ruff format .
+uv run mypy src/boltzmann
+uv run pytest
+```
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/) — use `uv run cz commit`
+for the interactive prompt. Releases are cut by `python-semantic-release` from the commit history.
