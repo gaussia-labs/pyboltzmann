@@ -40,6 +40,13 @@ it between layouts works with the standard library alone.
 | Extra | Adds | For |
 | --- | --- | --- |
 | `oci` | `oras` | Publishing to and installing from a network OCI registry |
+| `conformance` | `pytest` | Inheriting the behavioural conformance suites, which are pytest classes |
+
+<Note>
+  The golden vectors need **neither** extra. They are plain JSON in the wheel, so
+  `from boltzmann.conformance import golden` works on a bare install — which is the point, since
+  the caller they exist for writes their client in another language.
+</Note>
 
 <CodeGroup>
 

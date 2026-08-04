@@ -8,6 +8,10 @@ A failure here means one of two things. Either the change is a bug, or it is a d
 the serialization -- in which case it needs a new serialization identifier, not a regenerated file.
 """
 
+import subprocess
+import sys
+from textwrap import dedent
+
 import pytest
 
 from boltzmann.blocks.base import Block
@@ -110,3 +114,75 @@ class TestSerializationVectors:
     def test_the_safe_integer_boundary_is_covered(self) -> None:
         names = {vector["name"] for vector in golden.load("serialization.json")["vectors"]}
         assert "safe_integer_bounds" in names
+
+
+class TestVectorsNeedNoTestFramework:
+    """The vectors must be reachable on a plain install, which is what their callers have.
+
+    Checked in subprocesses because the assertions are about a *fresh* interpreter: this suite
+    has already imported the pytest-backed half, so asking about ``sys.modules`` in-process
+    would answer a different question.
+    """
+
+    def _run(self, body: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([sys.executable, "-c", dedent(body)], capture_output=True, text=True, check=False)
+
+    def test_importing_the_package_does_not_load_the_suites(self) -> None:
+        # Reading four JSON files must not require a Python test framework -- the reader this
+        # half of the kit exists for writes their client in another language entirely.
+        result = self._run("""
+            import sys
+            import boltzmann.conformance
+            assert "boltzmann.conformance.suite" not in sys.modules, "the suites were imported"
+            assert boltzmann.conformance.golden.VECTOR_FILES
+        """)
+        assert result.returncode == 0, result.stderr
+
+    def test_the_vectors_load_with_pytest_unavailable(self) -> None:
+        # Simulates the plain install: pytest is not importable at all.
+        result = self._run("""
+            import sys
+            sys.meta_path.insert(0, type("NoPytest", (), {
+                "find_spec": lambda self, name, *a: None if name != "pytest" else exec(
+                    'raise ModuleNotFoundError("No module named \\'pytest\\'", name="pytest")'
+                ),
+            })())
+            from boltzmann.conformance import golden
+            assert len(golden.load("block_ids.json")["vectors"]) > 0
+            assert set(golden.load_all()) == set(golden.VECTOR_FILES)
+        """)
+        assert result.returncode == 0, result.stderr
+
+    def test_a_suite_says_what_to_install_when_pytest_is_missing(self) -> None:
+        result = self._run("""
+            import sys
+            sys.meta_path.insert(0, type("NoPytest", (), {
+                "find_spec": lambda self, name, *a: None if name != "pytest" else exec(
+                    'raise ModuleNotFoundError("No module named \\'pytest\\'", name="pytest")'
+                ),
+            })())
+            try:
+                from boltzmann.conformance import BlockStoreConformance
+            except ImportError as exc:
+                assert "pyboltzmann[conformance]" in str(exc), str(exc)
+            else:
+                raise AssertionError("expected an ImportError")
+        """)
+        assert result.returncode == 0, result.stderr
+
+    def test_a_suite_still_resolves_when_pytest_is_present(self) -> None:
+        from boltzmann.conformance import BlockStoreConformance, sample_semantic
+
+        assert issubclass(BlockStoreConformance, object)
+        assert sample_semantic().label
+
+    def test_an_unknown_name_is_still_an_attribute_error(self) -> None:
+        import boltzmann.conformance
+
+        with pytest.raises(AttributeError, match="has no attribute"):
+            _ = boltzmann.conformance.NotAThing  # type: ignore[attr-defined]
+
+    def test_dir_reports_the_whole_surface(self) -> None:
+        import boltzmann.conformance
+
+        assert set(dir(boltzmann.conformance)) == set(boltzmann.conformance.__all__)

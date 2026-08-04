@@ -864,6 +864,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+conformance = [
+    { name = "pytest" },
+]
 oci = [
     { name = "oras" },
 ]
@@ -887,9 +890,10 @@ dev = [
 requires-dist = [
     { name = "oras", marker = "extra == 'oci'", specifier = ">=0.2.42" },
     { name = "pydantic", specifier = ">=2.0.0,<3.0.0" },
+    { name = "pytest", marker = "extra == 'conformance'", specifier = ">=8.0.0" },
     { name = "rfc8785", specifier = ">=0.1.4" },
 ]
-provides-extras = ["oci"]
+provides-extras = ["oci", "conformance"]
 
 [package.metadata.requires-dev]
 dev = [

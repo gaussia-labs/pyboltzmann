@@ -59,6 +59,14 @@ oci = [
     "oras>=0.2.42",
 ]
 
+# Inheriting the behavioural conformance suites needs pytest, because they *are* pytest
+# classes. An extra rather than a dependency: the golden vectors are plain JSON that ships
+# in the wheel, and the caller they exist for -- an implementation in another language --
+# has no reason to install a Python test framework to read them.
+conformance = [
+    "pytest>=8.0.0",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",

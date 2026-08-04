@@ -36,7 +36,14 @@ clients share a brain; disagree on any and they do not, whatever else they imple
 ## The behavioral suite, for Python
 
 A Python implementation inherits the suite directly. These are `pytest` classes — collect them and they
-run against your code.
+run against your code, so they need pytest:
+
+```bash
+pip install 'pyboltzmann[conformance]'
+```
+
+Without it, importing one tells you so. The vectors above are unaffected: they need neither pytest nor
+any extra.
 
 ```python
 from boltzmann.conformance import BlockStoreConformance
