@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    branches: [master, develop]
+    paths:
+      - 'src/boltzmann/**'
+      - 'pyproject.toml'
+      - '.github/workflows/release.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every version the package claims in requires-python and its classifiers. A wheel that
+        # says it supports 3.11 and is only ever tested on 3.13 is an untested claim.
+        python-version: ['3.11', '3.12', '3.13']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --all-extras --python ${{ matrix.python-version }}
+
+      - name: Lint
+        run: uv run --python ${{ matrix.python-version }} ruff check .
+
+      - name: Type check
+        run: uv run --python ${{ matrix.python-version }} mypy src/boltzmann
+
+      - name: Test
+        run: uv run --python ${{ matrix.python-version }} pytest -m "not slow"
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    concurrency: release
+    permissions:
+      id-token: write
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Python Semantic Release
+        id: release
+        uses: python-semantic-release/python-semantic-release@v9
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to PyPI
+        if: steps.release.outputs.released == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Publish to GitHub Releases
+        if: steps.release.outputs.released == 'true'
+        uses: python-semantic-release/publish-action@v9
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ steps.release.outputs.tag }}
