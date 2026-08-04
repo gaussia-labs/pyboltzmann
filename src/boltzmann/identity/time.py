@@ -41,7 +41,13 @@ def utc_timestamp(moment: datetime | None = None) -> str:
         moment = datetime.now(UTC)
     elif moment.tzinfo is None:
         moment = moment.replace(tzinfo=UTC)
-    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    utc = moment.astimezone(UTC)
+    # Formatted field by field rather than with strftime, whose `%Y` delegates to the
+    # platform's C library and pads a year below 1000 only on some of them: glibc writes
+    # `999`, BSD and macOS write `0999`. A canonical form that depends on the host libc
+    # would mean two conforming clients computing different block_id values for the same
+    # instant, which is the one divergence this module exists to prevent.
+    return f"{utc.year:04d}-{utc.month:02d}-{utc.day:02d}T{utc.hour:02d}:{utc.minute:02d}:{utc.second:02d}Z"
 
 
 def parse_timestamp(value: str) -> datetime:

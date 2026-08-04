@@ -1,5 +1,7 @@
 """Properties of identity: what must hold for any input, not just the ones we thought of."""
 
+from datetime import UTC, datetime
+
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -134,6 +136,17 @@ class TestTimestamps:
     def test_round_trips(self, moment: object) -> None:
         formatted = utc_timestamp(moment)  # type: ignore[arg-type]
         assert utc_timestamp(parse_timestamp(formatted)) == formatted
+
+    @pytest.mark.parametrize(
+        ("year", "expected"),
+        [(1, "0001"), (99, "0099"), (999, "0999"), (1000, "1000"), (2026, "2026")],
+    )
+    def test_pads_a_year_below_1000(self, year: int, expected: str) -> None:
+        # Not a hypothetical: strftime's `%Y` delegates to the platform C library, which
+        # writes year 999 as `999` under glibc and `0999` under BSD. The same instant would
+        # hash to two different block_id values depending on the host, so the padding is
+        # pinned here rather than left to libc.
+        assert utc_timestamp(datetime(year, 1, 1, tzinfo=UTC)).startswith(f"{expected}-01-01T")
 
     @pytest.mark.parametrize("value", ["2026-07-24T09:30:00+00:00", "2026-07-24 09:30:00Z", "2026-07-24"])
     def test_non_canonical_forms_are_refused(self, value: str) -> None:
