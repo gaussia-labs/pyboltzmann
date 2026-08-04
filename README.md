@@ -23,104 +23,17 @@ await brain.push(client, "ghcr.io/org/brain", "v1")
 ```
 
 The line it draws: **the SDK does whatever the protocol defines mechanically; the
-implementer supplies whatever the paper assigns elsewhere.**
+implementer supplies whatever the paper assigns elsewhere.** So identity, the wire
+formats, the four operation paths and a conformance suite are here; the model, the
+ranking, the index engines and any CLI or MCP server are yours.
 
-| The SDK does | Because |
-|---|---|
-| Identity: canonical serialization, `block_id`, Merkle roots, inclusion proofs | Two clients that disagree on these do not share a brain at all |
-| The wire formats, and their JSON Schema | Two clients that disagree cannot hand work to the same model |
-| Ingestion, query, retention, distribution | You should not have to write hashing, cascades and mark-and-sweep yourself |
-| A conformance suite and golden vectors | So an implementation can prove it conforms, in any language |
-
-| You supply | Because |
-|---|---|
-| `CandidateProposer` | What knowledge a source yields is the external model's judgment (Principle 5) |
-| `QueryPlanner` | Ranking and index selection are explicitly implementation-defined (§9.2) |
-| `Index` engines | Which engine backs an index is the implementation's choice (§6.3) |
-| An MCP server or CLI | Exposure layers, not protocol — build them on top |
+It embeds no language model. Interpretation enters through `CandidateProposer` and
+nowhere else.
 
 There are **no `NotImplementedError` stubs**, and a test enforces it. An
 unimplemented function is worse than an interface: it looks callable and is not.
 Nothing is declared and unreachable either — every type, enum member and constant
 is produced by something, and a test enforces that too.
-
-The core needs **`pydantic` and `rfc8785`**. Everything else is optional: `[oci]`
-adds a network registry transport, and moving a brain between OCI layouts on disk
-needs nothing at all.
-
-## What you plug in
-
-```python
-from boltzmann import CandidateProposer, QueryPlanner, Index, Validator, BlockStore
-from boltzmann.indices import TravellingIndex
-from boltzmann.distribution import RegistryClient
-from boltzmann.ingest import NormalizationPipeline
-from boltzmann.merkle import MerkleLayout
-
-brain = Brain.open(
-    "./my-brain",
-    actor=alex,
-    planner=MyPlanner(),                              # ranking
-    indices={MemoryType.SEMANTIC: [MyVectorIndex()]}, # engines
-    validators=[*DEFAULT_VALIDATORS, MyDomainCheck()],
-)
-```
-
-Every interface is `runtime_checkable`, so conformance is asserted rather than
-hoped for:
-
-```python
-assert isinstance(my_client, BrainReader)
-```
-
-The protocol surface is split because *read* and *extend* are separable, and most
-consumers only read: a client satisfying `BrainReader` is conforming for what it
-claims, without pretending to support writes it will refuse.
-
-An index that reports `rebuildable = False` must satisfy `TravellingIndex` — it
-ships with its module, because no client can regenerate it (§6.3).
-
-## Decisions this SDK closes
-
-The paper deliberately leaves these open (§12). An SDK cannot.
-
-- **Canonical serialization**: JCS (RFC 8785), tagged `"jcs/1"` in every envelope so
-  it stays versionable. Chosen over a binary encoding because a block is a small
-  record and the protocol targets several languages: a canonical form a human can
-  read and `grep` beats compactness here.
-- **Floats and unsafe integers are refused inside a payload.** JCS defines float
-  serialization through ECMAScript rules that are hard to reproduce identically
-  across languages, and integers outside the IEEE-754 safe range lose precision in
-  any double-backed JSON parser. Either divergence would mean two conforming clients
-  computing different `block_id` values for the same knowledge.
-- **Merkle layout**: RFC 6962 over lexicographically sorted leaves, behind
-  `MerkleLayout`. Sorting makes the root a pure function of the *set* of blocks;
-  RFC 6962 avoids the duplicate-leaf ambiguity a naive tree admits (CVE-2012-2459).
-  Internal nodes are derived, not stored.
-- **On-disk format**: the local brain *is* an OCI Image Layout, so publishing is a
-  copy rather than a conversion, and selective installation falls out of the layout.
-- **Three levels of hashes are three types.** `BlockId`, `MerkleRoot`, `OciDigest` —
-  none is a `str`, and none is interchangeable with another.
-
-## Invariants made structural
-
-The paper states these as rules. Here they are errors, each with a test in
-`tests/test_invariants.py`:
-
-- A `Candidate` is not a `Block` and has no `block_id` — an unvalidated proposal has
-  no identity, so it cannot be committed by accident.
-- `ProcessingTask` refuses to let a model propose canonical or provenance blocks.
-- `Module` exposes no write method; deriving returns a new module.
-- `EvidenceBundle` has no answer field. Not omitted — absent by design.
-- `Composition.drop()` on the episodic module raises, and **no policy can permit it**.
-- `RetentionPolicy.record_removals` is a property that is always `True` — no
-  configuration turns auditability off.
-- A `float` in a payload fails at construction.
-
-## Requirements
-
-- Python >= 3.11
-- [uv](https://docs.astral.sh/uv/)
 
 ## Installation
 
@@ -136,6 +49,12 @@ import boltzmann                 # the import package
 The two names differ because `boltzmann` on PyPI belongs to an unrelated package. It is the same split as
 `pygaussia` providing `gaussia`.
 
+The core needs **`pydantic` and `rfc8785`**. Everything else is optional: `[oci]`
+adds a network registry transport, and moving a brain between OCI layouts on disk
+needs nothing at all.
+
+Python >= 3.11.
+
 ## Usage
 
 The whole lifecycle of Section 11, against a real OCI layout:
@@ -144,7 +63,6 @@ The whole lifecycle of Section 11, against a real OCI layout:
 from boltzmann import Actor, Brain, MemoryType, Producer, Query
 from boltzmann.blocks import ActorKind, ProducerKind
 from boltzmann.ingest import Candidate, CandidateSet, RegistrationRequest
-from boltzmann.retention import DropRequest
 
 alex = Actor(id="alex", kind=ActorKind.HUMAN)
 brain = Brain.open("./my-brain", actor=alex)
@@ -188,69 +106,32 @@ assert brain.prove(block_id, MemoryType.SEMANTIC).verify(brain.root_of(MemoryTyp
 assert brain.verify()
 ```
 
-Removing knowledge, with the cascade the paper requires:
+Removing knowledge cascades through provenance, publishing is a copy rather than a
+conversion, and an implementation in any language can prove it conforms against the
+golden vectors that ship in the wheel. Each of those has a guide.
 
-```python
-source = brain.module(MemoryType.CANONICAL).block_ids[0]
+## Documentation
 
-# Ask first: a canonical drop is privileged and always cascades to what cited it.
-plan = brain.plan_drop(DropRequest(
-    blocks=[source], memory_type=MemoryType.CANONICAL, actor=alex, reason="ingested in error",
-))
-print(plan.privileged, plan.size)      # True, and how many derived blocks go with it
+The [`docs/`](https://github.com/gaussia-labs/pyboltzmann/tree/master/docs) directory
+is the source of truth, and it is published as the Boltzmann SDK section of the
+[Gaussia docs](https://github.com/gaussia-labs/docs).
 
-# Off by default: excluding evidence forfeits re-derivation from it.
-from boltzmann.retention import RetentionPolicy
-brain = Brain.open("./my-brain", actor=alex, policy=RetentionPolicy(canonical_drop_allowed=True))
-result = brain.drop(DropRequest(
-    blocks=[source], memory_type=MemoryType.CANONICAL, actor=alex, reason="ingested in error",
-))
-# One commit, several new roots. Older retained roots keep verifying exactly as before.
+<!-- Absolute URLs: this file is also the PyPI long description, where a relative link
+     resolves against pypi.org and 404s. -->
 
-brain.prune(dry_run=False)             # reclaim what no retained root needs
-```
-
-Publishing and installing:
-
-```python
-from boltzmann.distribution import LocalLayoutRegistry, OrasRegistryClient
-
-registry = OrasRegistryClient()                    # or LocalLayoutRegistry("./registry")
-await brain.push(registry, "ghcr.io/org/brain", "v1")
-
-# Selective install: one module, and the layers already held are reused by digest.
-consumer = Brain.open("./local", actor=alex)
-plan = await consumer.plan_pull(registry, "ghcr.io/org/brain", "v1")   # costs one manifest
-await consumer.pull(registry, "ghcr.io/org/brain", "v1", modules=[MemoryType.SEMANTIC])
-```
-
-A push refuses to overwrite a remote whose snapshot is absent from the local history:
-the paper defines no merge for divergent brains, so the safe move is to say where the
-two parted. `brain.pack(tag="v1")` materializes the artifact locally with no network
-at all — the directory becomes a real OCI artifact any tool can copy.
-
-## Conformance
-
-An implementation in any language must reach the same identities. The golden vectors
-ship in the wheel as plain JSON for exactly that:
-
-```python
-from boltzmann.conformance import golden
-
-for vector in golden.load("block_ids.json")["vectors"]:
-    assert my_implementation.block_id(vector["envelope"]) == vector["block_id"]
-```
-
-A Python implementation can inherit the behavioral suite directly:
-
-```python
-from boltzmann.conformance import BlockStoreConformance
-
-
-class TestMyStore(BlockStoreConformance):
-    def make_store(self):
-        return MyStore()
-```
+| | |
+|---|---|
+| [Quickstart](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/quickstart.mdx) | Ingest, query, prove, publish, remove — in one file |
+| [Architecture](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/architecture.mdx) | Blocks, compositions, modules, snapshots |
+| [Memory types](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/memory-types.mdx) | The five typed blocks and the rules each obeys |
+| [Identity](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/identity.mdx) | JCS, the three levels of hashes, the values a payload refuses |
+| [Merkle DAGs](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/merkle.mdx) | RFC 6962 over sorted leaves, and inclusion proofs |
+| [Interfaces](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/interfaces.mdx) | The protocol surface, and the four things you plug in |
+| [Ingestion](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/guides/ingestion.mdx) | Preserve the source, delegate the interpretation, validate |
+| [Query](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/guides/query.mdx) | Evidence Bundles, filters, and supplying a planner |
+| [Retention](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/guides/retention.mdx) | Drop, supersede, demote, prune, redact |
+| [Distribution](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/guides/distribution.mdx) | Pack, push, pull, and selective installs |
+| [Conformance](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/guides/conformance.mdx) | Golden vectors, and the suites you inherit |
 
 ## Development
 
@@ -269,4 +150,4 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/) — 
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/gaussia-labs/pyboltzmann/blob/master/LICENSE).
