@@ -294,6 +294,12 @@ version_variables = ["src/boltzmann/__init__.py:__version__"]
 build_command = "pip install build && python -m build"
 commit_message = "chore(release): v{version}"
 tag_format = "v{version}"
+# Stay in 0.x until 1.0.0 is a deliberate decision rather than a side effect of the first
+# `feat` commit. Without these, semantic-release's defaults read a feature at 0.1.0 as
+# "time for 1.0.0" and publish an API-stability promise nobody made -- and they would
+# contradict `major_version_zero` under [tool.commitizen], which already says otherwise.
+allow_zero_version = true
+major_on_zero = false
 
 [tool.semantic_release.branches.master]
 match = "master"
