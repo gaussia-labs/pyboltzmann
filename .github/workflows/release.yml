@@ -64,11 +64,13 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Trusted publishing: PyPI verifies the OIDC token this job mints against the
+      # publisher registered for the project, so there is no API token to store, leak
+      # or rotate. That is what `id-token: write` above is for, and why this step
+      # passes no credentials at all.
       - name: Publish to PyPI
         if: steps.release.outputs.released == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
 
       - name: Publish to GitHub Releases
         if: steps.release.outputs.released == 'true'
