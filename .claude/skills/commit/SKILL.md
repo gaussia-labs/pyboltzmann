@@ -62,11 +62,11 @@ Use `uv run cz check --message "<msg>"` to validate a message if unsure it parse
 Good:
 
 ```
-feat(merkle): add RFC 6962 inclusion proofs over sorted leaves
+feat(merkle): add RFC 9162 inclusion proofs over sorted leaves
 
 Sorting the leaves makes the root a function of the block set rather than
 of insertion order, which is what lets two clients that assembled the same
-blocks agree on a root. RFC 6962 is used over a naive binary tree because
+blocks agree on a root. RFC 9162 is used over a naive binary tree because
 it has no duplicate-leaf ambiguity (CVE-2012-2459).
 ```
 

@@ -125,7 +125,7 @@ is the source of truth, and it is published as the Boltzmann SDK section of the
 | [Architecture](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/architecture.mdx) | Blocks, compositions, modules, snapshots |
 | [Memory types](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/memory-types.mdx) | The five typed blocks and the rules each obeys |
 | [Identity](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/identity.mdx) | JCS, the three levels of hashes, the values a payload refuses |
-| [Merkle DAGs](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/merkle.mdx) | RFC 6962 over sorted leaves, and inclusion proofs |
+| [Merkle DAGs](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/merkle.mdx) | RFC 9162 over sorted leaves, and inclusion proofs |
 | [Interfaces](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/interfaces.mdx) | The protocol surface, and the four things you plug in |
 | [Ingestion](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/guides/ingestion.mdx) | Preserve the source, delegate the interpretation, validate |
 | [Query](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/guides/query.mdx) | Evidence Bundles, filters, and supplying a planner |

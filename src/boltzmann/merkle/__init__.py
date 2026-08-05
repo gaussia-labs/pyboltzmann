@@ -7,7 +7,7 @@ from boltzmann.merkle.tree import (
     DEFAULT_LAYOUT,
     LAYOUT_NAME,
     MerkleTree,
-    SortedRfc6962Layout,
+    SortedRfc9162Layout,
     merkle_root,
     sorted_leaves,
 )
@@ -20,7 +20,7 @@ __all__ = [
     "MerkleLayout",
     "MerkleTree",
     "NodeHash",
-    "SortedRfc6962Layout",
+    "SortedRfc9162Layout",
     "diff",
     "is_node_hash",
     "merkle_root",
