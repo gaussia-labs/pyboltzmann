@@ -382,7 +382,14 @@ def parse_manifest(data: bytes) -> BrainManifest:
     if version != OCI_SCHEMA_VERSION:
         raise DistributionError(f"manifest declares schemaVersion {version!r}; OCI fixes it at {OCI_SCHEMA_VERSION}")
 
-    declared = document.get("annotations", {}).get(ANNOTATION_PROTOCOL_VERSION)
+    # Every field here is registry-supplied, so its *type* is untrusted too. Calling ``.get`` on
+    # whatever ``annotations`` happened to be turned a hostile manifest into an AttributeError rather
+    # than the DistributionError this function documents.
+    annotations = document.get("annotations", {})
+    if not isinstance(annotations, dict):
+        raise DistributionError(f"manifest annotations must be an object, got {type(annotations).__name__}")
+
+    declared = annotations.get(ANNOTATION_PROTOCOL_VERSION)
     if declared is not None and declared != str(PROTOCOL_VERSION):
         raise DistributionError(
             f"artifact declares protocol version {declared!r}, this client implements {PROTOCOL_VERSION}"

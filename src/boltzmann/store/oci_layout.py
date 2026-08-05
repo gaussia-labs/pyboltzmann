@@ -70,11 +70,12 @@ class OciLayoutStore(AbstractBlockStore):
             ModuleError: If the directory exists but is not a usable OCI layout.
         """
         self.root = Path(root)
+        self._tombstone_cache: dict[str, str] | None = None
+        self._tombstone_stamp: tuple[int, int] | None = None
         if create:
             self._initialize()
         else:
             self._require_layout()
-        self._tombstone_cache: dict[str, str] | None = None
 
     # --- Layout ---------------------------------------------------------------
 
@@ -89,10 +90,17 @@ class OciLayoutStore(AbstractBlockStore):
         return self.root / SIDECAR_DIR
 
     def _initialize(self) -> None:
+        marker = self.root / LAYOUT_MARKER
+        # Creating is not a licence to adopt whatever is already here. A directory that
+        # declares a layout version this client does not implement is a foreign layout, and
+        # writing blobs into it would corrupt somebody else's format -- so the same check
+        # ``create=False`` performs runs first whenever there is something to check.
+        if marker.exists():
+            self._require_version(marker)
+
         self.blobs_dir.mkdir(parents=True, exist_ok=True)
         self.sidecar_dir.mkdir(parents=True, exist_ok=True)
 
-        marker = self.root / LAYOUT_MARKER
         if not marker.exists():
             self._write_json(marker, {"imageLayoutVersion": IMAGE_LAYOUT_VERSION})
 
@@ -107,13 +115,19 @@ class OciLayoutStore(AbstractBlockStore):
         marker = self.root / LAYOUT_MARKER
         if not marker.is_file():
             raise ModuleError(f"{self.root} is not an OCI layout: {LAYOUT_MARKER} is missing")
-        version = json.loads(marker.read_text()).get("imageLayoutVersion")
+        self._require_version(marker)
+        if not self.blobs_dir.is_dir():
+            raise ModuleError(f"{self.root} is not an OCI layout: {BLOBS_DIR}/{ALGORITHM} is missing")
+
+    def _require_version(self, marker: Path) -> None:
+        document = self._read_json(marker, "layout marker")
+        if not isinstance(document, dict):
+            raise ModuleError(f"{marker} must hold an object, got {type(document).__name__}")
+        version = document.get("imageLayoutVersion")
         if version != IMAGE_LAYOUT_VERSION:
             raise ModuleError(
                 f"{self.root} declares image layout version {version!r}, expected {IMAGE_LAYOUT_VERSION!r}"
             )
-        if not self.blobs_dir.is_dir():
-            raise ModuleError(f"{self.root} is not an OCI layout: {BLOBS_DIR}/{ALGORITHM} is missing")
 
     def index(self) -> dict[str, Any]:
         """
@@ -122,8 +136,13 @@ class OciLayoutStore(AbstractBlockStore):
         Returns:
             dict[str, Any]: The parsed ``index.json``. Manifests are appended by the
             distribution layer when a snapshot is published.
+
+        Raises:
+            ModuleError: If the index is absent or is not a JSON object.
         """
-        index: dict[str, Any] = json.loads((self.root / INDEX_FILE).read_text())
+        index = self._read_json(self.root / INDEX_FILE, "image index")
+        if not isinstance(index, dict):
+            raise ModuleError(f"{self.root / INDEX_FILE} must hold an object, got {type(index).__name__}")
         return index
 
     def write_index(self, index: dict[str, Any]) -> None:
@@ -275,14 +294,56 @@ class OciLayoutStore(AbstractBlockStore):
     # --- Sidecar state --------------------------------------------------------
 
     def _tombstones(self) -> dict[str, str]:
-        if self._tombstone_cache is None:
-            path = self.sidecar_dir / TOMBSTONES_FILE
-            self._tombstone_cache = json.loads(path.read_text()) if path.is_file() else {}
+        """The redaction map, reloaded whenever the file behind it moved.
+
+        Caching this for the life of the handle was wrong in the one case that matters: a
+        reader opened before a redaction kept an empty map, so ``has`` answered ``False`` for a
+        redacted digest and the block read as *missing* rather than *tombstoned*. That is
+        exactly the distinction Section 10.6 requires a conforming store to preserve, and two
+        handles on one directory -- a reader beside a writer -- is the ordinary deployment, not
+        an exotic one. So the cache is keyed on the file's mtime and size and drops itself when
+        either moves.
+        """
+        path = self.sidecar_dir / TOMBSTONES_FILE
+        try:
+            status = path.stat()
+            stamp: tuple[int, int] | None = (status.st_mtime_ns, status.st_size)
+        except OSError:
+            stamp = None
+
+        if self._tombstone_cache is None or stamp != self._tombstone_stamp:
+            document = self._read_json(path, "tombstone record") if stamp is not None else {}
+            if not isinstance(document, dict):
+                raise ModuleError(f"{path} must hold an object, got {type(document).__name__}")
+            self._tombstone_cache = document
+            self._tombstone_stamp = stamp
         return self._tombstone_cache
 
     def _write_tombstones(self, tombstones: dict[str, str]) -> None:
-        self._write_json(self.sidecar_dir / TOMBSTONES_FILE, tombstones)
+        path = self.sidecar_dir / TOMBSTONES_FILE
+        self._write_json(path, tombstones)
         self._tombstone_cache = tombstones
+        try:
+            status = path.stat()
+            self._tombstone_stamp = (status.st_mtime_ns, status.st_size)
+        except OSError:  # pragma: no cover - the write above just created it
+            self._tombstone_stamp = None
+
+    @staticmethod
+    def _read_json(path: Path, what: str) -> Any:
+        """Parse a layout file, reporting a corrupt one as a layout problem.
+
+        These files are on disk and outside this client's control, so malformed content is a
+        condition to report rather than a bug to crash on: every caller documents
+        :class:`~boltzmann.exceptions.ModuleError`, and a bare ``JSONDecodeError`` is neither
+        catchable as that nor actionable.
+        """
+        try:
+            return json.loads(path.read_text())
+        except FileNotFoundError:
+            raise ModuleError(f"{path} is missing, so the {what} cannot be read") from None
+        except json.JSONDecodeError as error:
+            raise ModuleError(f"{path} is not valid JSON, so the {what} cannot be read: {error}") from error
 
     @staticmethod
     def _write_json(path: Path, payload: Any) -> None:
