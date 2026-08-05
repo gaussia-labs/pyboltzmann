@@ -45,6 +45,13 @@ class LocalLayoutRegistry:
         """
         The layout backing one repository reference.
 
+        A reference names a repository *within* this registry, so it has to resolve inside the
+        root. Joining it straight on did not guarantee that: ``pathlib`` lets an absolute
+        reference replace the root outright, and ``..`` walks out of it, so a reference arriving
+        from configuration or a manifest could address anything the process can reach. It is
+        checked rather than sanitised -- quietly rewriting a reference would file an artifact
+        under a name the caller did not ask for.
+
         Args:
             reference (str): Repository reference. Path separators in it become directories.
             create (bool): Whether to initialize the layout if absent.
@@ -53,9 +60,16 @@ class LocalLayoutRegistry:
             OciLayoutStore: The layout.
 
         Raises:
-            DistributionError: If the layout does not exist and ``create`` is false.
+            DistributionError: If the reference escapes the registry root, or the layout does not
+                exist and ``create`` is false.
         """
         path = self.root / reference.replace(":", "_")
+        root = self.root.resolve()
+        resolved = path.resolve()
+        if resolved != root and root not in resolved.parents:
+            raise DistributionError(
+                f"reference {reference!r} resolves to {resolved}, which is outside the registry root {root}"
+            )
         if not create and not (path / "oci-layout").is_file():
             raise DistributionError(f"no artifact published at {reference}")
         return OciLayoutStore(path, create=create)

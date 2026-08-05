@@ -44,6 +44,34 @@ BLOB_PREFIX = "blobs/"
 GZIP_LEVEL = 9
 """Compression level. Fixed, because it is part of what makes the layer digest reproducible."""
 
+INFLATE_CHUNK = 1 << 20
+"""How much of a layer is decompressed per read while the running total is checked."""
+
+MAX_EXPANSION_RATIO = 100
+"""How far a layer may expand relative to its compressed size.
+
+A descriptor states the size of the *compressed* blob, so it says nothing directly about what
+decompressing costs -- which is why the bound is a ratio. A layer is a tar of block envelopes and
+observed bytes: the JSON compresses well and the sources usually do not, so a real brain lands far
+below this. A gzip bomb does not, and cannot: to exceed the bound it has to grow the blob the
+consumer already agreed to download.
+"""
+
+MIN_INFLATE_ALLOWANCE = 8 << 20
+"""Floor on the ceiling, so a tiny layer is never refused for being efficiently compressed.
+
+A module of a few blocks compresses to almost nothing, and a strict ratio against that would reject
+it. Eight megabytes is small enough to be harmless and large enough that no legitimate small layer
+meets it.
+"""
+
+DEFAULT_MAX_INFLATED = 4 << 30
+"""Absolute backstop, whatever the ratio permits.
+
+A layer that decompresses to more than this is beyond what unpacking into memory can serve, hostile
+or not.
+"""
+
 
 def required_blobs(module: Module) -> list[Digest]:
     """
@@ -115,7 +143,45 @@ def _add(archive: tarfile.TarFile, name: str, payload: bytes) -> None:
     archive.addfile(info, io.BytesIO(payload))
 
 
-def unpack_layer(data: bytes, store: BlockStore) -> Composition:
+def _inflate(data: bytes, limit: int) -> bytes:
+    """
+    Decompress a layer, refusing to exceed ``limit`` bytes.
+
+    A layer arrives from a registry, so its expansion ratio is chosen by whoever published it.
+    Reading the stream to exhaustion let a small blob cost the consumer arbitrary memory --
+    measured at over a thousandfold on an input built for it. Reading in chunks against a ceiling
+    costs nothing on a well-formed layer and turns the hostile case into a refusal.
+
+    Args:
+        data (bytes): The compressed layer.
+        limit (int): Most bytes the decompressed layer may occupy.
+
+    Returns:
+        bytes: The decompressed tar.
+
+    Raises:
+        DistributionError: If the layer is not readable gzip, or expands past ``limit``.
+    """
+    inflated = io.BytesIO()
+    seen = 0
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(data), mode="rb") as stream:
+            while chunk := stream.read(INFLATE_CHUNK):
+                seen += len(chunk)
+                if seen > limit:
+                    raise DistributionError(
+                        f"layer expands to more than {limit} bytes from {len(data)} compressed; refusing to "
+                        f"decompress further. A layer's expansion is chosen by its publisher, so an "
+                        f"unbounded read is an unbounded cost to whoever pulls it."
+                    )
+                inflated.write(chunk)
+    except (OSError, EOFError) as error:
+        # EOFError is what a truncated gzip stream raises, and it is not an OSError.
+        raise DistributionError(f"layer is not a readable gzip stream: {error}") from error
+    return inflated.getvalue()
+
+
+def unpack_layer(data: bytes, store: BlockStore, max_size: int | None = None) -> Composition:
     """
     Unpack a layer into a store and recover the composition it carries.
 
@@ -123,32 +189,38 @@ def unpack_layer(data: bytes, store: BlockStore) -> Composition:
     tampered with cannot land under the digest it claims: the digest is recomputed from the bytes.
     The recovered composition is then checked against the blobs actually present.
 
+    **The expansion is bounded.** These bytes came from a registry, and the compression ratio is
+    whoever published them's choice, not this client's. By default the layer may expand to
+    :data:`MAX_EXPANSION_RATIO` times its own compressed size -- so the only way to make unpacking
+    expensive is to make the download expensive first, which the consumer already saw and agreed
+    to. A caller that knows the real bound may state it as ``max_size``.
+
     Args:
         data (bytes): The layer blob.
         store (BlockStore): Where to write the unpacked blobs.
+        max_size (int | None): Most bytes the layer may decompress to. Defaults to the ratio bound.
 
     Returns:
         Composition: The composition the layer carries.
 
     Raises:
-        DistributionError: If the layer is malformed, lacks its composition document, or names a block
-            it did not carry.
+        DistributionError: If the layer is malformed, expands past the bound, lacks its
+            composition document, or names a block it did not carry.
     """
+    allowed = max(len(data) * MAX_EXPANSION_RATIO, MIN_INFLATE_ALLOWANCE) if max_size is None else max_size
+    limit = min(allowed, DEFAULT_MAX_INFLATED)
+
     entries: dict[str, bytes] = {}
     try:
-        with (
-            gzip.GzipFile(fileobj=io.BytesIO(data), mode="rb") as stream,
-            tarfile.open(fileobj=io.BytesIO(stream.read()), mode="r") as archive,
-        ):
+        with tarfile.open(fileobj=io.BytesIO(_inflate(data, limit)), mode="r") as archive:
             for member in archive.getmembers():
                 if not member.isfile():
                     continue
                 extracted = archive.extractfile(member)
                 if extracted is not None:
                     entries[member.name] = extracted.read()
-    except (OSError, EOFError, tarfile.TarError) as error:
-        # EOFError is what a truncated gzip stream raises, and it is not an OSError.
-        raise DistributionError(f"layer is not a readable gzipped tar: {error}") from error
+    except (OSError, tarfile.TarError) as error:
+        raise DistributionError(f"layer is not a readable tar: {error}") from error
 
     document = entries.pop(COMPOSITION_ENTRY, None)
     if document is None:
