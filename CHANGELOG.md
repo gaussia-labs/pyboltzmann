@@ -1,6 +1,110 @@
 # CHANGELOG
 
 
+## v0.2.0-b.4 (2026-08-05)
+
+### Bug Fixes
+
+- **brain**: Spare shared content on redaction, and make a producer drop atomic
+  ([`b904bfb`](https://github.com/gaussia-labs/pyboltzmann/commit/b904bfb14651f67e75bc9255e5ba06c659594f9b))
+
+`redact` tombstoned every digest its target named, without asking whether another block named the
+  same bytes. Two canonical blocks over one blob is not exotic -- registering a source under two
+  media types produces exactly that -- so redacting either destroyed the other's evidence while the
+  survivor stayed a resolvable member of its composition and `verify` kept passing. Only content no
+  surviving block names is destroyed now, and `redacted` reports what was held back by not listing
+  it.
+
+`drop_by_producer` looped over `drop` per module. Each call published its own snapshot, so one
+  logical invalidation became N versions; the returned DropResult was the last iteration's, so every
+  module dropped before it was invisible to the caller; and a policy refusal part-way through left
+  the earlier drops committed with nothing to undo them. Everything is planned and authorized first,
+  then written once -- the guarantee `drop` already gave for its own cascade.
+
+`pull` also took its module list from the manifest's layers and the expected root from the config
+  blob, with nothing forcing the two to agree, so an inconsistent artifact escaped as a bare
+  KeyError.
+
+- **distribution**: Bound and validate what a registry can hand a consumer
+  ([`a861b4a`](https://github.com/gaussia-labs/pyboltzmann/commit/a861b4ac57c0194d5a39d70b3e0371c434f0c9a8))
+
+`unpack_layer` read the gzip stream to exhaustion: a 398 KB layer expanded to 419 MB, a ratio the
+  publisher chooses and the consumer pays. Expansion is now capped relative to the compressed size,
+  so making unpacking expensive means making the download expensive first.
+
+`parse_manifest` called `.get` on whatever `annotations` happened to be. Untrusted input means
+  untrusted types, not just untrusted values.
+
+`LocalLayoutRegistry` joined a reference onto its root and trusted the result, which an absolute or
+  `..` reference walks straight out of. Refused rather than sanitised: rewriting a reference would
+  file an artifact under a name nobody asked for.
+
+- **retention**: Stop a corrupt block from making prune reclaim live evidence
+  ([`cd466c4`](https://github.com/gaussia-labs/pyboltzmann/commit/cd466c46940590159b049b544f421b4311235c7e))
+
+`mark` reached every block through a bare `except Exception`, so BlockIntegrityError was
+  indistinguishable from "the bytes are gone". A single corrupt envelope therefore dropped that
+  block's content from the marked set, and the sweep reclaimed evidence a retained root still named
+  -- a bit flip turning into permanent loss, on the one call documented as reclaiming only what
+  nothing needs.
+
+Only absence and redaction are tolerated now. Corruption propagates and stops the sweep: a prune
+  that declined can be run again once the block is restored or explicitly redacted, and a prune that
+  ran cannot be undone.
+
+- **store**: Validate layouts on open and reload tombstones when they move
+  ([`963d1bf`](https://github.com/gaussia-labs/pyboltzmann/commit/963d1bfb592464d18ac80a852243469e5397212d))
+
+The image-layout-version check lived on the `create=False` path, and `Brain.open` always passes
+  `create=True` -- so the guard every caller relied on was unreachable from the public API, and a
+  directory declaring a foreign layout was adopted in silence and then written into.
+
+The tombstone map was cached for the life of the handle. A reader opened before a redaction kept the
+  stale map, so `has()` answered False for a redacted digest and the block read as *missing* rather
+  than *tombstoned* -- the one distinction Section 10.6 requires a store to preserve, broken by the
+  ordinary case of a reader running beside a writer. It is keyed on the file's mtime and size now.
+
+Layout files also go through one guarded reader, so a corrupt `oci-layout`, `index.json` or
+  tombstone record raises ModuleError instead of leaking JSONDecodeError past the documented
+  surface.
+
+### Performance Improvements
+
+- Derive once what three hot paths were recomputing per question
+  ([`be5ce2c`](https://github.com/gaussia-labs/pyboltzmann/commit/be5ce2c61a51397e3f73e4d456494b84339f5dbb))
+
+None of these were wrong, and all of them stopped a brain from growing.
+
+`MerkleTree` rebuilt every sibling subtree hash from the leaves on each proof, so a
+  whole-composition `verify` was quadratic: 2000 blocks took four seconds and doubling the module
+  quadrupled it. Internal nodes are cached for the life of the tree -- there are O(n) of them and
+  nothing is persisted, so the storage story is unchanged -- and the same 2000 blocks now take 28ms.
+  Membership and index lookups stopped being linear scans too.
+
+The cascade called `structural_dependents` per origin and per frontier block, decoding every
+  semantic and procedural block each time: planning a 50-block drop in a 400-block module cost 20
+  000 decodes. The structural edges are inverted once per batch, which makes planning flat in the
+  number of blocks named -- 354ms to 7ms -- and the frontier walk no longer re-flattens its
+  accumulated set every iteration.
+
+The validation gate typed each candidate four times and, on a contradiction, scanned the whole
+  semantic module twice for the same answer. Held blocks are grouped by the claim they make once per
+  gate call, so a batch commit costs one pass over the module rather than one per candidate: 25
+  candidates against a 400-block module now cost what one did.
+
+### Testing
+
+- Cover the audit's findings as regressions
+  ([`a986c04`](https://github.com/gaussia-labs/pyboltzmann/commit/a986c04a7ed479cee42e5474d298b2be63e3e026))
+
+Fourteen tests, none of them reachable from the existing suite, which passed throughout. Each states
+  the invariant that was being violated rather than just asserting an outcome, so a change that
+  reintroduces one fails against the reasoning.
+
+The scaling tests assert on shape -- that doubling the input does not quadruple the work -- rather
+  than on absolute times, so they do not become a flaky benchmark on a loaded machine.
+
+
 ## v0.2.0-b.3 (2026-08-05)
 
 ### Refactoring
