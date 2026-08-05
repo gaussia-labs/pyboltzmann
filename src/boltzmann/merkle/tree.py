@@ -35,7 +35,7 @@ from boltzmann.identity.hashing import hash_empty, hash_leaf, hash_node
 from boltzmann.merkle.proof import InclusionProof
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Iterable
 
 LAYOUT_NAME = "rfc6962-sorted/1"
 """Identifier of this layout, recorded alongside a snapshot.
@@ -68,15 +68,6 @@ def sorted_leaves(block_ids: Iterable[BlockId]) -> list[BlockId]:
     return sorted(set(block_ids), key=lambda block_id: block_id.raw)
 
 
-def _subtree_hash(leaves: Sequence[bytes], start: int, end: int) -> bytes:
-    """Compute ``MTH(D[start:end])`` without copying slices."""
-    span = end - start
-    if span == 1:
-        return hash_leaf(leaves[start])
-    split = start + _largest_power_of_two_below(span)
-    return hash_node(_subtree_hash(leaves, start, split), _subtree_hash(leaves, split, end))
-
-
 def _largest_power_of_two_below(n: int) -> int:
     """The largest power of two strictly smaller than ``n``, for ``n > 1``."""
     return 1 << ((n - 1).bit_length() - 1)
@@ -99,12 +90,40 @@ class MerkleTree:
         """
         self.leaves = sorted_leaves(block_ids)
         self._raw = [block_id.raw for block_id in self.leaves]
+        self._members = frozenset(self.leaves)
+        self._index = {block_id: position for position, block_id in enumerate(self.leaves)}
+        self._nodes: dict[tuple[int, int], bytes] = {}
+        """Internal node hashes, keyed by the span they cover.
+
+        Nothing here is persisted -- a stored composition is still just the leaf list, and these
+        are still 32 bytes of scaffolding derived on demand. What changed is that they are derived
+        *once* per tree rather than once per question. Every proof asks for sibling subtree hashes,
+        and recomputing each from the leaves made a whole-composition ``verify`` quadratic: at 2000
+        blocks it took four seconds, and doubling the module quadrupled that. The recursion only
+        ever visits the O(n) spans the canonical split produces, so this cache is linear in the
+        composition and turns ``verify`` into O(n log n).
+        """
+
+    def _subtree_hash(self, start: int, end: int) -> bytes:
+        """``MTH(D[start:end])``, computed once and remembered."""
+        cached = self._nodes.get((start, end))
+        if cached is not None:
+            return cached
+
+        if end - start == 1:
+            computed = hash_leaf(self._raw[start])
+        else:
+            split = start + _largest_power_of_two_below(end - start)
+            computed = hash_node(self._subtree_hash(start, split), self._subtree_hash(split, end))
+
+        self._nodes[(start, end)] = computed
+        return computed
 
     def __len__(self) -> int:
         return len(self.leaves)
 
     def __contains__(self, block_id: object) -> bool:
-        return isinstance(block_id, BlockId) and block_id in set(self.leaves)
+        return block_id in self._members
 
     @property
     def name(self) -> str:
@@ -121,7 +140,7 @@ class MerkleTree:
         """
         if not self._raw:
             return MerkleRoot.from_raw(hash_empty())
-        return MerkleRoot.from_raw(_subtree_hash(self._raw, 0, len(self._raw)))
+        return MerkleRoot.from_raw(self._subtree_hash(0, len(self._raw)))
 
     def index_of(self, block_id: BlockId) -> int:
         """
@@ -137,8 +156,8 @@ class MerkleTree:
             MerkleError: If the block is not part of this composition.
         """
         try:
-            return self.leaves.index(block_id)
-        except ValueError:
+            return self._index[block_id]
+        except KeyError:
             raise MerkleError(f"block {block_id.short} is not in this composition") from None
 
     def inclusion_proof(self, block_id: BlockId) -> InclusionProof:
@@ -171,10 +190,10 @@ class MerkleTree:
         split = start + _largest_power_of_two_below(end - start)
         if start + index < split:
             self._collect_path(index, start, split, path)
-            path.append(_subtree_hash(self._raw, split, end).hex())
+            path.append(self._subtree_hash(split, end).hex())
         else:
             self._collect_path(start + index - split, split, end, path)
-            path.append(_subtree_hash(self._raw, start, split).hex())
+            path.append(self._subtree_hash(start, split).hex())
 
     def verify(self) -> bool:
         """

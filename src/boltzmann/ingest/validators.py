@@ -15,7 +15,9 @@ never be committed. A well-formed proposal that disagrees with knowledge already
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
@@ -25,10 +27,133 @@ from boltzmann.identity.digest import BlockId
 from boltzmann.ingest.validation import ValidationIssue
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
+
     from boltzmann.identity.digest import BlockId
     from boltzmann.ingest.proposer import Candidate
     from boltzmann.ingest.task import ProcessingTask
     from boltzmann.module.module import Module
+
+
+_GATE_CACHE: ContextVar[dict[tuple[str, int], tuple[Exception | None, Any]] | None] = ContextVar(
+    "boltzmann_gate_cache", default=None
+)
+"""Work shared between the checks of one gate pass, or ``None`` outside one.
+
+Every check gets the same candidate and the same modules, and several of them need the same two
+answers: the candidate typed, and which held blocks it contradicts. Recomputing both per check meant
+typing one payload four times and walking the whole semantic module twice. Neither answer can change
+during a pass -- the gate writes nothing -- so each is computed once and kept for its duration.
+
+Keyed on ``id(candidate)``, which is sound only because :func:`gate_pass` scopes the cache to a
+region where the candidate list holds every candidate alive. A :class:`ContextVar` rather than a
+module global so that two gates running concurrently, in threads or in tasks, cannot see each
+other's entries.
+"""
+
+
+_BATCH_CACHE: ContextVar[dict[int, Any] | None] = ContextVar("boltzmann_gate_batch", default=None)
+"""Work shared across every candidate of one gate call, or ``None`` outside one.
+
+Some of what a check needs depends on the installed modules and not on the candidate at all --
+which held blocks make which claim, above all. That answer is the same for every candidate in the
+set, so computing it per candidate made a batch commit cost candidates x blocks when it should cost
+blocks. The gate writes nothing until it returns, so the modules cannot move underneath this.
+"""
+
+
+@contextmanager
+def gate_pass() -> Iterator[None]:
+    """
+    Share derived work between the checks of one validation pass.
+
+    Outside this context every helper recomputes, which is what a caller invoking a single
+    validator directly should get.
+
+    Returns:
+        Iterator[None]: A context in which the gate's helpers memoize.
+    """
+    token = _GATE_CACHE.set({})
+    try:
+        yield
+    finally:
+        _GATE_CACHE.reset(token)
+
+
+@contextmanager
+def gate_batch() -> Iterator[None]:
+    """
+    Share module-derived work across every candidate of one gate call.
+
+    Wider than :func:`gate_pass`, which is per candidate. What lives here depends only on what is
+    installed, so it survives from one candidate to the next.
+
+    Returns:
+        Iterator[None]: A context in which module-derived answers are computed once.
+    """
+    token = _BATCH_CACHE.set({})
+    try:
+        yield
+    finally:
+        _BATCH_CACHE.reset(token)
+
+
+def _claim_index(modules: dict[MemoryType, Module]) -> dict[tuple[str, str | None, str], list[BlockId]]:
+    """
+    Group the held semantic blocks by the claim they make, in one pass.
+
+    A contradiction is "same label, same subject, same kind, different statement", so the first
+    three are a lookup key and only the last has to be compared. Deciding it by walking and decoding
+    every semantic block per candidate is what made the gate scale as candidates x blocks.
+
+    Args:
+        modules (dict[MemoryType, Module]): The installed modules.
+
+    Returns:
+        dict[tuple[str, str | None, str], list[BlockId]]: Held blocks by the claim they state.
+    """
+    cache = _BATCH_CACHE.get()
+    if cache is not None and (hit := cache.get(id(modules))) is not None:
+        return hit  # type: ignore[no-any-return]
+
+    index: dict[tuple[str, str | None, str], list[BlockId]] = {}
+    module = modules.get(MemoryType.SEMANTIC)
+    if module is not None:
+        for block_id in module.block_ids:
+            if not module.store.is_resolvable(block_id):
+                continue
+            held = module.get(block_id)
+            if isinstance(held, SemanticBlock):
+                index.setdefault((held.label, held.subject, held.kind.value), []).append(block_id)
+
+    if cache is not None:
+        cache[id(modules)] = index
+    return index
+
+
+def _shared(kind: str, candidate: Candidate, compute: Callable[[], Any]) -> Any:
+    """``compute()``, memoized for the rest of this gate pass.
+
+    A failure is remembered too, and re-raised. Four of the checks type the candidate inside a
+    ``try`` precisely so a malformed payload is reported once rather than by all of them, so
+    caching only successes would leave the rejected path -- the one where a payload is worst
+    behaved -- paying the full cost every time.
+    """
+    cache = _GATE_CACHE.get()
+    if cache is None:
+        return compute()
+
+    key = (kind, id(candidate))
+    if key not in cache:
+        try:
+            cache[key] = (None, compute())
+        except Exception as error:
+            cache[key] = (error, None)
+
+    failure, value = cache[key]
+    if failure is not None:
+        raise failure
+    return value
 
 
 def build_block(candidate: Candidate) -> Block:
@@ -51,6 +176,11 @@ def build_block(candidate: Candidate) -> Block:
         BlockSchemaError: If no schema is registered for the proposed memory type, or the payload does not
             satisfy it.
     """
+    return cast("Block", _shared("block", candidate, lambda: _type_candidate(candidate)))
+
+
+def _type_candidate(candidate: Candidate) -> Block:
+    """The uncached half of :func:`build_block`."""
     registry = Block.registry()
     versions = sorted(version for kind, version in registry if kind is candidate.memory_type)
     if not versions:
@@ -336,38 +466,27 @@ class ContradictionValidator:
             list[ValidationIssue]: One issue per conflicting block found, each naming it.
         """
         module = modules.get(MemoryType.SEMANTIC)
-        if module is None or candidate.memory_type is not MemoryType.SEMANTIC:
-            return []
-        try:
-            proposed = build_block(candidate)
-        except (BlockSchemaError, ValueError):
-            return []
-        if not isinstance(proposed, SemanticBlock):
+        if module is None:
             return []
 
+        # The same scan ``conflicts_for`` performs, so it is done once and shared: the gate calls both
+        # for a contradicted proposal, and each walking the whole semantic module independently made
+        # the cost of one candidate two full passes over the brain.
         issues = []
-        for block_id in module.block_ids:
-            if not module.store.is_resolvable(block_id):
-                continue
+        for block_id in conflicts_for(candidate, modules):
             held = module.get(block_id)
-            if not isinstance(held, SemanticBlock):
+            if not isinstance(held, SemanticBlock):  # pragma: no cover - conflicts_for only returns these
                 continue
-            if (
-                held.label == proposed.label
-                and held.subject == proposed.subject
-                and held.kind is proposed.kind
-                and held.statement != proposed.statement
-            ):
-                issues.append(
-                    ValidationIssue(
-                        code=self.code,
-                        detail=(
-                            f"block {block_id.short} already states {held.label!r} as "
-                            f"{held.statement!r}, which differs from the proposal"
-                        ),
-                        field="statement",
-                    )
+            issues.append(
+                ValidationIssue(
+                    code=self.code,
+                    detail=(
+                        f"block {block_id.short} already states {held.label!r} as "
+                        f"{held.statement!r}, which differs from the proposal"
+                    ),
+                    field="statement",
                 )
+            )
         return issues
 
 
@@ -385,6 +504,11 @@ def conflicts_for(candidate: Candidate, modules: dict[MemoryType, Module]) -> li
     Returns:
         list[BlockId]: The conflicting blocks, in a stable order.
     """
+    return cast("list[BlockId]", _shared("conflicts", candidate, lambda: _scan_for_conflicts(candidate, modules)))
+
+
+def _scan_for_conflicts(candidate: Candidate, modules: dict[MemoryType, Module]) -> list[BlockId]:
+    """The uncached half of :func:`conflicts_for`: a lookup into the shared claim index."""
     module = modules.get(MemoryType.SEMANTIC)
     if module is None or candidate.memory_type is not MemoryType.SEMANTIC:
         return []
@@ -395,12 +519,9 @@ def conflicts_for(candidate: Candidate, modules: dict[MemoryType, Module]) -> li
     if not isinstance(proposed, SemanticBlock):
         return []
 
+    stating_the_same = _claim_index(modules).get((proposed.label, proposed.subject, proposed.kind.value), [])
     return sorted(
-        (
-            block_id
-            for block_id in module.block_ids
-            if module.store.is_resolvable(block_id) and _same_claim(module.get(block_id), proposed)
-        ),
+        (block_id for block_id in stating_the_same if _same_claim(module.get(block_id), proposed)),
         key=lambda value: value.hex,
     )
 
