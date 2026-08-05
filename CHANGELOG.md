@@ -1,6 +1,45 @@
 # CHANGELOG
 
 
+## v0.2.0-b.3 (2026-08-05)
+
+### Refactoring
+
+- **merkle**: Cite RFC 9162 instead of the obsoleted RFC 6962
+  ([`11d75d3`](https://github.com/gaussia-labs/pyboltzmann/commit/11d75d386b37b624a47fe1a2d4d6e3eaeedd6729))
+
+RFC 9162 obsoletes RFC 6962, and it defines the same Merkle Tree Hash: same empty hash, same 0x00
+  and 0x01 prefixes, same split at the largest power of two below n. So this moves references, not
+  arithmetic. Roots, inclusion proofs and composition documents were compared against the published
+  0.2.0b1 wheel over trees of 0 to 11 leaves and are identical byte for byte, and no golden vector
+  changed.
+
+Two citations were also wrong rather than merely dated. The domain separation prefixes point at
+  Section 2.1.1, where the tree is defined, and the proof verification loop points at Section
+  2.1.3.2, which is where that algorithm is actually written down -- RFC 6962 defined the proof and
+  left verification to the reader, so the old citation named a section that did not contain the code
+  beneath it.
+
+LAYOUT_NAME stays "rfc6962-sorted/1", and a test now pins it with the reason. The string names a
+  construction, not the document describing it, and the construction did not change. It also travels
+  inside the composition document, which is hashed and published, and Composition.from_document
+  refuses a layout it does not implement -- so renaming it would make every brain already published
+  unopenable, in order to announce a change of tree that did not happen. The /1 suffix is what moves
+  if the construction ever does.
+
+BREAKING CHANGE: SortedRfc6962Layout is now SortedRfc9162Layout. Only the name changes; it is the
+  same layout, computes the same roots, and reports the same layout identifier. Code that reaches
+  DEFAULT_LAYOUT or the MerkleLayout protocol is unaffected. Renamed rather than aliased because an
+  alias would leave the obsoleted RFC in the public surface, which is the thing this commit removes.
+
+### Breaking Changes
+
+- **merkle**: Sortedrfc6962layout is now SortedRfc9162Layout. Only the name changes; it is the same
+  layout, computes the same roots, and reports the same layout identifier. Code that reaches
+  DEFAULT_LAYOUT or the MerkleLayout protocol is unaffected. Renamed rather than aliased because an
+  alias would leave the obsoleted RFC in the public surface, which is the thing this commit removes.
+
+
 ## v0.2.0-b.2 (2026-08-05)
 
 ### Bug Fixes

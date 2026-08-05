@@ -87,7 +87,7 @@ from boltzmann.retention import (
 )
 from boltzmann.store import BlockStore, MemoryBlockStore, OciLayoutStore
 
-__version__ = "0.2.0-b.2"
+__version__ = "0.2.0-b.3"
 
 __all__ = [
     "PROTOCOL_VERSION",
