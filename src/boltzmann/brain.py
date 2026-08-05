@@ -1218,18 +1218,31 @@ class Brain:
         response to deliberately wrong knowledge introduced in bulk, and it reuses the same cascade
         rather than inventing a second mechanism.
 
+        **One invalidation is one version.** Looping over :meth:`drop` per module published a snapshot
+        each time, returned only the last one's result -- so everything dropped before it was invisible
+        to the caller -- and left the earlier modules already committed if a later one hit the policy.
+        Every module is therefore planned and authorized first, and then written once, which is the same
+        guarantee :meth:`drop` gives for its own cascade.
+
         Args:
             request (ProducerDropRequest): Whose output to invalidate, where, and why.
 
         Returns:
-            DropResult: The new snapshot, what left, and the new roots. Empty if the producer made
-            nothing in the named modules.
+            DropResult: The new snapshot, everything that left each module, and the new roots. Empty if
+            the producer made nothing in the named modules. When the combined cascade exceeds the
+            policy's review threshold nothing is written and ``review_required`` is set.
+
+        Raises:
+            RetentionPolicyError: If the policy forbids the drop in any module the cascade reaches.
+                Checked before anything is written, so a refusal leaves the brain untouched.
         """
-        made = Ledger.of(self.modules()).made_by(request.producer)
+        modules = self.modules()
+        ledger = Ledger.of(modules)
+        made = ledger.made_by(request.producer)
         if not made:
             return DropResult(snapshot=self._snapshot)
 
-        dropped: dict[MemoryType, list[BlockId]] = {}
+        origins: dict[MemoryType, list[BlockId]] = {}
         for memory_type in request.memory_types:
             if not self._snapshot.has_module(memory_type):
                 continue
@@ -1238,23 +1251,57 @@ class Brain:
                 key=lambda value: value.hex,
             )
             if present:
-                dropped[memory_type] = present
+                origins[memory_type] = present
 
-        if not dropped:
+        if not origins:
             return DropResult(snapshot=self._snapshot)
 
-        result = DropResult(snapshot=self._snapshot)
-        for memory_type, blocks in dropped.items():
-            result = self.drop(
-                DropRequest(
+        for memory_type in origins:
+            self.policy.authorize(RemovalMechanism.DROP, memory_type)
+
+        dropped: dict[MemoryType, set[BlockId]] = {kind: set(blocks) for kind, blocks in origins.items()}
+        cascade = 0
+        cascaded_from: dict[MemoryType, BlockId | None] = {}
+        for memory_type, blocks in origins.items():
+            plan = plan_many(blocks, memory_type, modules, ledger)
+            cascade += plan.size
+            for kind, dependents in plan.dependents.items():
+                dropped.setdefault(kind, set()).update(dependents)
+                cascaded_from.setdefault(kind, plan.origin)
+
+        if self.policy.requires_review(cascade):
+            return DropResult(snapshot=self._snapshot, review_required=True)
+
+        # Every module the combined cascade reaches must permit the removal, or invalidating a
+        # producer could rewrite an append-only module through the back door.
+        for memory_type in dropped:
+            self.policy.authorize(RemovalMechanism.DROP, memory_type)
+
+        excluded = {kind: sorted(blocks, key=lambda value: value.hex) for kind, blocks in dropped.items()}
+        now = utc_timestamp()
+        records = [
+            ProvenanceBlock(
+                record=RemovalRecord(
                     blocks=blocks,
+                    mechanism=RemovalMechanism.DROP,
                     memory_type=memory_type,
                     actor=request.actor,
+                    at=now,
                     reason=request.reason,
-                    policy_name=request.policy_name,
+                    policy=request.policy_name,
+                    cascaded_from=None if memory_type in origins else cascaded_from.get(memory_type),
                 )
             )
-        return result
+            for memory_type, blocks in excluded.items()
+        ]
+
+        commit = self._write(blocks={}, provenance=records, without=excluded)
+        return DropResult(
+            snapshot=commit.snapshot,
+            dropped=excluded,
+            roots=commit.roots,
+            provenance=commit.provenance,
+        )
 
     def supersede(
         self,
@@ -1386,6 +1433,13 @@ class Brain:
         This is not the cleanup path. Wrong or obsolete knowledge is dropped; redaction is for personal
         data, credentials, or licensed material that must disappear even from retained history.
 
+        **Content another block still names survives.** Bytes are addressed by their hash, so two blocks
+        that say different things about one source hold a single copy of it. Destroying everything this
+        block names would take the other block's datum with it -- and that block stays a resolvable
+        member of its composition, so nothing would report the loss. Only content no surviving block
+        names is destroyed; the redacted block's own envelope always is. When this holds bytes back,
+        ``redacted`` says so by not listing them.
+
         Two limits are worth restating. A hash of low-entropy content is not anonymous, so confirming a
         guess may still be possible while the ``block_id`` is kept. And erasure does not propagate across
         already-pulled copies: a revocation can be published, but a distributed brain can only signal
@@ -1406,10 +1460,12 @@ class Brain:
         self.policy.authorize(RemovalMechanism.TOMBSTONE, memory_type)
         self._require_members([block], memory_type)
 
-        # The envelope, plus whatever content the block names. Asked of every module, not only canonical:
-        # a redaction that leaves the bytes behind for another memory type is a redaction that did not
-        # happen, and the caller was told otherwise.
-        destroyed: list[Digest] = [block, *self.module(memory_type).get(block).content_digests]
+        # The envelope, plus whatever content the block names and nothing else names. Asked of every
+        # module, not only canonical: a redaction that leaves the bytes behind for another memory type
+        # is a redaction that did not happen, and the caller was told otherwise.
+        named = self.module(memory_type).get(block).content_digests
+        shared = self._content_named_elsewhere(block, memory_type)
+        destroyed: list[Digest] = [block, *(digest for digest in named if digest.hex not in shared)]
 
         record = ProvenanceBlock(
             record=RemovalRecord(
@@ -1434,6 +1490,36 @@ class Brain:
             provenance=commit.provenance,
             snapshot=commit.snapshot,
         )
+
+    def _content_named_elsewhere(self, block: BlockId, memory_type: MemoryType) -> set[str]:
+        """The content digests some *other* installed block still names, as hex.
+
+        Content is addressed by its hash, so two blocks stating different things about the same
+        bytes hold one copy of them -- registering a source under two media types is enough to
+        produce exactly that. Destroying everything the redacted block names would then take the
+        survivor's datum with it, and the survivor stays a resolvable member of its composition, so
+        ``verify`` still passes and nothing announces the loss.
+
+        The block's own envelope is never spared: that is what was asked for. Only the content it
+        shares with a block that was not redacted is.
+
+        Args:
+            block (BlockId): The block being redacted, excluded from the scan.
+            memory_type (MemoryType): Which module it belongs to.
+
+        Returns:
+            set[str]: Hex digests of content other blocks still name.
+        """
+        shared: set[str] = set()
+        for kind in self._snapshot.installed:
+            module = self.module(kind)
+            for other in module.block_ids:
+                if other == block and kind is memory_type:
+                    continue
+                if not self.store.is_resolvable(other):
+                    continue
+                shared.update(digest.hex for digest in module.get(other).content_digests)
+        return shared
 
     def _require_members(self, blocks: Iterable[BlockId], memory_type: MemoryType) -> None:
         """A removal has to name blocks the composition actually holds."""
@@ -1747,8 +1833,22 @@ class Brain:
             if not self.store.is_resolvable(layer.digest):
                 await client.pull_blob(reference, layer.digest, self.store)
 
+            # The manifest's layers and its config blob are two separate registry-supplied documents,
+            # and nothing forces a registry to keep them consistent. Indexing straight into
+            # ``remote.modules`` turned that into a bare KeyError, which is neither documented here nor
+            # actionable by a caller.
+            expected = remote.modules.get(memory_type)
+            if expected is None:
+                named = ", ".join(kind.value for kind in remote.installed) or "none"
+                raise DistributionError(
+                    f"the artifact carries a {memory_type.value} layer but its snapshot names no root for "
+                    f"it; the snapshot names: {named}. The manifest and its config disagree, so there is "
+                    f"nothing to verify the layer against."
+                )
+
+            # Bounded by ``unpack_layer``'s own expansion ratio: the descriptor's size is the compressed
+            # blob's, so it says nothing about what decompressing costs.
             composition = unpack_layer(self.store.get_bytes(layer.digest), self.store)
-            expected = remote.modules[memory_type]
             if composition.root != expected.root:
                 raise DistributionError(
                     f"the {memory_type.value} layer unpacks to root {composition.root.short} but the "
