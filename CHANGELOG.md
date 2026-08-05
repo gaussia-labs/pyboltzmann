@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v0.3.0 (2026-08-05)
+
+### Build System
+
+- Sync uv.lock with the version in pyproject.toml
+  ([`6870a4c`](https://github.com/gaussia-labs/pyboltzmann/commit/6870a4c6f18c0ffe5b2123ef051cea8802e5bedf))
+
+The lock still recorded 0.1.1 while pyproject had moved through three prereleases and a release.
+  Nothing consumed the stale number -- the project is an editable install and the entry carries no
+  hashes -- but a lockfile that disagrees with the manifest it locks is a question every reader has
+  to answer before trusting the rest of it.
+
+
+## v0.2.0 (2026-08-05)
+
+### Documentation
+
+- **readme**: Trim the prose to what a reader needs
+  ([`6c1aef8`](https://github.com/gaussia-labs/pyboltzmann/commit/6c1aef8c79803a4c3cc23dba0785e823424f3eb6))
+
+Cut the no-stubs/no-dead-code paragraph and the closing recap of the guides (the docs table already
+  lists them), and fold the model-agnosticism note and the dependency lines into the sections they
+  belong to.
+
+
 ## v0.2.0-b.4 (2026-08-05)
 
 ### Bug Fixes
@@ -142,9 +167,6 @@ BREAKING CHANGE: SortedRfc6962Layout is now SortedRfc9162Layout. Only the name c
   layout, computes the same roots, and reports the same layout identifier. Code that reaches
   DEFAULT_LAYOUT or the MerkleLayout protocol is unaffected. Renamed rather than aliased because an
   alias would leave the obsoleted RFC in the public surface, which is the thing this commit removes.
-
-
-## v0.2.0 (2026-08-05)
 
 
 ## v0.2.0-b.2 (2026-08-05)
