@@ -75,7 +75,7 @@ class TestMerkleRootVectors:
         assert 0 in sizes
 
     def test_sizes_around_powers_of_two_are_covered(self) -> None:
-        """The split point of RFC 6962 is where an off-by-one would hide."""
+        """The split point of RFC 9162 is where an off-by-one would hide."""
         sizes = {len(vector["block_ids"]) for vector in golden.load("merkle_roots.json")["vectors"]}
         assert {1, 2, 3, 4, 5, 7, 8, 9, 16, 17} <= sizes
 

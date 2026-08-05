@@ -6,24 +6,26 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.exceptions import InclusionProofError, MerkleError
 from boltzmann.identity.digest import BlockId
 from boltzmann.merkle.diff import diff
 from boltzmann.merkle.layout import MerkleLayout
 from boltzmann.merkle.proof import is_node_hash
 from boltzmann.merkle.tree import DEFAULT_LAYOUT, MerkleTree, merkle_root, sorted_leaves
+from boltzmann.module.composition import Composition
 
 block_ids = st.builds(BlockId.of, st.binary(min_size=1, max_size=32))
 compositions = st.lists(block_ids, min_size=1, max_size=24, unique_by=lambda value: value.hex)
 
 
 def leaf(digest: bytes) -> bytes:
-    """Hash a leaf the way RFC 6962 does, computed independently of the implementation."""
+    """Hash a leaf the way RFC 9162 does, computed independently of the implementation."""
     return hashlib.sha256(b"\x00" + digest).digest()
 
 
 def node(left: bytes, right: bytes) -> bytes:
-    """Hash an internal node the way RFC 6962 does, computed independently."""
+    """Hash an internal node the way RFC 9162 does, computed independently."""
     return hashlib.sha256(b"\x01" + left + right).digest()
 
 
@@ -109,7 +111,7 @@ class TestInclusionProofs:
             tree.inclusion_proof(BlockId.of(b"stranger"))
 
 
-class TestHashingAgainstRfc6962:
+class TestHashingAgainstRfc9162:
     """Cross-check the roots against hashing computed by hand, not by the implementation."""
 
     def test_empty_tree(self) -> None:
@@ -185,3 +187,16 @@ class TestLayout:
 
     def test_layout_is_named(self) -> None:
         assert DEFAULT_LAYOUT.name == "rfc6962-sorted/1"
+
+    def test_the_identifier_keeps_the_historical_name(self) -> None:
+        """Not an oversight when the citations say RFC 9162, and not safe to tidy.
+
+        RFC 9162 obsoletes RFC 6962 and defines the same construction, so nothing computed here moved
+        when the references did. The string travels inside the composition document, which is hashed and
+        published, and ``Composition.from_document`` refuses a layout it does not implement -- so
+        renaming it would make every brain already published unopenable, to say that a tree changed when
+        it did not. The ``/1`` suffix is what moves if the construction ever does.
+        """
+        assert "9162" not in DEFAULT_LAYOUT.name
+        assert Composition(MemoryType.CANONICAL, []).layout == "rfc6962-sorted/1"
+        assert b'"layout":"rfc6962-sorted/1"' in Composition(MemoryType.CANONICAL, []).document()

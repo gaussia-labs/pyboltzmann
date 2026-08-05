@@ -19,10 +19,10 @@ HEX_DIGEST_LENGTH = DIGEST_SIZE * 2
 """Length in characters of a hex-encoded SHA-256 digest."""
 
 LEAF_PREFIX = b"\x00"
-"""Domain separation prefix for a Merkle leaf (RFC 6962, Section 2.1)."""
+"""Domain separation prefix for a Merkle leaf (RFC 9162, Section 2.1.1)."""
 
 NODE_PREFIX = b"\x01"
-"""Domain separation prefix for a Merkle internal node (RFC 6962, Section 2.1)."""
+"""Domain separation prefix for a Merkle internal node (RFC 9162, Section 2.1.1)."""
 
 
 def sha256(data: bytes) -> bytes:
@@ -83,6 +83,6 @@ def hash_empty() -> bytes:
     Hash the empty Merkle tree.
 
     Returns:
-        bytes: ``SHA-256("")``, as RFC 6962 defines for an empty log.
+        bytes: ``SHA-256("")``, which is ``MTH({})`` in RFC 9162, Section 2.1.1.
     """
     return sha256(b"")

@@ -1,14 +1,18 @@
-"""The internal Merkle DAG: RFC 6962 over lexicographically sorted leaves.
+"""The internal Merkle DAG: RFC 9162 over lexicographically sorted leaves.
 
 On their own, blocks are a bag of content-addressed units. The Merkle root names,
 verifies, and diffs a whole *version* of a module: that root **is** the identity of
 the version (paper Section 6.2).
 
-**Why RFC 6962.** A naive binary tree that duplicates the last node on an odd level
+**Why RFC 9162.** A naive binary tree that duplicates the last node on an odd level
 admits a second-preimage attack: two different leaf sets can produce the same root
-(CVE-2012-2459). RFC 6962 splits at the largest power of two below ``n`` instead,
-which is unambiguous, and prefixes leaves and internal nodes differently so a leaf
-hash can never be mistaken for a node hash.
+(CVE-2012-2459). The Merkle Tree Hash of RFC 9162, Section 2.1.1, splits at the
+largest power of two below ``n`` instead, which is unambiguous, and prefixes leaves
+and internal nodes differently so a leaf hash can never be mistaken for a node hash.
+
+RFC 9162 obsoletes RFC 6962, which is what these citations used to point at, and it
+defines the same tree: same empty hash, same ``0x00``/``0x01`` prefixes, same split.
+Nothing computed here changed when the citations moved -- see :data:`LAYOUT_NAME`.
 
 **Why sorted leaves.** Sorting makes the root a pure function of the *set* of
 blocks, which is exactly what the paper claims in Section 6.2: two parties that
@@ -34,7 +38,18 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
 LAYOUT_NAME = "rfc6962-sorted/1"
-"""Identifier of this layout, recorded alongside a snapshot."""
+"""Identifier of this layout, recorded alongside a snapshot.
+
+Keeps the historical name deliberately, now that the citations say RFC 9162. The string
+names a *construction*, and RFC 9162 defines the same construction RFC 6962 did, so a root
+computed under either reading is byte-identical. Renaming it would announce a change of
+tree where none happened -- and it would be a hard break, not a cosmetic one:
+:meth:`~boltzmann.module.composition.Composition.from_document` refuses a composition whose
+layout it does not implement, so every brain already published would stop opening, and the
+published golden vectors record this string.
+
+The version suffix is what moves if the construction ever does.
+"""
 
 
 def sorted_leaves(block_ids: Iterable[BlockId]) -> list[BlockId]:
@@ -101,8 +116,8 @@ class MerkleTree:
         """
         The root that commits to this composition.
 
-        An empty composition hashes to ``SHA-256("")``, as RFC 6962 defines for an
-        empty log: a module with no blocks still has a well-defined identity.
+        An empty composition hashes to ``SHA-256("")``, which is ``MTH({})`` in RFC 9162,
+        Section 2.1.1: a module with no blocks still has a well-defined identity.
         """
         if not self._raw:
             return MerkleRoot.from_raw(hash_empty())
@@ -176,7 +191,7 @@ class MerkleTree:
         return all(self.inclusion_proof(leaf).verify(root) for leaf in self.leaves)
 
 
-class SortedRfc6962Layout:
+class SortedRfc9162Layout:
     """The default :class:`~boltzmann.merkle.layout.MerkleLayout`."""
 
     @property
@@ -210,7 +225,7 @@ class SortedRfc6962Layout:
         return MerkleTree(block_ids).inclusion_proof(target)
 
 
-DEFAULT_LAYOUT = SortedRfc6962Layout()
+DEFAULT_LAYOUT = SortedRfc9162Layout()
 """The layout every module uses unless an implementation substitutes another."""
 
 

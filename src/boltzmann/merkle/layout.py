@@ -1,7 +1,7 @@
 """The Merkle layout interface.
 
 The paper fixes that a module version is committed by a Merkle root, and leaves the
-construction open. This SDK ships one layout -- RFC 6962 over sorted leaves, see
+construction open. This SDK ships one layout -- RFC 9162 over sorted leaves, see
 :mod:`boltzmann.merkle.tree` -- behind this interface, so that an implementation
 which needs literal structural sharing of internal nodes (a prolly tree or a HAMT,
 as Dolt and IPLD use) can substitute its own without touching the layers above.
