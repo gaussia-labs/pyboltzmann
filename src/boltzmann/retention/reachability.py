@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from boltzmann.exceptions import BlockNotFoundError, BlockTombstonedError
 from boltzmann.module.composition import Composition
 
 if TYPE_CHECKING:
@@ -42,8 +43,15 @@ def reachable_from(snapshot: Snapshot, store: BlockStore) -> set[str]:
         store (BlockStore): Where the compositions and blocks are read from.
 
     Returns:
-        set[str]: The hex digests this snapshot keeps alive. Anything it names but cannot read is
-        skipped rather than raising, because a tombstoned or already-pruned blob must not stop a sweep.
+        set[str]: The hex digests this snapshot keeps alive. Anything it names that was tombstoned
+        or already pruned is skipped rather than raising, because bytes that are gone must not stop
+        a sweep.
+
+    Raises:
+        BlockIntegrityError: If a block is present but its bytes do not hash to the identity they
+            are filed under. Corruption is not absence, and reading it as absence would drop that
+            block's content from the marked set and let the sweep reclaim it.
+        BlockSchemaError: If a present block cannot be decoded, for the same reason.
     """
     keep: set[str] = {snapshot.digest.hex}
     if snapshot.parent is not None:
@@ -136,16 +144,33 @@ def sweep(keep: set[str], store: BlockStore) -> list[OciDigest]:
 
 
 def _read_composition(digest: OciDigest, store: BlockStore) -> Composition | None:
+    """The composition behind a digest, or ``None`` when the bytes are legitimately gone.
+
+    Only absence and redaction are tolerated. See :func:`_bytes_named_by` for why anything else
+    has to propagate rather than be read as "names nothing".
+    """
     try:
         return Composition.from_document(store.get_bytes(digest))
-    except Exception:
+    except (BlockNotFoundError, BlockTombstonedError):
         return None
 
 
 def _bytes_named_by(block_id: BlockId, store: BlockStore) -> set[str]:
-    """The content a block names but does not carry, whatever its type."""
+    """The content a block names but does not carry, whatever its type.
+
+    A block whose bytes were already pruned or redacted names nothing this sweep can discover,
+    and skipping it costs nothing: those bytes are gone either way.
+
+    A block that is *present but unreadable* is a different thing. Corruption is not absence,
+    and treating it as absence is how a sweep deletes what a retained root still names -- the
+    block's content silently drops out of the marked set, and the one call whose promise is
+    that it only reclaims what nothing needs destroys live evidence over a single bit flip. So
+    an integrity or schema failure propagates and stops the sweep. That is the conservative
+    direction: a prune that refused to run can be run again, and a prune that ran cannot be
+    undone.
+    """
     try:
         block = store.get_block(block_id)
-    except Exception:
+    except (BlockNotFoundError, BlockTombstonedError):
         return set()
     return {digest.hex for digest in block.content_digests}
