@@ -23,17 +23,10 @@ await brain.push(client, "ghcr.io/org/brain", "v1")
 ```
 
 The line it draws: **the SDK does whatever the protocol defines mechanically; the
-implementer supplies whatever the paper assigns elsewhere.** So identity, the wire
+implementer supplies whatever the paper assigns elsewhere.** Identity, the wire
 formats, the four operation paths and a conformance suite are here; the model, the
-ranking, the index engines and any CLI or MCP server are yours.
-
-It embeds no language model. Interpretation enters through `CandidateProposer` and
-nowhere else.
-
-There are **no `NotImplementedError` stubs**, and a test enforces it. An
-unimplemented function is worse than an interface: it looks callable and is not.
-Nothing is declared and unreachable either — every type, enum member and constant
-is produced by something, and a test enforces that too.
+ranking, the index engines and any CLI or MCP server are yours. No language model is
+embedded — interpretation enters through `CandidateProposer` and nowhere else.
 
 ## Installation
 
@@ -46,14 +39,11 @@ pip install 'pyboltzmann[oci]'   # plus the network registry transport
 import boltzmann                 # the import package
 ```
 
-The two names differ because `boltzmann` on PyPI belongs to an unrelated package. It is the same split as
-`pygaussia` providing `gaussia`.
+The two names differ because `boltzmann` on PyPI belongs to an unrelated package —
+the same split as `pygaussia` providing `gaussia`.
 
-The core needs **`pydantic` and `rfc8785`**. Everything else is optional: `[oci]`
-adds a network registry transport, and moving a brain between OCI layouts on disk
-needs nothing at all.
-
-Python >= 3.11.
+Python >= 3.11. The core needs only `pydantic` and `rfc8785`; `[oci]` adds the
+network registry transport.
 
 ## Usage
 
@@ -105,10 +95,6 @@ block_id = commit.committed[0]
 assert brain.prove(block_id, MemoryType.SEMANTIC).verify(brain.root_of(MemoryType.SEMANTIC))
 assert brain.verify()
 ```
-
-Removing knowledge cascades through provenance, publishing is a copy rather than a
-conversion, and an implementation in any language can prove it conforms against the
-golden vectors that ship in the wheel. Each of those has a guide.
 
 ## Documentation
 
