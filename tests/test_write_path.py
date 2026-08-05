@@ -31,20 +31,20 @@ from boltzmann.module.snapshot import Snapshot
 from boltzmann.store.memory import MemoryBlockStore
 
 PDF = b"%PDF-1.7 Lecture 07: a periodic function decomposes into sines and cosines."
-ALEX = Actor(id="alex", kind=ActorKind.HUMAN, name="Alex Fiorenza")
+CURATOR = Actor(id="curator", kind=ActorKind.HUMAN, name="Example Curator")
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="2026-07")
 
 
 @pytest.fixture
 def brain() -> Brain:
-    return Brain(MemoryBlockStore(), actor=ALEX)
+    return Brain(MemoryBlockStore(), actor=CURATOR)
 
 
 @pytest.fixture
 def request_() -> RegistrationRequest:
     return RegistrationRequest(
         media_type="application/pdf",
-        actor=ALEX,
+        actor=CURATOR,
         origin="https://example.edu/l07.pdf",
         license="CC-BY-4.0",
     )
@@ -113,7 +113,7 @@ class TestRegister:
         registrations = [record for record in records if isinstance(record, RegistrationRecord)]
         assert len(registrations) == 1
         assert registrations[0].block == result.block_id
-        assert registrations[0].actor == ALEX
+        assert registrations[0].actor == CURATOR
         assert registrations[0].origin == "https://example.edu/l07.pdf"
         assert registrations[0].license == "CC-BY-4.0"
 
@@ -152,7 +152,7 @@ class TestNormalizedViews:
     """A view is evidence only if the transform that made it is reproducible."""
 
     def test_the_view_is_addressed_and_recorded(self, brain: Brain) -> None:
-        request = RegistrationRequest(media_type="application/pdf", actor=ALEX, normalize_with="test-pdf-to-text")
+        request = RegistrationRequest(media_type="application/pdf", actor=CURATOR, normalize_with="test-pdf-to-text")
         result = brain.register(PDF, request)
         block = brain.module(MemoryType.CANONICAL).get(result.block_id)
 
@@ -169,12 +169,12 @@ class TestNormalizedViews:
     def test_the_view_changes_the_canonical_identity(self, brain: Brain, request_: RegistrationRequest) -> None:
         bare = brain.register(PDF, request_)
         with_view = brain.register(
-            PDF, RegistrationRequest(media_type="application/pdf", actor=ALEX, normalize_with="test-pdf-to-text")
+            PDF, RegistrationRequest(media_type="application/pdf", actor=CURATOR, normalize_with="test-pdf-to-text")
         )
         assert with_view.block_id != bare.block_id
 
     def test_a_pipeline_that_does_not_accept_the_media_type_is_refused(self, brain: Brain) -> None:
-        request = RegistrationRequest(media_type="image/png", actor=ALEX, normalize_with="test-pdf-to-text")
+        request = RegistrationRequest(media_type="image/png", actor=CURATOR, normalize_with="test-pdf-to-text")
         with pytest.raises(ProtocolError, match="does not accept"):
             brain.register(PDF, request)
 
@@ -406,7 +406,7 @@ class TestCommit:
         records = [b.record for b in brain.module(MemoryType.PROVENANCE).blocks()]
         derivation = next(r for r in records if isinstance(r, DerivationRecord))
         assert derivation.producer.kind is ProducerKind.ACTOR
-        assert derivation.producer.id == ALEX.id
+        assert derivation.producer.id == CURATOR.id
 
 
 class TestIngest:
@@ -433,7 +433,7 @@ class TestIngest:
             seen["source"] = source
             return proposals(semantic_candidate(task.source))
 
-        request = RegistrationRequest(media_type="application/pdf", actor=ALEX, normalize_with="test-upper")
+        request = RegistrationRequest(media_type="application/pdf", actor=CURATOR, normalize_with="test-upper")
         brain.ingest(PDF, request, proposer)
         assert seen["source"] == b"NORMALIZED"
 
@@ -442,19 +442,19 @@ class TestPersistence:
     """A snapshot has to be enough to reopen the brain."""
 
     def test_reopening_recovers_the_same_roots(self, tmp_path: Path, request_: RegistrationRequest) -> None:
-        first = Brain.open(tmp_path / "brain", actor=ALEX)
+        first = Brain.open(tmp_path / "brain", actor=CURATOR)
         source = first.register(PDF, request_).block_id
         task = first.define_task(source)
         first.commit(first.validate(proposals(semantic_candidate(source)), task))
         expected = first.snapshot()
 
-        reopened = Brain.open(tmp_path / "brain", actor=ALEX)
+        reopened = Brain.open(tmp_path / "brain", actor=CURATOR)
         assert reopened.snapshot() == expected
         assert reopened.verify()
         assert reopened.module(MemoryType.SEMANTIC).block_ids == first.module(MemoryType.SEMANTIC).block_ids
 
     def test_a_fresh_directory_is_an_empty_brain(self, tmp_path: Path) -> None:
-        brain = Brain.open(tmp_path / "brain", actor=ALEX)
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         assert brain.snapshot().installed == []
         assert brain.verify()
         assert brain.state() == {}
@@ -471,14 +471,14 @@ class TestPersistence:
     def test_retention_is_capped_by_policy(self, request_: RegistrationRequest) -> None:
         from boltzmann.retention.policy import RetentionPolicy
 
-        brain = Brain(MemoryBlockStore(), actor=ALEX, policy=RetentionPolicy(retained_roots=2))
+        brain = Brain(MemoryBlockStore(), actor=CURATOR, policy=RetentionPolicy(retained_roots=2))
         for index in range(4):
             brain.register(PDF + str(index).encode(), request_)
         assert len(brain.history()) == 2
 
     def test_the_head_pointer_is_not_content(self, tmp_path: Path, request_: RegistrationRequest) -> None:
         """Content is immutable; which snapshot is current is the one mutable cell."""
-        brain = Brain.open(tmp_path / "brain", actor=ALEX)
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         brain.register(PDF, request_)
         raw = brain.store.read_pointer(HEAD_POINTER)
         assert raw is not None
@@ -502,7 +502,7 @@ class TestPersistence:
                 )
             ]
         )
-        tampered = Brain(brain.store, actor=ALEX, snapshot=forged)
+        tampered = Brain(brain.store, actor=CURATOR, snapshot=forged)
         with pytest.raises(SnapshotError, match="snapshot files it under"):
             tampered.module(MemoryType.CANONICAL)
 

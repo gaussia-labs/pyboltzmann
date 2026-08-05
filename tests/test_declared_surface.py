@@ -24,9 +24,9 @@ from boltzmann.ingest.validation import ValidationStatus, validate
 from boltzmann.ingest.validators import DEFAULT_VALIDATORS, UndecidedValidator
 from boltzmann.retention.policy import PERMISSIVE_POLICY, RetentionPolicy
 
-ALEX = Actor(id="alex", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
-REQUEST = RegistrationRequest(media_type="application/pdf", actor=ALEX)
+REQUEST = RegistrationRequest(media_type="application/pdf", actor=CURATOR)
 REFERENCE = "registry.example/org/brain"
 
 
@@ -47,7 +47,7 @@ def fact(source: BlockId, label: str, statement: str = "about it") -> CandidateS
 def brain() -> Brain:
     from boltzmann.store.memory import MemoryBlockStore
 
-    return Brain(MemoryBlockStore(), actor=ALEX, policy=PERMISSIVE_POLICY)
+    return Brain(MemoryBlockStore(), actor=CURATOR, policy=PERMISSIVE_POLICY)
 
 
 class TestInstallPlan:
@@ -60,12 +60,12 @@ class TestInstallPlan:
     async def test_a_plan_reports_what_a_fresh_install_would_fetch(
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:
-        source = Brain.open(tmp_path / "a", actor=ALEX)
+        source = Brain.open(tmp_path / "a", actor=CURATOR)
         origin = source.register(b"%PDF-1.7 lecture", REQUEST).block_id
         source.commit(source.validate(fact(origin, "A"), source.define_task(origin)))
         await source.push(registry, REFERENCE, "v1")
 
-        target = Brain.open(tmp_path / "b", actor=ALEX)
+        target = Brain.open(tmp_path / "b", actor=CURATOR)
         plan = await target.plan_pull(registry, REFERENCE, "v1")
 
         assert set(plan.modules) == set(source.snapshot().installed)
@@ -75,11 +75,11 @@ class TestInstallPlan:
 
     async def test_planning_downloads_nothing(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
         """Resolving a manifest is cheap; the point is knowing the cost before paying it."""
-        source = Brain.open(tmp_path / "a", actor=ALEX)
+        source = Brain.open(tmp_path / "a", actor=CURATOR)
         source.register(b"%PDF-1.7 lecture", REQUEST)
         await source.push(registry, REFERENCE, "v1")
 
-        target = Brain.open(tmp_path / "b", actor=ALEX)
+        target = Brain.open(tmp_path / "b", actor=CURATOR)
         held = len(list(target.store.iter_digests()))
         await target.plan_pull(registry, REFERENCE, "v1")
         assert len(list(target.store.iter_digests())) == held
@@ -87,11 +87,11 @@ class TestInstallPlan:
     async def test_a_second_plan_reports_the_layers_already_held(
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:
-        source = Brain.open(tmp_path / "a", actor=ALEX)
+        source = Brain.open(tmp_path / "a", actor=CURATOR)
         source.register(b"%PDF-1.7 lecture", REQUEST)
         await source.push(registry, REFERENCE, "v1")
 
-        target = Brain.open(tmp_path / "b", actor=ALEX)
+        target = Brain.open(tmp_path / "b", actor=CURATOR)
         await target.pull(registry, REFERENCE, "v1")
         plan = await target.plan_pull(registry, REFERENCE, "v1")
 
@@ -102,11 +102,11 @@ class TestInstallPlan:
     async def test_a_plan_for_a_module_the_artifact_lacks_is_refused(
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:
-        source = Brain.open(tmp_path / "a", actor=ALEX)
+        source = Brain.open(tmp_path / "a", actor=CURATOR)
         source.register(b"%PDF-1.7 lecture", REQUEST)
         await source.push(registry, REFERENCE, "v1")
 
-        target = Brain.open(tmp_path / "b", actor=ALEX)
+        target = Brain.open(tmp_path / "b", actor=CURATOR)
         with pytest.raises(Exception, match="does not carry"):
             await target.plan_pull(registry, REFERENCE, "v1", modules=[MemoryType.SEMANTIC])
 
@@ -143,7 +143,7 @@ class TestRederive:
         original = brain.module(MemoryType.SEMANTIC).block_ids[0]
 
         right = brain.register(b"%PDF-1.7 the right lecture", REQUEST).block_id
-        brain.drop(DropRequest(blocks=[wrong], memory_type=MemoryType.CANONICAL, actor=ALEX, reason="wrong"))
+        brain.drop(DropRequest(blocks=[wrong], memory_type=MemoryType.CANONICAL, actor=CURATOR, reason="wrong"))
 
         task = brain.define_rederivation(right, replacing=wrong)
         brain.commit(brain.validate(fact(right, "Fourier"), task))

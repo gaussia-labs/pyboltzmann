@@ -20,7 +20,7 @@ from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.store.memory import MemoryBlockStore
 
-ALEX = Actor(id="alex", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
 SAM = Actor(id="sam", kind=ActorKind.AGENT)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
 REFERENCE = "registry.example/org/brain"
@@ -49,11 +49,11 @@ def registry(tmp_path: Path) -> LocalLayoutRegistry:
 
 @pytest.fixture
 def request_() -> RegistrationRequest:
-    return RegistrationRequest(media_type="application/pdf", actor=ALEX)
+    return RegistrationRequest(media_type="application/pdf", actor=CURATOR)
 
 
 def seeded(path: Path, request_: RegistrationRequest, label: str = "Fourier") -> Brain:
-    brain = Brain.open(path, actor=ALEX)
+    brain = Brain.open(path, actor=CURATOR)
     brain.ingest(b"%PDF-1.7 Lecture 07", request_, llm(label))
     return brain
 
@@ -186,7 +186,7 @@ class TestPushAndPull:
             await brain.push(registry)
 
     async def test_pushing_an_empty_brain_is_refused(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
-        brain = Brain.open(tmp_path / "empty", actor=ALEX)
+        brain = Brain.open(tmp_path / "empty", actor=CURATOR)
         with pytest.raises(DistributionError, match="no snapshot to publish"):
             await brain.push(registry, REFERENCE, "v1")
 
@@ -262,7 +262,7 @@ class TestIncrementalUpdate:
     async def test_an_unchanged_module_keeps_its_digest(
         self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
     ) -> None:
-        brain = Brain.open(tmp_path / "a", actor=ALEX)
+        brain = Brain.open(tmp_path / "a", actor=CURATOR)
         source = brain.register(b"%PDF-1.7 Lecture 07", request_).block_id
         task = brain.define_task(source)
         brain.commit(brain.validate(llm("A")(task, b""), task))
@@ -289,7 +289,7 @@ class TestIncrementalUpdate:
     async def test_pulling_an_update_reuses_held_layers(
         self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
     ) -> None:
-        brain = Brain.open(tmp_path / "a", actor=ALEX)
+        brain = Brain.open(tmp_path / "a", actor=CURATOR)
         source = brain.register(b"%PDF-1.7 Lecture 07", request_).block_id
         task = brain.define_task(source)
         brain.commit(brain.validate(llm("A")(task, b""), task))
@@ -478,7 +478,7 @@ class TestAncestry:
     """What the fast-forward check walks."""
 
     def test_walks_the_parent_chain(self, tmp_path: Path, request_: RegistrationRequest) -> None:
-        brain = Brain.open(tmp_path / "a", actor=ALEX)
+        brain = Brain.open(tmp_path / "a", actor=CURATOR)
         source = brain.register(b"%PDF-1.7 Lecture 07", request_).block_id
         task = brain.define_task(source)
         brain.commit(brain.validate(llm("A")(task, b""), task))
@@ -490,10 +490,10 @@ class TestAncestry:
 
     def test_the_first_version_has_no_parent(self, tmp_path: Path, request_: RegistrationRequest) -> None:
         """The empty snapshot a fresh handle starts from is a placeholder, not a published version."""
-        brain = Brain.open(tmp_path / "a", actor=ALEX)
+        brain = Brain.open(tmp_path / "a", actor=CURATOR)
         brain.register(b"%PDF-1.7 Lecture 07", request_)
         assert brain.snapshot().parent is None
         assert brain.ancestry() == [brain.snapshot().digest]
 
     def test_an_empty_brain_has_no_ancestry(self, tmp_path: Path) -> None:
-        assert Brain.open(tmp_path / "empty", actor=ALEX).ancestry() == []
+        assert Brain.open(tmp_path / "empty", actor=CURATOR).ancestry() == []

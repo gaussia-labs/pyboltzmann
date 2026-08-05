@@ -231,7 +231,7 @@ class TestInvariant8ForgettingIsAudited:
                 blocks=[BlockId.of(b"wrong")],
                 mechanism=RemovalMechanism.DROP,
                 memory_type=MemoryType.SEMANTIC,
-                actor={"id": "alex", "kind": "human"},
+                actor={"id": "curator", "kind": "human"},
                 at="2026-07-24T09:30:00Z",
                 reason="",
             )

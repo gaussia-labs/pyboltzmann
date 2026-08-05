@@ -28,7 +28,7 @@ from boltzmann.identity.digest import BlockId, OciDigest
 from boltzmann.identity.serialization import canonicalize
 
 PDF = b"%PDF-1.7 lecture notes"
-ACTOR = Actor(id="alex", kind=ActorKind.HUMAN)
+ACTOR = Actor(id="curator", kind=ActorKind.HUMAN)
 
 
 def semantic(**overrides: object) -> SemanticBlock:

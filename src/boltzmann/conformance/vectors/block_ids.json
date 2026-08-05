@@ -166,9 +166,9 @@
             "record_type": "registration",
             "block": "sha256:62a73a972c4b69bdfba88de9ba0c0b9e3b6c4248a0f5ffeaff61ea8e70a21163",
             "actor": {
-              "id": "alex",
+              "id": "curator",
               "kind": "human",
-              "name": "Alex Fiorenza"
+              "name": "Example Curator"
             },
             "at": "2026-07-24T09:30:00Z",
             "origin": "https://example.edu/signals/lecture-07.pdf",
@@ -178,8 +178,8 @@
         "schema_version": 1,
         "serialization": "jcs/1"
       },
-      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"provenance\",\"payload\":{\"record\":{\"actor\":{\"id\":\"alex\",\"kind\":\"human\",\"name\":\"Alex Fiorenza\"},\"at\":\"2026-07-24T09:30:00Z\",\"block\":\"sha256:62a73a972c4b69bdfba88de9ba0c0b9e3b6c4248a0f5ffeaff61ea8e70a21163\",\"license\":\"CC-BY-4.0\",\"origin\":\"https://example.edu/signals/lecture-07.pdf\",\"record_type\":\"registration\"}},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
-      "block_id": "sha256:122f1f1bac534b5266136d0f53c5fcf08c3415e813601af9f90a65aaa6421105"
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"provenance\",\"payload\":{\"record\":{\"actor\":{\"id\":\"curator\",\"kind\":\"human\",\"name\":\"Example Curator\"},\"at\":\"2026-07-24T09:30:00Z\",\"block\":\"sha256:62a73a972c4b69bdfba88de9ba0c0b9e3b6c4248a0f5ffeaff61ea8e70a21163\",\"license\":\"CC-BY-4.0\",\"origin\":\"https://example.edu/signals/lecture-07.pdf\",\"record_type\":\"registration\"}},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:febdc629a4bd3aa5f50cd49b07f548815b9062a47ccbdff70c43f20c18d25d54"
     }
   ]
 }

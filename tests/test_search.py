@@ -25,7 +25,7 @@ from boltzmann.query.request import Query, RetrievalMode
 from boltzmann.query.scan import STOPWORDS, ProvenanceView, content_terms, searchable_text
 from boltzmann.store.memory import MemoryBlockStore
 
-ALEX = Actor(id="alex", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
 PDF = b"%PDF-1.7 Lecture 07: a periodic function decomposes into sines and cosines"
 
@@ -70,8 +70,8 @@ CONTENT = [
 
 @pytest.fixture
 def brain() -> Brain:
-    brain = Brain(MemoryBlockStore(), actor=ALEX)
-    request = RegistrationRequest(media_type="application/pdf", actor=ALEX)
+    brain = Brain(MemoryBlockStore(), actor=CURATOR)
+    request = RegistrationRequest(media_type="application/pdf", actor=CURATOR)
     source = brain.register(PDF, request).block_id
     task = brain.define_task(source)
     proposals = CandidateSet(
@@ -134,7 +134,7 @@ class TestContract:
         assert bundle.all_verified
 
     def test_an_empty_brain_answers_without_error(self) -> None:
-        brain = Brain(MemoryBlockStore(), actor=ALEX)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR)
         assert len(brain.search(Query(text="anything"))) == 0
 
 
@@ -276,8 +276,8 @@ class TestAssociativeExpansion:
     """Relations live on the block, so following them needs no graph engine."""
 
     def test_expands_along_declared_relations(self) -> None:
-        brain = Brain(MemoryBlockStore(), actor=ALEX)
-        request = RegistrationRequest(media_type="application/pdf", actor=ALEX)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR)
+        request = RegistrationRequest(media_type="application/pdf", actor=CURATOR)
         source = brain.register(PDF, request).block_id
         task = brain.define_task(source)
 
@@ -309,8 +309,8 @@ class TestAssociativeExpansion:
 
     def test_a_block_reached_by_association_carries_no_coverage(self) -> None:
         """It was not matched, so claiming term coverage for it would be a lie."""
-        brain = Brain(MemoryBlockStore(), actor=ALEX)
-        request = RegistrationRequest(media_type="application/pdf", actor=ALEX)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR)
+        request = RegistrationRequest(media_type="application/pdf", actor=CURATOR)
         source = brain.register(PDF, request).block_id
         task = brain.define_task(source)
         brain.commit(
@@ -363,8 +363,8 @@ class TestSelfDescribingBlocks:
         assert block.evidence == [source]
 
     def test_a_payload_that_contradicts_its_citation_is_rejected(self) -> None:
-        brain = Brain(MemoryBlockStore(), actor=ALEX)
-        request = RegistrationRequest(media_type="application/pdf", actor=ALEX)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR)
+        request = RegistrationRequest(media_type="application/pdf", actor=CURATOR)
         source = brain.register(PDF, request).block_id
         task = brain.define_task(source)
 
@@ -397,7 +397,7 @@ class TestSupersession:
             record=SupersessionRecord(
                 block=new.block_id,
                 supersedes=old.block_id,
-                actor=ALEX,
+                actor=CURATOR,
                 at=utc_timestamp(),
             )
         )
@@ -458,7 +458,7 @@ class TestPlannerDelegation:
                 return sentinel
 
         planner = Fixed()
-        brain = Brain(MemoryBlockStore(), actor=ALEX, planner=planner)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR, planner=planner)
         assert brain.search(Query(text="anything")) is sentinel
         assert planner.calls == 1
 
@@ -481,7 +481,7 @@ class TestOpenIndex:
                 return []
 
         index = Counting()
-        brain = Brain(MemoryBlockStore(), actor=ALEX, indices={MemoryType.SEMANTIC: [index]})
+        brain = Brain(MemoryBlockStore(), actor=CURATOR, indices={MemoryType.SEMANTIC: [index]})
         assert brain.open_index(MemoryType.SEMANTIC, IndexKind.HASH_MAP) is index
 
     def test_indices_are_rebuilt_on_commit(self) -> None:
@@ -502,8 +502,8 @@ class TestOpenIndex:
                 return []
 
         index = Counting()
-        brain = Brain(MemoryBlockStore(), actor=ALEX, indices={MemoryType.SEMANTIC: [index]})
-        request = RegistrationRequest(media_type="application/pdf", actor=ALEX)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR, indices={MemoryType.SEMANTIC: [index]})
+        request = RegistrationRequest(media_type="application/pdf", actor=CURATOR)
         source = brain.register(PDF, request).block_id
         task = brain.define_task(source)
         brain.commit(
@@ -531,5 +531,5 @@ class TestProvenanceView:
 
     def test_a_partial_install_yields_an_empty_view(self, tmp_path: Path) -> None:
         """No provenance module is legitimate, not an error."""
-        brain = Brain(MemoryBlockStore(), actor=ALEX)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR)
         assert ProvenanceView.of(brain.modules()).superseded_by == {}

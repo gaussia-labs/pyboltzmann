@@ -33,10 +33,10 @@ from boltzmann.retention.reachability import mark, sweep
 from boltzmann.retention.requests import DropRequest, ProducerDropRequest
 from boltzmann.store.memory import MemoryBlockStore
 
-ALEX = Actor(id="alex", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="2026-07")
 OTHER_MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="2026-05")
-REQUEST = RegistrationRequest(media_type="application/pdf", actor=ALEX)
+REQUEST = RegistrationRequest(media_type="application/pdf", actor=CURATOR)
 REDACTABLE = RetentionPolicy(canonical_drop_allowed=True, redactable_media_types=["application/pdf"])
 
 
@@ -62,7 +62,7 @@ def commit(brain: Brain, source: BlockId, label: str, producer: Producer = MODEL
 
 def seeded(path: Path) -> Brain:
     """A brain on disk with one source and one derived fact, so it has something to pack."""
-    brain = Brain.open(path, actor=ALEX, policy=PERMISSIVE_POLICY)
+    brain = Brain.open(path, actor=CURATOR, policy=PERMISSIVE_POLICY)
     source = brain.register(b"%PDF-1.7 lecture 07", REQUEST).block_id
     commit(brain, source, "Fourier")
     return brain
@@ -70,7 +70,7 @@ def seeded(path: Path) -> Brain:
 
 @pytest.fixture
 def brain() -> Brain:
-    return Brain(MemoryBlockStore(), actor=ALEX, policy=PERMISSIVE_POLICY)
+    return Brain(MemoryBlockStore(), actor=CURATOR, policy=PERMISSIVE_POLICY)
 
 
 @pytest.fixture
@@ -91,7 +91,7 @@ class TestDropExcludes:
         before = brain.root_of(MemoryType.SEMANTIC)
 
         result = brain.drop(
-            DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=ALEX, reason="incorrect")
+            DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=CURATOR, reason="incorrect")
         )
         assert victim not in brain.module(MemoryType.SEMANTIC)
         assert brain.root_of(MemoryType.SEMANTIC) != before
@@ -101,14 +101,14 @@ class TestDropExcludes:
         """Blocks stay content-addressed and immutable; only membership changed."""
         source = brain.register(b"%PDF-1.7 lecture", REQUEST).block_id
         victim = commit(brain, source, "wrong")
-        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=ALEX, reason="incorrect"))
+        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=CURATOR, reason="incorrect"))
         assert brain.store.is_resolvable(victim)
         assert brain.store.get_block(victim).block_id == victim
 
     def test_a_dropped_block_no_longer_resolves_through_the_brain(self, brain: Brain) -> None:
         source = brain.register(b"%PDF-1.7 lecture", REQUEST).block_id
         victim = commit(brain, source, "wrong")
-        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=ALEX, reason="incorrect"))
+        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=CURATOR, reason="incorrect"))
         with pytest.raises(Exception, match="not in any installed composition"):
             brain.resolve(victim)
 
@@ -116,13 +116,13 @@ class TestDropExcludes:
         source = brain.register(b"%PDF-1.7 lecture", REQUEST).block_id
         victim = commit(brain, source, "wrong")
         assert len(brain.search(Query(text="wrong"))) == 1
-        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=ALEX, reason="incorrect"))
+        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=CURATOR, reason="incorrect"))
         assert len(brain.search(Query(text="wrong"))) == 0
 
     def test_the_brain_still_verifies_after_a_drop(self, brain: Brain) -> None:
         source = brain.register(b"%PDF-1.7 lecture", REQUEST).block_id
         victim = commit(brain, source, "wrong")
-        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=ALEX, reason="incorrect"))
+        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=CURATOR, reason="incorrect"))
         assert brain.verify()
 
     def test_the_removal_is_recorded(self, brain: Brain) -> None:
@@ -133,7 +133,7 @@ class TestDropExcludes:
             DropRequest(
                 blocks=[victim],
                 memory_type=MemoryType.SEMANTIC,
-                actor=ALEX,
+                actor=CURATOR,
                 reason="a wrong definition",
                 policy_name="editorial",
             )
@@ -148,7 +148,7 @@ class TestDropExcludes:
         assert records[0].mechanism is RemovalMechanism.DROP
         assert records[0].reason == "a wrong definition"
         assert records[0].policy == "editorial"
-        assert records[0].actor == ALEX
+        assert records[0].actor == CURATOR
 
     def test_dropping_a_block_that_is_not_a_member_is_refused(self, brain: Brain) -> None:
         brain.register(b"%PDF-1.7 lecture", REQUEST)
@@ -157,7 +157,7 @@ class TestDropExcludes:
                 DropRequest(
                     blocks=[BlockId.of(b"never committed")],
                     memory_type=MemoryType.CANONICAL,
-                    actor=ALEX,
+                    actor=CURATOR,
                     reason="x",
                 )
             )
@@ -170,7 +170,7 @@ class TestPrivilegedCanonicalCascade:
         assert len(brain.module(MemoryType.SEMANTIC)) == 2
 
         result = brain.drop(
-            DropRequest(blocks=[wrong_pdf], memory_type=MemoryType.CANONICAL, actor=ALEX, reason="ingested in error")
+            DropRequest(blocks=[wrong_pdf], memory_type=MemoryType.CANONICAL, actor=CURATOR, reason="ingested in error")
         )
         assert result.dropped[MemoryType.CANONICAL] == [wrong_pdf]
         assert len(result.dropped[MemoryType.SEMANTIC]) == 2
@@ -180,7 +180,7 @@ class TestPrivilegedCanonicalCascade:
     def test_the_plan_reports_the_cascade_before_anything_is_written(self, brain: Brain, wrong_pdf: BlockId) -> None:
         before = brain.snapshot()
         plan = brain.plan_drop(
-            DropRequest(blocks=[wrong_pdf], memory_type=MemoryType.CANONICAL, actor=ALEX, reason="x")
+            DropRequest(blocks=[wrong_pdf], memory_type=MemoryType.CANONICAL, actor=CURATOR, reason="x")
         )
         assert plan.privileged
         assert plan.size == 2
@@ -188,7 +188,9 @@ class TestPrivilegedCanonicalCascade:
 
     def test_it_publishes_several_roots_in_one_commit(self, brain: Brain, wrong_pdf: BlockId) -> None:
         """One logical removal of evidence advances every module it reached, as one version."""
-        result = brain.drop(DropRequest(blocks=[wrong_pdf], memory_type=MemoryType.CANONICAL, actor=ALEX, reason="x"))
+        result = brain.drop(
+            DropRequest(blocks=[wrong_pdf], memory_type=MemoryType.CANONICAL, actor=CURATOR, reason="x")
+        )
         assert {MemoryType.CANONICAL, MemoryType.SEMANTIC, MemoryType.PROVENANCE} <= set(result.roots)
         assert result.snapshot.parent is not None
 
@@ -196,11 +198,11 @@ class TestPrivilegedCanonicalCascade:
         good = brain.register(b"%PDF-1.7 the right lecture", REQUEST).block_id
         commit(brain, good, "C")
 
-        brain.drop(DropRequest(blocks=[wrong_pdf], memory_type=MemoryType.CANONICAL, actor=ALEX, reason="x"))
+        brain.drop(DropRequest(blocks=[wrong_pdf], memory_type=MemoryType.CANONICAL, actor=CURATOR, reason="x"))
         assert [block.label for block in brain.module(MemoryType.SEMANTIC).blocks()] == ["C"]
 
     def test_the_cascade_is_marked_as_such_in_the_ledger(self, brain: Brain, wrong_pdf: BlockId) -> None:
-        brain.drop(DropRequest(blocks=[wrong_pdf], memory_type=MemoryType.CANONICAL, actor=ALEX, reason="x"))
+        brain.drop(DropRequest(blocks=[wrong_pdf], memory_type=MemoryType.CANONICAL, actor=CURATOR, reason="x"))
         records = [
             block.record
             for block in brain.module(MemoryType.PROVENANCE).blocks()
@@ -218,7 +220,7 @@ class TestPrivilegedCanonicalCascade:
             DropRequest(
                 blocks=[wrong_pdf],
                 memory_type=MemoryType.CANONICAL,
-                actor=ALEX,
+                actor=CURATOR,
                 reason="x",
                 rederive_against=replacement,
             )
@@ -228,7 +230,7 @@ class TestPrivilegedCanonicalCascade:
 
     def test_without_a_replacement_nothing_is_re_derivable(self, brain: Brain, wrong_pdf: BlockId) -> None:
         plan = brain.plan_drop(
-            DropRequest(blocks=[wrong_pdf], memory_type=MemoryType.CANONICAL, actor=ALEX, reason="x")
+            DropRequest(blocks=[wrong_pdf], memory_type=MemoryType.CANONICAL, actor=CURATOR, reason="x")
         )
         assert plan.rederivable == []
 
@@ -246,7 +248,9 @@ class TestStructuralCascade:
             relations=[{"predicate": "depends_on", "target": str(target)}],
         )
 
-        result = brain.drop(DropRequest(blocks=[target], memory_type=MemoryType.SEMANTIC, actor=ALEX, reason="wrong"))
+        result = brain.drop(
+            DropRequest(blocks=[target], memory_type=MemoryType.SEMANTIC, actor=CURATOR, reason="wrong")
+        )
         assert set(result.dropped[MemoryType.SEMANTIC]) == {target, dependent}
         assert len(brain.module(MemoryType.SEMANTIC)) == 0
 
@@ -274,7 +278,9 @@ class TestStructuralCascade:
             )
         ).committed[0]
 
-        result = brain.drop(DropRequest(blocks=[formula], memory_type=MemoryType.SEMANTIC, actor=ALEX, reason="wrong"))
+        result = brain.drop(
+            DropRequest(blocks=[formula], memory_type=MemoryType.SEMANTIC, actor=CURATOR, reason="wrong")
+        )
         assert result.dropped[MemoryType.PROCEDURAL] == [procedure]
         assert len(brain.module(MemoryType.PROCEDURAL)) == 0
 
@@ -285,7 +291,7 @@ class TestStructuralCascade:
         second = commit(brain, source, "Second", relations=[{"predicate": "uses", "target": str(first)}])
         third = commit(brain, source, "Third", relations=[{"predicate": "uses", "target": str(second)}])
 
-        result = brain.drop(DropRequest(blocks=[first], memory_type=MemoryType.SEMANTIC, actor=ALEX, reason="wrong"))
+        result = brain.drop(DropRequest(blocks=[first], memory_type=MemoryType.SEMANTIC, actor=CURATOR, reason="wrong"))
         assert set(result.dropped[MemoryType.SEMANTIC]) == {first, second, third}
 
 
@@ -302,7 +308,7 @@ class TestBatchInvalidation:
             ProducerDropRequest(
                 producer=MODEL,
                 memory_types=[MemoryType.SEMANTIC],
-                actor=ALEX,
+                actor=CURATOR,
                 reason="the model was misconfigured",
             )
         )
@@ -319,7 +325,7 @@ class TestBatchInvalidation:
             ProducerDropRequest(
                 producer=Producer(kind=ProducerKind.MODEL, id="some-model"),
                 memory_types=[MemoryType.SEMANTIC],
-                actor=ALEX,
+                actor=CURATOR,
                 reason="every version was wrong",
             )
         )
@@ -334,7 +340,7 @@ class TestBatchInvalidation:
             ProducerDropRequest(
                 producer=Producer(kind=ProducerKind.MODEL, id="never-ran"),
                 memory_types=[MemoryType.SEMANTIC],
-                actor=ALEX,
+                actor=CURATOR,
                 reason="x",
             )
         )
@@ -365,40 +371,40 @@ class TestPolicy:
         ).committed[0]
 
         with pytest.raises(RetentionPolicyError, match="no policy can permit"):
-            brain.drop(DropRequest(blocks=[episode], memory_type=MemoryType.EPISODIC, actor=ALEX, reason="x"))
+            brain.drop(DropRequest(blocks=[episode], memory_type=MemoryType.EPISODIC, actor=CURATOR, reason="x"))
 
     def test_a_canonical_drop_is_refused_by_the_default_policy(self) -> None:
-        brain = Brain(MemoryBlockStore(), actor=ALEX)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR)
         source = brain.register(b"%PDF-1.7 lecture", REQUEST).block_id
         with pytest.raises(RetentionPolicyError, match="privileged"):
-            brain.drop(DropRequest(blocks=[source], memory_type=MemoryType.CANONICAL, actor=ALEX, reason="x"))
+            brain.drop(DropRequest(blocks=[source], memory_type=MemoryType.CANONICAL, actor=CURATOR, reason="x"))
 
     def test_a_large_cascade_is_held_for_review(self) -> None:
         policy = RetentionPolicy(canonical_drop_allowed=True, cascade_review_threshold=1)
-        brain = Brain(MemoryBlockStore(), actor=ALEX, policy=policy)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR, policy=policy)
         source = brain.register(b"%PDF-1.7 lecture", REQUEST).block_id
         commit(brain, source, "A")
         commit(brain, source, "B")
         before = brain.snapshot()
 
-        result = brain.drop(DropRequest(blocks=[source], memory_type=MemoryType.CANONICAL, actor=ALEX, reason="x"))
+        result = brain.drop(DropRequest(blocks=[source], memory_type=MemoryType.CANONICAL, actor=CURATOR, reason="x"))
         assert result.review_required
         assert result.dropped == {}
         assert brain.snapshot() == before
 
     def test_a_cascade_under_the_threshold_proceeds(self) -> None:
         policy = RetentionPolicy(canonical_drop_allowed=True, cascade_review_threshold=5)
-        brain = Brain(MemoryBlockStore(), actor=ALEX, policy=policy)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR, policy=policy)
         source = brain.register(b"%PDF-1.7 lecture", REQUEST).block_id
         commit(brain, source, "A")
 
-        result = brain.drop(DropRequest(blocks=[source], memory_type=MemoryType.CANONICAL, actor=ALEX, reason="x"))
+        result = brain.drop(DropRequest(blocks=[source], memory_type=MemoryType.CANONICAL, actor=CURATOR, reason="x"))
         assert not result.review_required
         assert len(brain.module(MemoryType.SEMANTIC)) == 0
 
     def test_a_cascade_cannot_rewrite_an_append_only_module(self) -> None:
         """A canonical drop must not reach the episodic module through the back door."""
-        brain = Brain(MemoryBlockStore(), actor=ALEX, policy=PERMISSIVE_POLICY)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR, policy=PERMISSIVE_POLICY)
         source = brain.register(b"%PDF-1.7 lecture", REQUEST).block_id
         task = brain.define_task(source)
         brain.commit(
@@ -417,7 +423,7 @@ class TestPolicy:
             )
         )
         with pytest.raises((RetentionPolicyError, AppendOnlyViolationError)):
-            brain.drop(DropRequest(blocks=[source], memory_type=MemoryType.CANONICAL, actor=ALEX, reason="x"))
+            brain.drop(DropRequest(blocks=[source], memory_type=MemoryType.CANONICAL, actor=CURATOR, reason="x"))
 
 
 class TestSupersession:
@@ -541,13 +547,13 @@ class TestPrune:
 
     def make(self, tmp_path: Path, retained: int = 1) -> Brain:
         policy = RetentionPolicy(retained_roots=retained, canonical_drop_allowed=True)
-        return Brain.open(tmp_path / "brain", actor=ALEX, policy=policy)
+        return Brain.open(tmp_path / "brain", actor=CURATOR, policy=policy)
 
     def test_a_dry_run_deletes_nothing(self, tmp_path: Path) -> None:
         brain = self.make(tmp_path)
         source = brain.register(b"%PDF-1.7 lecture", REQUEST).block_id
         victim = commit(brain, source, "wrong")
-        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=ALEX, reason="x"))
+        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=CURATOR, reason="x"))
 
         held = len(list(brain.store.iter_digests()))
         report = brain.prune(dry_run=True)
@@ -559,7 +565,7 @@ class TestPrune:
         brain = self.make(tmp_path)
         source = brain.register(b"%PDF-1.7 lecture", REQUEST).block_id
         victim = commit(brain, source, "wrong")
-        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=ALEX, reason="x"))
+        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=CURATOR, reason="x"))
 
         report = brain.prune(dry_run=False)
         assert victim.hex in {digest.hex for digest in report.reclaimed}
@@ -588,7 +594,7 @@ class TestPrune:
         brain = self.make(tmp_path)
         source = brain.register(b"%PDF-1.7 lecture", REQUEST).block_id
         victim = commit(brain, source, "wrong")
-        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=ALEX, reason="x"))
+        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=CURATOR, reason="x"))
         brain.prune(dry_run=False)
         assert brain.prune(dry_run=False).reclaimed_count == 0
 
@@ -596,7 +602,7 @@ class TestPrune:
         wide = self.make(tmp_path / "wide", retained=50)
         source = wide.register(b"%PDF-1.7 lecture", REQUEST).block_id
         victim = commit(wide, source, "wrong")
-        wide.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=ALEX, reason="x"))
+        wide.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=CURATOR, reason="x"))
         assert wide.prune(dry_run=True).reclaimed_count == 0
 
     def test_mark_and_sweep_partition_the_store(self, tmp_path: Path) -> None:
@@ -615,7 +621,7 @@ class TestRedaction:
     """Destroy bytes a retained root still names, and report it as such."""
 
     def make(self) -> tuple[Brain, BlockId]:
-        brain = Brain(MemoryBlockStore(), actor=ALEX, policy=REDACTABLE)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR, policy=REDACTABLE)
         source = brain.register(b"%PDF-1.7 personal data", REQUEST).block_id
         return brain, source
 
@@ -668,7 +674,7 @@ class TestRedaction:
 
     def test_redaction_is_refused_without_an_explicit_policy(self) -> None:
         """Wrong knowledge is dropped, not redacted, so this needs opting in."""
-        brain = Brain(MemoryBlockStore(), actor=ALEX, policy=PERMISSIVE_POLICY)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR, policy=PERMISSIVE_POLICY)
         source = brain.register(b"%PDF-1.7 lecture", REQUEST).block_id
         with pytest.raises(RetentionPolicyError, match="dropped, not redacted"):
             brain.redact(source, MemoryType.CANONICAL, reason="x")
@@ -694,7 +700,7 @@ class TestLedger:
     def test_removals_are_recorded(self, brain: Brain) -> None:
         source = brain.register(b"%PDF-1.7 lecture", REQUEST).block_id
         victim = commit(brain, source, "wrong")
-        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=ALEX, reason="x"))
+        brain.drop(DropRequest(blocks=[victim], memory_type=MemoryType.SEMANTIC, actor=CURATOR, reason="x"))
         assert victim in Ledger.of(brain.modules()).removed
 
     def test_a_brain_without_provenance_yields_an_empty_ledger(self) -> None:

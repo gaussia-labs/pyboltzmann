@@ -21,7 +21,7 @@ from boltzmann.store.memory import MemoryBlockStore
 from boltzmann_sandbox.indices import InvertedIndex, VectorIndex
 from boltzmann_sandbox.planner import RRF_K, HybridPlanner
 
-ALEX = Actor(id="alex", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="test", version="1")
 
 FACTS = [
@@ -39,12 +39,12 @@ def brain() -> Brain:
     indices: dict = {MemoryType.SEMANTIC: [InvertedIndex(), VectorIndex()]}
     instance = Brain(
         MemoryBlockStore(),
-        actor=ALEX,
+        actor=CURATOR,
         planner=HybridPlanner(indices),
         indices=indices,
     )
     source = instance.register(
-        b"%PDF-1.7 signals lecture", RegistrationRequest(media_type="application/pdf", actor=ALEX)
+        b"%PDF-1.7 signals lecture", RegistrationRequest(media_type="application/pdf", actor=CURATOR)
     )
     task = instance.define_task(source.block_id, allowed=[MemoryType.SEMANTIC])
     instance.commit(

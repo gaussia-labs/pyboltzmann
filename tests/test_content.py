@@ -44,7 +44,7 @@ from boltzmann.store.memory import MemoryBlockStore
 if TYPE_CHECKING:
     from pathlib import Path
 
-ALEX = Actor(id="alex", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
 DETECTOR = Producer(kind=ProducerKind.MODEL, id="detector", version="1")
 TRANSCRIPT = b"the transcript of that episode, too large to inline in a payload" * 40
 
@@ -70,7 +70,7 @@ def naming(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """
 
     def build(**kwargs: object) -> tuple[Brain, object, ContentRef]:
-        brain = Brain.open(tmp_path / "brain", actor=ALEX, **kwargs)  # type: ignore[arg-type]
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR, **kwargs)  # type: ignore[arg-type]
         reference = brain.put_content(TRANSCRIPT, media_type="text/plain")
 
         # The real EpisodicBlock, told to name that content. No registry entry, so no other test's
@@ -83,7 +83,7 @@ def naming(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         )
 
         commit = brain.ingest(
-            b"%PDF-1.7 lecture", RegistrationRequest(media_type="application/pdf", actor=ALEX), _proposer
+            b"%PDF-1.7 lecture", RegistrationRequest(media_type="application/pdf", actor=CURATOR), _proposer
         )
         episodic = brain.module(MemoryType.EPISODIC).block_ids
         assert len(episodic) == 1, commit
@@ -123,7 +123,7 @@ class TestPutContent:
     """Materializing bytes a block will name is not registering evidence."""
 
     def test_it_returns_a_usable_reference(self, tmp_path: Path) -> None:
-        brain = Brain.open(tmp_path / "brain", actor=ALEX)
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         reference = brain.put_content(TRANSCRIPT, media_type="text/plain")
 
         assert reference.size == len(TRANSCRIPT)
@@ -132,20 +132,20 @@ class TestPutContent:
 
     def test_it_commits_nothing(self, tmp_path: Path) -> None:
         # No block, no composition, no snapshot: nothing to commit until a block names it.
-        brain = Brain.open(tmp_path / "brain", actor=ALEX)
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         before = brain.snapshot()
         brain.put_content(TRANSCRIPT, media_type="text/plain")
         assert brain.snapshot() == before
 
     def test_identical_content_has_one_identity(self, tmp_path: Path) -> None:
-        brain = Brain.open(tmp_path / "brain", actor=ALEX)
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         first = brain.put_content(TRANSCRIPT, media_type="text/plain")
         second = brain.put_content(TRANSCRIPT, media_type="text/plain")
         assert first.blob == second.blob
 
     def test_content_nothing_names_is_reclaimed(self, tmp_path: Path) -> None:
         # The counterpart to the sweep tests: unreferenced content is exactly what a prune should collect.
-        brain = Brain.open(tmp_path / "brain", actor=ALEX)
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         orphan = brain.put_content(b"named by nothing", media_type="text/plain")
 
         report = brain.prune(dry_run=False)
@@ -213,15 +213,15 @@ class TestIndicesReceiveAReader:
                 return []
 
         # Brain.open, one call, no store threaded through by hand.
-        brain = Brain.open(tmp_path / "brain", actor=ALEX, indices={MemoryType.CANONICAL: [ContentIndex()]})
-        brain.register(b"%PDF-1.7 the lecture notes", RegistrationRequest(media_type="application/pdf", actor=ALEX))
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR, indices={MemoryType.CANONICAL: [ContentIndex()]})
+        brain.register(b"%PDF-1.7 the lecture notes", RegistrationRequest(media_type="application/pdf", actor=CURATOR))
 
         assert list(indexed.values()) == [b"%PDF-1.7 the lecture notes"]
 
     def test_the_store_satisfies_the_reader_protocol(self, tmp_path: Path) -> None:
         # Structural, via get_bytes: the narrowing costs an implementation nothing, and there is no
         # second spelling of the same read to keep in sync.
-        assert isinstance(Brain.open(tmp_path / "brain", actor=ALEX).store, ContentReader)
+        assert isinstance(Brain.open(tmp_path / "brain", actor=CURATOR).store, ContentReader)
         assert isinstance(MemoryBlockStore(), ContentReader)
 
 
