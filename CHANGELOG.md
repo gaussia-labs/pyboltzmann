@@ -1,6 +1,157 @@
 # CHANGELOG
 
 
+## v0.2.0-b.2 (2026-08-05)
+
+### Bug Fixes
+
+- **retention**: Report the content a snapshot names but can no longer read
+  ([`5e41bfe`](https://github.com/gaussia-labs/pyboltzmann/commit/5e41bfe49ee8be019c9322eaa35f125fca458073))
+
+A block may name bytes it does not carry, and since any schema can do that, a snapshot has a state
+  nothing reported: the block is whole, its composition consistent, and the datum it names is gone.
+  Every other reader is silent about it and each is right to be. `verify` skips bytes it cannot read
+  -- it answers whether what is present hashes to the identity it is filed under, and has tolerated
+  absent block bodies since the beginning, because a selective install is legitimate. A composition
+  verifies over identities. A `prune` reclaims nothing, because a retained root still names the
+  digest. So the failure surfaced at `pack_module`, which is the last place it can be found and the
+  worst: by then the snapshot was believed publishable.
+
+`resolvability` is the call whose whole job is what can still be read, so the three-way split now
+  covers content too, and `is_intact` requires both halves. An episode whose transcript is gone is
+  not a whole episode.
+
+The split is three ways for content by the same argument it is for blocks (Section 10.6): a
+  transcript destroyed under an erasure policy must not read as a damaged store. Redaction
+  tombstones a block and its content together, so a lawful erasure stays intact.
+
+The content of an unreadable block is not classified, because the digests it names can only be
+  learned by reading it. A tombstoned block therefore contributes nothing, which is correct: what it
+  named is not knowable from the snapshot, and the tombstone already says it is gone.
+
+Reads no content. Classifying it asks the store which digests it holds, exactly as the block half
+  does, so the cost stays a pass over envelopes rather than a pass over every blob.
+
+The conformance suite requires this of any implementation. It is assertable because the seeded brain
+  holds a canonical source, and canonical has named its original since the beginning -- which is
+  also why this gap was never episodic-only.
+
+BREAKING CHANGE: ResolvabilityReport.is_intact is stricter. A snapshot holding a block that names
+  content the store no longer has answered True and now answers False, and the report carries three
+  new fields -- content_resolvable, content_tombstoned, content_missing -- that a consumer reading
+  the report as an exhaustive three-way split of block ids will not expect. The old answer was the
+  bug being fixed, not a promise: such a snapshot cannot be packed for publication, so nothing that
+  trusted the True was safe. Anyone asserting is_intact over a brain with absent data should expect
+  it to start failing, and to find the reason in content_missing.
+
+### Testing
+
+- Use a generic actor in the fixtures and golden vectors
+  ([`3f3892e`](https://github.com/gaussia-labs/pyboltzmann/commit/3f3892e65d175f88923e0e7cc038d5d572493b9d))
+
+The docs stopped naming the maintainer in the last commit, but the fixtures kept `ALEX =
+  Actor(id="alex")` and one golden vector still carried `Alex Fiorenza` inside a provenance record.
+  A test suite is read as documentation of the API, and a conformance vector is read by every other
+  implementation of the protocol, so both should say the role rather than who wrote them: the actor
+  is now `curator`, named `Example Curator`.
+
+The name lives inside the registration record of the `provenance_registration` vector, so it is part
+  of what the block hashes over. Its `canonical_bytes` and `block_id` were regenerated with the
+  SDK's own `canonicalize`, which moves the published id from `sha256:122f1f1b...` to
+  `sha256:febdc629...`. Nothing else in the repository referenced the old id, but any other
+  implementation pinned to it has to be resynced.
+
+`pyproject.toml` keeps the real author: there the name is authorship, not an example.
+
+### Breaking Changes
+
+- **retention**: Resolvabilityreport.is_intact is stricter. A snapshot holding a block that names
+  content the store no longer has answered True and now answers False, and the report carries three
+  new fields -- content_resolvable, content_tombstoned, content_missing -- that a consumer reading
+  the report as an exhaustive three-way split of block ids will not expect. The old answer was the
+  bug being fixed, not a promise: such a snapshot cannot be packed for publication, so nothing that
+  trusted the True was safe. Anyone asserting is_intact over a brain with absent data should expect
+  it to start failing, and to find the reason in content_missing.
+
+
+## v0.2.0-b.1 (2026-08-05)
+
+### Documentation
+
+- Document content a block names rather than carries
+  ([`16e8389`](https://github.com/gaussia-labs/pyboltzmann/commit/16e83897d88b334b5e67b661a42414f93889e04f))
+
+The Index page still showed `build(self, blocks)`, which no longer exists, so the one example a
+  reader would copy was the one that would not run.
+
+Adds `content_digests`, `put_content` and `ContentRef` to the architecture page, with the
+  distinction that keeps the audit model intact: content is the block's own datum and nothing cites
+  it, while evidence is canonical and everything derived from it cascades on a drop.
+
+Both new snippets were executed against the SDK before being written down.
+
+- Use a generic actor in the examples
+  ([`37c6b0c`](https://github.com/gaussia-labs/pyboltzmann/commit/37c6b0cafd668a9c200f4d9d857271733279d89a))
+
+Every example opened a brain as `Actor(id="alex")`, which is the maintainer's own name in
+  documentation an international audience reads. `curator` says what the role is instead of who
+  happened to write the page, so `actor=curator` now reads as the sentence it always meant.
+
+An episodic block's `participants` became `["lecturer", "students"]`, which also fits the lecture
+  the surrounding example is about.
+
+The README matters most here: it is the PyPI landing page, so it is the first example anyone sees.
+  Its snippet was executed again afterwards.
+
+### Features
+
+- **blocks**: Let any block name content it does not carry
+  ([`838fb72`](https://github.com/gaussia-labs/pyboltzmann/commit/838fb724ed4e9333b28eb283a6f2480e7048e135))
+
+A payload is JSON, canonically serialized and hashed on every access, so a datum large enough to
+  matter belongs in the store with the block naming it. Canonical always worked that way. Nothing
+  else could, and the concept was never first class: the three operations that must account for
+  those bytes each recovered them by asking `isinstance(block, CanonicalBlock)`, which is a
+  different question from the one they needed answered.
+
+That made two of them silently wrong for any other schema that named bytes. `reachability` would not
+  mark them, so `prune` deletes content a retained root still names -- data loss. `redact` would not
+  destroy them, so a redaction reports success and leaves the bytes -- a compliance failure. And
+  `required_blobs` would not pack them, publishing an artifact whose pointers lead nowhere. All
+  three now ask the block through `content_digests`, so the schema that eventually names content
+  inherits the behaviour instead of rediscovering these three bugs.
+
+`ContentRef` generalizes a shape that was already proven: `NormalizedView` had exactly these three
+  fields, and now subclasses it. It adds no field and must not, or every canonical block_id carrying
+  a view would move.
+
+The scan deliberately does not read content. It is linear and holds no reader; fetching blobs would
+  turn a pass over envelopes into a pass over every blob a module holds, and the cost would arrive
+  silently on a call that was cheap. Indexing content is what an index is for.
+
+The envelope keeps its five keys and PROTOCOL_VERSION stays 1. Verified additive on both published
+  surfaces: the golden vectors pass unregenerated, and the JSON Schema emitted to a model is
+  byte-identical.
+
+BREAKING CHANGE: Index.build takes a second argument, a ContentReader. An index over blocks that
+  name their content cannot work from the blocks alone, and the caller previously had to construct
+  the store itself and thread it in. The reader is narrower than BlockStore on purpose -- an index
+  has no business calling put_bytes, tombstone or delete -- and keeps the store's own get_bytes
+  name, so a BlockStore satisfies it structurally. Done now rather than through an optional hook
+  because Index is a published protocol: an implementation in another language would never learn a
+  hook exists.
+
+### Breaking Changes
+
+- **blocks**: Index.build takes a second argument, a ContentReader. An index over blocks that name
+  their content cannot work from the blocks alone, and the caller previously had to construct the
+  store itself and thread it in. The reader is narrower than BlockStore on purpose -- an index has
+  no business calling put_bytes, tombstone or delete -- and keeps the store's own get_bytes name, so
+  a BlockStore satisfies it structurally. Done now rather than through an optional hook because
+  Index is a published protocol: an implementation in another language would never learn a hook
+  exists.
+
+
 ## v0.1.1 (2026-08-04)
 
 ### Bug Fixes

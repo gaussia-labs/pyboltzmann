@@ -25,7 +25,43 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from boltzmann.blocks.base import Block
-    from boltzmann.identity.digest import BlockId
+    from boltzmann.identity.digest import BlockId, Digest
+
+
+@runtime_checkable
+class ContentReader(Protocol):
+    """Reads the bytes a block names but does not carry.
+
+    A block whose datum is large or binary names it by digest, so an index over such a
+    module cannot work from the blocks alone -- it needs the content. This is the whole
+    of what it needs: one read, by digest.
+
+    Deliberately narrower than :class:`~boltzmann.store.base.BlockStore`, which also
+    offers ``put_bytes``, ``tombstone`` and ``delete``. An index is a derived view; it
+    has no business writing to a store or destroying anything in one, and an interface
+    that hands it those methods invites exactly that.
+
+    The method keeps the store's own name, so a ``BlockStore`` satisfies this protocol
+    structurally and the narrowing costs an implementation nothing -- no adapter, no
+    second spelling of the same read.
+    """
+
+    def get_bytes(self, digest: Digest) -> bytes:
+        """
+        The bytes filed under a content address, verified against it.
+
+        Args:
+            digest (Digest): The content address to read.
+
+        Returns:
+            bytes: The content.
+
+        Raises:
+            BlockNotFoundError: If the bytes are not held.
+            BlockTombstonedError: If they were redacted.
+            BlockIntegrityError: If what is stored does not hash to ``digest``.
+        """
+        ...
 
 
 class IndexKind(StrEnum):
@@ -70,12 +106,20 @@ class Index(Protocol):
         """The model and version behind this index, for indices that need one."""
         ...
 
-    def build(self, blocks: Iterable[Block]) -> None:
+    def build(self, blocks: Iterable[Block], content: ContentReader) -> None:
         """
         Populate the index from a composition.
 
+        Called with the module's whole readable composition on every write, not with
+        the increment: this is a rebuild, so an index that accumulates must clear or
+        deduplicate. Indexing content is expensive enough that skipping blocks already
+        held is worth doing here rather than paying for it on each write.
+
         Args:
             blocks (Iterable[Block]): The blocks of the version being indexed.
+            content (ContentReader): Reads the bytes a block names rather than carries,
+                as :attr:`~boltzmann.blocks.base.Block.content_digests` reports them. An
+                index over self-contained blocks can ignore it.
         """
         ...
 
@@ -156,7 +200,7 @@ class AbstractIndex(ABC):
         return None
 
     @abstractmethod
-    def build(self, blocks: Iterable[Block]) -> None:
+    def build(self, blocks: Iterable[Block], content: ContentReader) -> None:
         """Populate the index from a composition."""
 
     @abstractmethod

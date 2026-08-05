@@ -15,7 +15,7 @@ work against an OCI artifact. `Brain` implements the whole protocol — 23 of 23
 operations across the four contracts.
 
 ```python
-brain = Brain.open("./my-brain", actor=alex)
+brain = Brain.open("./my-brain", actor=curator)
 brain.ingest(pdf, request, my_llm)          # register → delegate → validate → commit
 brain.search(Query(text="Fourier"))         # filter, resolve, verify
 brain.drop(DropRequest(...))                # rebuild the Merkle DAG, cascade, record
@@ -64,8 +64,8 @@ from boltzmann import Actor, Brain, MemoryType, Producer, Query
 from boltzmann.blocks import ActorKind, ProducerKind
 from boltzmann.ingest import Candidate, CandidateSet, RegistrationRequest
 
-alex = Actor(id="alex", kind=ActorKind.HUMAN)
-brain = Brain.open("./my-brain", actor=alex)
+curator = Actor(id="curator", kind=ActorKind.HUMAN)
+brain = Brain.open("./my-brain", actor=curator)
 
 # You supply the model. The SDK embeds none: what knowledge a source yields is its
 # judgment, and what gets stored is the protocol's.
@@ -89,7 +89,7 @@ def my_llm(task, source):
         ],
     )
 
-request = RegistrationRequest(media_type="application/pdf", actor=alex, license="CC-BY-4.0")
+request = RegistrationRequest(media_type="application/pdf", actor=curator, license="CC-BY-4.0")
 pdf = b"%PDF-1.7 lecture 07: Fourier analysis"
 
 # Register, delegate, validate, commit. Registering the same source twice is a no-op.

@@ -382,6 +382,21 @@ class BrainReaderConformance(ABC):
         assert held > 0
         assert report.is_intact
 
+    def test_resolvability_covers_the_content_blocks_name(self) -> None:
+        """The same split, for the bytes a block names but does not carry.
+
+        The seeded brain holds a canonical source, and a canonical block names its original rather than
+        carrying it, so a conforming report has something to say here whatever the other schemas do: the
+        source resolves, and nothing is missing. An implementation that classifies only block identities
+        reports an empty split and fails, which is the point -- a brain whose data is gone must not read
+        as intact.
+        """
+        reader = self.make_reader()
+        report = reader.resolvability()
+        assert report.content_resolvable.get(MemoryType.CANONICAL)
+        assert not any(report.content_missing.values())
+        assert report.is_intact
+
     def test_search_returns_verified_data(self) -> None:
         from boltzmann.query.request import Query
 

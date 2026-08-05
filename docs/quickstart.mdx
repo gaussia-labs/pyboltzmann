@@ -12,8 +12,8 @@ Layout, so nothing here is a simulation of publishing.
 from boltzmann import Actor, Brain
 from boltzmann.blocks import ActorKind
 
-alex = Actor(id="alex", kind=ActorKind.HUMAN)
-brain = Brain.open("./my-brain", actor=alex)
+curator = Actor(id="curator", kind=ActorKind.HUMAN)
+brain = Brain.open("./my-brain", actor=curator)
 ```
 
 `Brain.open` creates the layout if the directory is empty and reopens it otherwise. Opening a brain is
@@ -58,7 +58,7 @@ A `CandidateProposer` is any callable with that shape. It is the only place inte
 ```python
 from boltzmann.ingest import RegistrationRequest
 
-request = RegistrationRequest(media_type="application/pdf", actor=alex, license="CC-BY-4.0")
+request = RegistrationRequest(media_type="application/pdf", actor=curator, license="CC-BY-4.0")
 pdf = b"%PDF-1.7 lecture 07: Fourier analysis"
 
 commit = brain.ingest(pdf, request, my_llm)
@@ -138,7 +138,7 @@ from boltzmann.retention import DropRequest, RetentionPolicy
 source = brain.module(MemoryType.CANONICAL).block_ids[0]
 
 plan = brain.plan_drop(DropRequest(
-    blocks=[source], memory_type=MemoryType.CANONICAL, actor=alex, reason="ingested in error",
+    blocks=[source], memory_type=MemoryType.CANONICAL, actor=curator, reason="ingested in error",
 ))
 print(plan.privileged, plan.size)
 # True 1
@@ -147,9 +147,9 @@ print(plan.privileged, plan.size)
 A canonical drop is off by default, because excluding evidence forfeits re-derivation from it:
 
 ```python
-brain = Brain.open("./my-brain", actor=alex, policy=RetentionPolicy(canonical_drop_allowed=True))
+brain = Brain.open("./my-brain", actor=curator, policy=RetentionPolicy(canonical_drop_allowed=True))
 result = brain.drop(DropRequest(
-    blocks=[source], memory_type=MemoryType.CANONICAL, actor=alex, reason="ingested in error",
+    blocks=[source], memory_type=MemoryType.CANONICAL, actor=curator, reason="ingested in error",
 ))
 print({k.value: len(v) for k, v in result.dropped.items()})
 # {'canonical': 1, 'semantic': 1}
@@ -179,7 +179,7 @@ from boltzmann.distribution import LocalLayoutRegistry, OrasRegistryClient
 registry = OrasRegistryClient()                    # or LocalLayoutRegistry("./registry")
 await brain.push(registry, "ghcr.io/org/brain", "v1")
 
-consumer = Brain.open("./local", actor=alex)
+consumer = Brain.open("./local", actor=curator)
 plan = await consumer.plan_pull(registry, "ghcr.io/org/brain", "v1")   # costs one manifest
 await consumer.pull(registry, "ghcr.io/org/brain", "v1", modules=[MemoryType.SEMANTIC])
 ```

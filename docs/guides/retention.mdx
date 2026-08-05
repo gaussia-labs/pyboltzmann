@@ -38,7 +38,7 @@ from boltzmann.retention import DropRequest
 plan = brain.plan_drop(DropRequest(
     blocks=[source_id],
     memory_type=MemoryType.CANONICAL,
-    actor=alex,
+    actor=curator,
     reason="ingested in error",
 ))
 
@@ -56,7 +56,7 @@ estimated.
 
 ```python
 result = brain.drop(DropRequest(
-    blocks=[source_id], memory_type=MemoryType.CANONICAL, actor=alex, reason="ingested in error",
+    blocks=[source_id], memory_type=MemoryType.CANONICAL, actor=curator, reason="ingested in error",
 ))
 
 result.snapshot
@@ -73,7 +73,7 @@ A canonical drop is **off by default**, since excluding evidence forfeits re-der
 ```python
 from boltzmann.retention import PERMISSIVE_POLICY, RetentionPolicy
 
-brain = Brain.open("./my-brain", actor=alex, policy=RetentionPolicy(canonical_drop_allowed=True))
+brain = Brain.open("./my-brain", actor=curator, policy=RetentionPolicy(canonical_drop_allowed=True))
 # or, equivalently, policy=PERMISSIVE_POLICY
 ```
 
@@ -88,7 +88,7 @@ from boltzmann.retention import ProducerDropRequest
 brain.drop_by_producer(ProducerDropRequest(
     producer=Producer(kind=ProducerKind.MODEL, id="claude-opus-5", version="2026-06"),
     memory_types=[MemoryType.SEMANTIC, MemoryType.PROCEDURAL],
-    actor=alex,
+    actor=curator,
     reason="the extraction prompt cited the wrong section",
 ))
 ```
@@ -102,7 +102,7 @@ Naming a replacement makes the difference between a deletion and a re-derivation
 
 ```python
 plan = brain.plan_drop(DropRequest(
-    blocks=[wrong_source], memory_type=MemoryType.CANONICAL, actor=alex,
+    blocks=[wrong_source], memory_type=MemoryType.CANONICAL, actor=curator,
     reason="the source was a draft",
     rederive_against=corrected_source,
 ))
@@ -177,8 +177,25 @@ report = brain.resolvability()
 report.resolvable        # {MemoryType: [BlockId]}
 report.tombstoned        # redacted: named by a root, bytes destroyed
 report.missing           # not held: a selective install, or damage
-report.is_intact         # every block resolves or is accounted for by a tombstone
+report.is_intact         # every block and every datum it names is resolvable or tombstoned
 ```
+
+The same split is reported for the [content a block names but does not
+carry](/sdks/boltzmann/concepts/architecture#content-a-block-names-but-does-not-carry), because an
+episode whose transcript is gone is not a whole episode:
+
+```python
+report.content_resolvable   # {MemoryType: [Digest]}
+report.content_tombstoned   # destroyed under an erasure policy
+report.content_missing      # the block verifies, the datum it names is gone
+```
+
+<Note>
+  This is the only reader that reports a datum a block names but the store no longer holds. `verify()`
+  tolerates absent bytes by design — it answers whether what is present hashes to the identity it is filed
+  under — and a `prune` reclaims nothing, because a retained root still names the digest. Without
+  `content_missing` the brain looks intact until `pack` refuses to publish it.
+</Note>
 
 Redaction requires explicit policy, or it raises `RetentionPolicyError`.
 

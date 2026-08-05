@@ -8,7 +8,7 @@ against an OCI artifact. `Brain` implements the whole protocol — 23 of 23 oper
 contracts.
 
 ```python
-brain = Brain.open("./my-brain", actor=alex)
+brain = Brain.open("./my-brain", actor=curator)
 brain.ingest(pdf, request, my_llm)          # register → delegate → validate → commit
 brain.search(Query(text="Fourier"))         # filter, resolve, verify
 brain.drop(DropRequest(...))                # rebuild the Merkle DAG, cascade, record

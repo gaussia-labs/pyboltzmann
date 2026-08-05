@@ -27,7 +27,7 @@ from boltzmann.ingest.task import ProcessingTask, TaskOperation
 from boltzmann.query.evidence import EvidenceBundle, Match, SourceRef
 from boltzmann.store.memory import MemoryBlockStore
 
-ALEX = Actor(id="alex", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
 SOURCE = BlockId.of(b"%PDF-1.7 lecture notes")
 
@@ -180,9 +180,9 @@ class TestEveryProposableTypeValidates:
         document = proposal(candidate)
         assert validator.is_valid(document)
 
-        brain = Brain(MemoryBlockStore(), actor=ALEX)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR)
         registered = brain.register(
-            b"%PDF-1.7 lecture notes", RegistrationRequest(media_type="application/pdf", actor=ALEX)
+            b"%PDF-1.7 lecture notes", RegistrationRequest(media_type="application/pdf", actor=CURATOR)
         ).block_id
         # SOURCE hashes the raw bytes; a canonical block_id hashes the envelope that describes them, so
         # the candidate has to cite the block rather than the blob.
@@ -279,9 +279,9 @@ class TestOtherWireFormats:
 
 class TestBrainSurface:
     def test_the_brain_hands_out_the_schema_for_a_task(self) -> None:
-        brain = Brain(MemoryBlockStore(), actor=ALEX)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR)
         source = brain.register(
-            b"%PDF-1.7 lecture notes", RegistrationRequest(media_type="application/pdf", actor=ALEX)
+            b"%PDF-1.7 lecture notes", RegistrationRequest(media_type="application/pdf", actor=CURATOR)
         ).block_id
         task = brain.define_task(source, allowed=[MemoryType.SEMANTIC])
 

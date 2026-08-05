@@ -33,7 +33,7 @@ from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.store.memory import MemoryBlockStore
 
-ALEX = Actor(id="alex", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
 REFERENCE = "registry.example/org/brain"
 
@@ -221,10 +221,10 @@ def client(fake: FakeRegistry) -> OrasRegistryClient:
 
 @pytest.fixture
 def brain(tmp_path: Path) -> Brain:
-    brain = Brain.open(tmp_path / "brain", actor=ALEX)
+    brain = Brain.open(tmp_path / "brain", actor=CURATOR)
     brain.ingest(
         b"%PDF-1.7 Lecture 07",
-        RegistrationRequest(media_type="application/pdf", actor=ALEX),
+        RegistrationRequest(media_type="application/pdf", actor=CURATOR),
         llm,
     )
     return brain
@@ -371,10 +371,10 @@ class TestUploads:
         self, client: OrasRegistryClient, fake: FakeRegistry
     ) -> None:
         """A store with no filesystem still has to be publishable; the blob is staged for the upload."""
-        brain = Brain(MemoryBlockStore(), actor=ALEX)
+        brain = Brain(MemoryBlockStore(), actor=CURATOR)
         brain.ingest(
             b"%PDF-1.7 Lecture 07",
-            RegistrationRequest(media_type="application/pdf", actor=ALEX),
+            RegistrationRequest(media_type="application/pdf", actor=CURATOR),
             llm,
         )
         await brain.push(client, REFERENCE, "v1")
@@ -420,7 +420,7 @@ class TestFullCycleOverTheFakeTransport:
     async def test_pull_modify_push(self, brain: Brain, client: OrasRegistryClient, tmp_path: Path) -> None:
         await brain.push(client, REFERENCE, "v1")
 
-        target = Brain.open(tmp_path / "target", actor=ALEX)
+        target = Brain.open(tmp_path / "target", actor=CURATOR)
         await target.pull(client, REFERENCE, "v1")
         assert target.verify()
         assert target.root_of(MemoryType.SEMANTIC) == brain.root_of(MemoryType.SEMANTIC)
@@ -430,7 +430,7 @@ class TestFullCycleOverTheFakeTransport:
         target.commit(target.validate(proposing("Convolution")(task, b""), task))
         await target.push(client, tag="v2")
 
-        again = Brain.open(tmp_path / "again", actor=ALEX)
+        again = Brain.open(tmp_path / "again", actor=CURATOR)
         await again.pull(client, REFERENCE, "v2")
         assert len(again.module(MemoryType.SEMANTIC)) == 2
         assert again.verify()
@@ -502,7 +502,7 @@ class TestTellingAbsenceFromFailure:
 
         brain.ingest(
             b"%PDF-1.7 Lecture 08",
-            RegistrationRequest(media_type="application/pdf", actor=ALEX),
+            RegistrationRequest(media_type="application/pdf", actor=CURATOR),
             proposing("Laplace"),
         )
         with pytest.raises(DistributionError, match="401"):

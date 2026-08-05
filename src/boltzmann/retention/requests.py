@@ -228,11 +228,21 @@ class RedactionResult(BaseModel):
 
 class ResolvabilityReport(BaseModel):
     """
-    Which blocks of a snapshot can still be read.
+    Which of a snapshot's bytes can still be read -- the blocks, and what they name.
 
     A conforming implementation must report which blocks of a snapshot are resolvable and which are
     tombstoned, so that a removed block is never indistinguishable from a corrupted one
     (paper Section 10.6). Keeping ``missing`` separate from ``tombstoned`` is that requirement.
+
+    A block may name content it does not carry, and that content is as much a part of what the
+    snapshot asserts as the envelope naming it: an episode whose transcript is gone is not a whole
+    episode. So the same three-way split is reported for content, and by the same argument -- a
+    transcript destroyed under an erasure policy must not read as a damaged store.
+
+    The content of an unreadable block is not classified, because the digests it names can only be
+    learned by reading it. A tombstoned block therefore contributes nothing here, which is correct:
+    what its content is now is not knowable from the snapshot, and the tombstone already says the
+    block is gone.
 
     Attributes:
         resolvable (dict[MemoryType, list[BlockId]]): Blocks whose bytes are present.
@@ -240,6 +250,13 @@ class ResolvabilityReport(BaseModel):
             erasure policy.
         missing (dict[MemoryType, list[BlockId]]): Blocks whose bytes are absent with no tombstone
             -- corruption rather than redaction.
+        content_resolvable (dict[MemoryType, list[Digest]]): Content named by a readable block and
+            present in the store.
+        content_tombstoned (dict[MemoryType, list[Digest]]): Content destroyed under an erasure
+            policy while the block naming it remains readable.
+        content_missing (dict[MemoryType, list[Digest]]): Content named by a readable block and
+            absent with no tombstone. The block verifies and the composition verifies; the datum it
+            names is gone.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -247,8 +264,11 @@ class ResolvabilityReport(BaseModel):
     resolvable: dict[MemoryType, list[BlockId]] = Field(default_factory=dict)
     tombstoned: dict[MemoryType, list[BlockId]] = Field(default_factory=dict)
     missing: dict[MemoryType, list[BlockId]] = Field(default_factory=dict)
+    content_resolvable: dict[MemoryType, list[Digest]] = Field(default_factory=dict)
+    content_tombstoned: dict[MemoryType, list[Digest]] = Field(default_factory=dict)
+    content_missing: dict[MemoryType, list[Digest]] = Field(default_factory=dict)
 
     @property
     def is_intact(self) -> bool:
-        """Whether every block resolves or is accounted for by a tombstone."""
-        return not any(self.missing.values())
+        """Whether every block and every datum it names resolves or is accounted for by a tombstone."""
+        return not any(self.missing.values()) and not any(self.content_missing.values())

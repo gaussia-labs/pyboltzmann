@@ -42,7 +42,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.exceptions import BlockIntegrityError, BlockSchemaError
-from boltzmann.identity.digest import BlockId
+from boltzmann.identity.digest import BlockId, Digest
 from boltzmann.identity.serialization import SERIALIZATION_ID, canonicalize, reject_non_deterministic
 
 ENVELOPE_KEYS = frozenset({"boltzmann", "memory_type", "payload", "schema_version", "serialization"})
@@ -130,6 +130,27 @@ class Block(BaseModel, ABC):
     def block_id(self) -> BlockId:
         """The block's content-addressed identity."""
         return BlockId.of(self.canonical_bytes())
+
+    # --- Content --------------------------------------------------------------
+
+    @property
+    def content_digests(self) -> tuple[Digest, ...]:
+        """
+        The bytes this block names but does not carry.
+
+        A payload is JSON, so a block whose datum is large or binary names it by
+        digest and leaves the bytes in the store; see
+        :class:`~boltzmann.blocks.content.ContentRef`. Everything that has to
+        account for those bytes -- packing a layer, marking reachability before a
+        prune, destroying them on redaction -- asks the block here rather than
+        testing its type, so a schema that starts naming content is handled by all
+        of them at once.
+
+        Returns:
+            tuple[Digest, ...]: The content addresses, empty for a self-contained
+            block. Order is not significant; callers deduplicate.
+        """
+        return ()
 
     # --- Decoding -------------------------------------------------------------
 

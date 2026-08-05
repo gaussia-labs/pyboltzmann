@@ -29,7 +29,7 @@ from boltzmann_sandbox.indices import (
     tokenize,
 )
 
-ALEX = Actor(id="alex", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="test", version="1")
 
 FACTS = [
@@ -49,8 +49,8 @@ def index_of(blocks: list) -> VectorIndex:
 @pytest.fixture
 def blocks() -> list:
     """Three semantic blocks, built through the SDK so they are real blocks and not stand-ins."""
-    brain = Brain(MemoryBlockStore(), actor=ALEX)
-    source = brain.register(b"%PDF-1.7 signals", RegistrationRequest(media_type="application/pdf", actor=ALEX))
+    brain = Brain(MemoryBlockStore(), actor=CURATOR)
+    source = brain.register(b"%PDF-1.7 signals", RegistrationRequest(media_type="application/pdf", actor=CURATOR))
     task = brain.define_task(source.block_id, allowed=[MemoryType.SEMANTIC])
     brain.commit(
         brain.validate(
@@ -120,8 +120,10 @@ class TestStemming:
 
     def test_a_canonical_block_contributes_only_its_media_type(self, blocks: list) -> None:
         """It is a descriptor over bytes, not prose, so it must not match a natural-language query."""
-        brain = Brain(MemoryBlockStore(), actor=ALEX)
-        registered = brain.register(b"%PDF-1.7 signals", RegistrationRequest(media_type="application/pdf", actor=ALEX))
+        brain = Brain(MemoryBlockStore(), actor=CURATOR)
+        registered = brain.register(
+            b"%PDF-1.7 signals", RegistrationRequest(media_type="application/pdf", actor=CURATOR)
+        )
         canonical = brain.resolve(registered.block_id)
         assert block_tokens(canonical) == ["application", "pdf"]
 

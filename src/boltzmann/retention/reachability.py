@@ -4,9 +4,13 @@ A brain retains a set of roots -- tagged releases plus recent snapshots. After d
 unreachable from those roots and can be reclaimed by mark-and-sweep (paper Section 10.4).
 
 Reachability is computed over what a snapshot *names*, transitively, and that is more than the block
-ids: a snapshot names each module's composition document, a composition names its blocks, and a canonical
-block names the observed bytes it describes. Reclaiming a source blob because no composition listed its
-digest directly would destroy the evidence a retained root still points at.
+ids: a snapshot names each module's composition document, a composition names its blocks, and a block
+names whatever content it keeps in the store rather than in its payload. Reclaiming those bytes because
+no composition listed their digest directly would destroy what a retained root still points at.
+
+Every block is asked what it names, in every module. Keying that on the canonical type would mean a
+sweep that silently deletes the content of any other schema that starts naming bytes -- the failure
+mode being data loss on a call whose whole promise is that it only reclaims what nothing needs.
 
 Pruning never decides *what* to forget. A drop already did. This only answers what nothing needs.
 """
@@ -15,14 +19,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from boltzmann.blocks.canonical import CanonicalBlock
-from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.module.composition import Composition
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from boltzmann.identity.digest import BlockId, Digest, OciDigest
+    from boltzmann.identity.digest import BlockId, OciDigest
     from boltzmann.module.snapshot import Snapshot
     from boltzmann.store.base import BlockStore
 
@@ -49,15 +51,16 @@ def reachable_from(snapshot: Snapshot, store: BlockStore) -> set[str]:
         # only kept alive if the parent is itself retained.
         keep.add(snapshot.parent.hex)
 
-    for memory_type, reference in snapshot.modules.items():
+    for reference in snapshot.modules.values():
         keep.add(reference.composition.hex)
         composition = _read_composition(reference.composition, store)
         if composition is None:
             continue
         for block_id in composition.block_ids:
             keep.add(block_id.hex)
-            if memory_type is MemoryType.CANONICAL:
-                keep.update(_bytes_named_by(block_id, store))
+            # Asked of every module, not only canonical: a block of any type may name its content, and a
+            # blob this misses is a blob the sweep deletes while a retained root still names it.
+            keep.update(_bytes_named_by(block_id, store))
     return keep
 
 
@@ -140,15 +143,9 @@ def _read_composition(digest: OciDigest, store: BlockStore) -> Composition | Non
 
 
 def _bytes_named_by(block_id: BlockId, store: BlockStore) -> set[str]:
-    """The observed bytes and normalized view a canonical block describes."""
+    """The content a block names but does not carry, whatever its type."""
     try:
         block = store.get_block(block_id)
     except Exception:
         return set()
-    if not isinstance(block, CanonicalBlock):
-        return set()
-
-    named: set[Digest] = {block.blob}
-    if block.normalized_view is not None:
-        named.add(block.normalized_view.blob)
-    return {digest.hex for digest in named}
+    return {digest.hex for digest in block.content_digests}

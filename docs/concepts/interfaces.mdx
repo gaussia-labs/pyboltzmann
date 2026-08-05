@@ -26,7 +26,7 @@ Every one is `runtime_checkable`:
 from boltzmann import BoltzmannProtocol, Brain, BrainReader
 
 assert isinstance(my_client, BrainReader)
-assert isinstance(Brain.open("./b", actor=alex), BoltzmannProtocol)
+assert isinstance(Brain.open("./b", actor=curator), BoltzmannProtocol)
 ```
 
 <Note>
@@ -45,7 +45,7 @@ from boltzmann.ingest import DEFAULT_VALIDATORS
 
 brain = Brain.open(
     "./my-brain",
-    actor=alex,
+    actor=curator,
     planner=MyPlanner(),                              # ranking
     indices={MemoryType.SEMANTIC: [MyVectorIndex()]}, # engines
     validators=[*DEFAULT_VALIDATORS, MyDomainCheck()],
@@ -90,7 +90,7 @@ A derived view over a module's composition. Which engine backs an index is the i
 none ships here.
 
 ```python
-from boltzmann.indices import AbstractIndex, Index, IndexKind, TravellingIndex
+from boltzmann.indices import AbstractIndex, ContentReader, Index, IndexKind, TravellingIndex
 
 [k.value for k in IndexKind]
 # ['hash_map', 'btree', 'inverted', 'vector', 'graph', 'bitmap']
@@ -99,9 +99,28 @@ class MyVectorIndex(AbstractIndex):
     KIND = IndexKind.VECTOR
     REBUILDABLE = False
 
-    def build(self, blocks): ...
+    def build(self, blocks, content: ContentReader): ...
     def search(self, query, limit=10) -> list[tuple[BlockId, float]]: ...
 ```
+
+`build` receives the module's **whole readable composition on every write**, not the increment — it is a
+rebuild, so an index that accumulates must clear or deduplicate.
+
+The `content` reader is for blocks that name their datum rather than carrying it: a canonical block is a
+digest, a media type and a size, with nothing to index until you read the bytes. Ask the block what it
+names and read that:
+
+```python
+def build(self, blocks, content):
+    self.vectors.clear()
+    for block in blocks:
+        for digest in block.content_digests:      # empty for a self-contained block
+            self.vectors[str(block.block_id)] = my_model(content.get_bytes(digest))
+```
+
+`ContentReader` is deliberately narrower than `BlockStore` — no `put_bytes`, no `tombstone`, no `delete`.
+An index is a derived view and has no business writing. A `BlockStore` satisfies it structurally, so
+supplying one costs nothing.
 
 <Warning>
   An index that reports `rebuildable = False` **must** also satisfy `TravellingIndex`, because no client

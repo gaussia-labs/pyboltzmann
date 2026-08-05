@@ -37,6 +37,37 @@ Blocks are never mutated. Every operation that looks like a change produces a ne
 composition, or a new snapshot. See [Memory types](/sdks/boltzmann/concepts/memory-types) for the five
 schemas.
 
+### Content a block names but does not carry
+
+A payload is JSON, canonically serialized and hashed on every access, so a datum large enough to matter
+does not belong inside one. A block may instead **name** its content by digest and leave the bytes in the
+store — which is what a canonical block has always done with the original it describes.
+
+```python
+block.content_digests    # the content addresses this block names; () when self-contained
+```
+
+```python
+reference = brain.put_content(transcript, media_type="text/plain")
+reference.blob, reference.media_type, reference.size
+```
+
+`put_content` stores the bytes and returns a `ContentRef` for a payload to name. It writes no block and
+publishes no snapshot: until a committed block names them, the bytes are unreachable and a `prune`
+reclaims them.
+
+<Note>
+  **Content is not evidence.** Evidence is canonical — it lives in the canonical composition, other blocks
+  cite it, and dropping it cascades to everything derived from it. Content is the block's own datum, so
+  nothing cites it and nothing needs to; it lives and dies with its block. A source other blocks will cite
+  is a canonical block, through `register`.
+</Note>
+
+Everything that must account for those bytes — packing a layer, marking reachability before a prune,
+destroying them on redaction — asks the block through `content_digests` rather than testing its type. So a
+schema that starts naming content is handled correctly by all of them at once, and an
+[index](/sdks/boltzmann/concepts/interfaces#index) is handed a reader for exactly this reason.
+
 ## Compositions
 
 A `Composition` is an immutable set of block identities committed by a single Merkle root. Deriving one

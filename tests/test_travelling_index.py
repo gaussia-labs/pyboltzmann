@@ -30,9 +30,9 @@ from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.retention.policy import RetentionPolicy
 from boltzmann.store.memory import MemoryBlockStore
 
-ALEX = Actor(id="alex", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
-REQUEST = RegistrationRequest(media_type="application/pdf", actor=ALEX)
+REQUEST = RegistrationRequest(media_type="application/pdf", actor=CURATOR)
 REFERENCE = "registry.example/org/brain"
 
 
@@ -51,7 +51,7 @@ class FakeVectorIndex(AbstractIndex):
     def model_tag(self) -> str | None:
         return self.model
 
-    def build(self, blocks) -> None:
+    def build(self, blocks, content) -> None:
         self.vectors = {block.block_id.hex: [len(block.label)] for block in blocks}
 
     def search(self, query, limit: int = 10):
@@ -71,7 +71,7 @@ class UndumpableIndex(AbstractIndex):
     KIND = IndexKind.VECTOR
     REBUILDABLE = False
 
-    def build(self, blocks) -> None:
+    def build(self, blocks, content) -> None:
         return None
 
     def search(self, query, limit: int = 10):
@@ -87,7 +87,7 @@ class RebuildableIndex(AbstractIndex):
     def __init__(self) -> None:
         self.count = 0
 
-    def build(self, blocks) -> None:
+    def build(self, blocks, content) -> None:
         self.count = sum(1 for _ in blocks)
 
     def search(self, query, limit: int = 10):
@@ -141,7 +141,7 @@ class TestTheInterface:
 class TestPackingTheIndex:
     def test_an_unrebuildable_index_gets_its_own_layer(self, tmp_path: Path) -> None:
         index = FakeVectorIndex()
-        brain = Brain.open(tmp_path / "brain", actor=ALEX, indices={MemoryType.SEMANTIC: [index]})
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR, indices={MemoryType.SEMANTIC: [index]})
         seed(brain)
 
         manifest = brain.pack(tag="v1")
@@ -153,7 +153,7 @@ class TestPackingTheIndex:
     def test_the_layer_records_the_model_that_produced_it(self, tmp_path: Path) -> None:
         """So a consumer can tell whether what it received is comparable to what it could build."""
         index = FakeVectorIndex(model="some-embedder@3.1")
-        brain = Brain.open(tmp_path / "brain", actor=ALEX, indices={MemoryType.SEMANTIC: [index]})
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR, indices={MemoryType.SEMANTIC: [index]})
         seed(brain)
 
         layer = brain.pack(tag="v1").vector_index_for(MemoryType.SEMANTIC)
@@ -163,7 +163,7 @@ class TestPackingTheIndex:
 
     def test_it_does_not_shadow_the_module_layer(self, tmp_path: Path) -> None:
         index = FakeVectorIndex()
-        brain = Brain.open(tmp_path / "brain", actor=ALEX, indices={MemoryType.SEMANTIC: [index]})
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR, indices={MemoryType.SEMANTIC: [index]})
         seed(brain)
 
         manifest = brain.pack(tag="v1")
@@ -176,19 +176,19 @@ class TestPackingTheIndex:
 
     def test_a_rebuildable_index_gets_no_layer(self, tmp_path: Path) -> None:
         """Shipping it would transfer bytes the consumer can regenerate for free."""
-        brain = Brain.open(tmp_path / "brain", actor=ALEX, indices={MemoryType.SEMANTIC: [RebuildableIndex()]})
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR, indices={MemoryType.SEMANTIC: [RebuildableIndex()]})
         seed(brain)
         assert brain.pack(tag="v1").vector_index_for(MemoryType.SEMANTIC) is None
 
     def test_no_index_means_no_layer(self, tmp_path: Path) -> None:
-        brain = Brain.open(tmp_path / "brain", actor=ALEX)
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         seed(brain)
         manifest = brain.pack(tag="v1")
         assert all(not layer.is_vector_index for layer in manifest.layers)
 
     def test_an_unrebuildable_index_that_cannot_dump_is_refused(self, tmp_path: Path) -> None:
         """Otherwise the module would arrive without it and nothing could regenerate it."""
-        brain = Brain.open(tmp_path / "brain", actor=ALEX, indices={MemoryType.SEMANTIC: [UndumpableIndex()]})
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR, indices={MemoryType.SEMANTIC: [UndumpableIndex()]})
         seed(brain)
         with pytest.raises(DistributionError, match="cannot dump"):
             brain.pack(tag="v1")
@@ -197,12 +197,12 @@ class TestPackingTheIndex:
 class TestPullingTheIndex:
     async def test_a_consumer_receives_the_index(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
         published = FakeVectorIndex()
-        source = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [published]})
+        source = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [published]})
         seed(source)
         await source.push(registry, REFERENCE, "v1")
 
         received = FakeVectorIndex()
-        target = Brain.open(tmp_path / "b", actor=ALEX, indices={MemoryType.SEMANTIC: [received]})
+        target = Brain.open(tmp_path / "b", actor=CURATOR, indices={MemoryType.SEMANTIC: [received]})
         await target.pull(registry, REFERENCE, "v1")
 
         assert received.loads == 1
@@ -213,22 +213,26 @@ class TestPullingTheIndex:
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:
         """A model-agnostic client that registered nothing must still be able to install the brain."""
-        source = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        source = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         seed(source)
         await source.push(registry, REFERENCE, "v1")
 
-        target = Brain.open(tmp_path / "b", actor=ALEX)
+        target = Brain.open(tmp_path / "b", actor=CURATOR)
         await target.pull(registry, REFERENCE, "v1")
         assert target.verify()
         assert target.root_of(MemoryType.SEMANTIC) == source.root_of(MemoryType.SEMANTIC)
 
     async def test_an_index_from_another_model_is_refused(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
         """Vectors from two models occupy different spaces, so mixing them would rank meaninglessly."""
-        source = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex("qwen3@1.0")]})
+        source = Brain.open(
+            tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex("qwen3@1.0")]}
+        )
         seed(source)
         await source.push(registry, REFERENCE, "v1")
 
-        target = Brain.open(tmp_path / "b", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex("other@2.0")]})
+        target = Brain.open(
+            tmp_path / "b", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex("other@2.0")]}
+        )
         with pytest.raises(DistributionError, match="mix representation spaces"):
             await target.pull(registry, REFERENCE, "v1")
 
@@ -236,11 +240,11 @@ class TestPullingTheIndex:
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:
         received = FakeVectorIndex()
-        source = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        source = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         seed(source)
         await source.push(registry, REFERENCE, "v1")
 
-        target = Brain.open(tmp_path / "b", actor=ALEX, indices={MemoryType.SEMANTIC: [received]})
+        target = Brain.open(tmp_path / "b", actor=CURATOR, indices={MemoryType.SEMANTIC: [received]})
         await target.pull(registry, REFERENCE, "v1", modules=[MemoryType.CANONICAL])
         assert received.loads == 0
 
@@ -250,13 +254,13 @@ class TestSelectivePublish:
 
     def test_a_derived_module_cannot_be_published_without_canonical(self, tmp_path: Path) -> None:
         """An artifact whose citations point nowhere could be trusted but never audited."""
-        brain = Brain.open(tmp_path / "brain", actor=ALEX)
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         seed(brain)
         with pytest.raises(DistributionError, match="without canonical"):
             brain.pack(tag="v1", modules=[MemoryType.SEMANTIC])
 
     def test_canonical_plus_a_derived_module_is_allowed(self, tmp_path: Path) -> None:
-        brain = Brain.open(tmp_path / "brain", actor=ALEX)
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         seed(brain)
         manifest = brain.pack(tag="lite", modules=[MemoryType.CANONICAL, MemoryType.SEMANTIC])
         assert manifest.modules == [MemoryType.CANONICAL, MemoryType.SEMANTIC]
@@ -264,18 +268,18 @@ class TestSelectivePublish:
 
     def test_canonical_alone_is_allowed(self, tmp_path: Path) -> None:
         """It cites nothing, so there is no citation to strand."""
-        brain = Brain.open(tmp_path / "brain", actor=ALEX)
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         seed(brain)
         assert brain.pack(tag="sources", modules=[MemoryType.CANONICAL]).modules == [MemoryType.CANONICAL]
 
     def test_an_uninstalled_module_cannot_be_published(self, tmp_path: Path) -> None:
-        brain = Brain.open(tmp_path / "brain", actor=ALEX)
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         seed(brain)
         with pytest.raises(DistributionError, match="not installed"):
             brain.pack(tag="v1", modules=[MemoryType.PROCEDURAL])
 
     def test_an_empty_artifact_is_refused(self, tmp_path: Path) -> None:
-        brain = Brain.open(tmp_path / "brain", actor=ALEX)
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         seed(brain)
         with pytest.raises(DistributionError, match="no modules"):
             brain.pack(tag="v1", modules=[])
@@ -284,7 +288,7 @@ class TestSelectivePublish:
         """A consumer's full pull adopts this document, so it has to describe what is actually there."""
         from boltzmann.module.snapshot import Snapshot
 
-        brain = Brain.open(tmp_path / "brain", actor=ALEX)
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         seed(brain)
         manifest = brain.pack(tag="lite", modules=[MemoryType.CANONICAL, MemoryType.SEMANTIC])
         projected = Snapshot.model_validate_json(brain.store.get_bytes(manifest.config.digest))
@@ -293,14 +297,14 @@ class TestSelectivePublish:
 
     def test_a_projection_records_the_snapshot_it_came_from(self, tmp_path: Path) -> None:
         """A projection is in nobody's history, so the divergence check needs the real source."""
-        brain = Brain.open(tmp_path / "brain", actor=ALEX)
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         seed(brain)
         manifest = brain.pack(tag="lite", modules=[MemoryType.CANONICAL, MemoryType.SEMANTIC])
         assert manifest.annotations[ANNOTATION_SOURCE_SNAPSHOT] == str(brain.snapshot().digest)
         assert manifest.config.digest != brain.snapshot().digest
 
     def test_a_complete_publish_projects_to_itself(self, tmp_path: Path) -> None:
-        brain = Brain.open(tmp_path / "brain", actor=ALEX)
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         seed(brain)
         manifest = brain.pack(tag="v1")
         assert manifest.config.digest == brain.snapshot().digest
@@ -309,11 +313,11 @@ class TestSelectivePublish:
     async def test_a_projection_can_be_pushed_and_installed(
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:
-        source = Brain.open(tmp_path / "a", actor=ALEX)
+        source = Brain.open(tmp_path / "a", actor=CURATOR)
         seed(source)
         await source.push(registry, REFERENCE, "lite", modules=[MemoryType.CANONICAL, MemoryType.SEMANTIC])
 
-        target = Brain.open(tmp_path / "b", actor=ALEX)
+        target = Brain.open(tmp_path / "b", actor=CURATOR)
         await target.pull(registry, REFERENCE, "lite")
         assert target.snapshot().installed == [MemoryType.CANONICAL, MemoryType.SEMANTIC]
         assert target.verify()
@@ -323,7 +327,7 @@ class TestSelectivePublish:
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:
         """The source annotation is what keeps this from looking like a divergence."""
-        brain = Brain.open(tmp_path / "a", actor=ALEX)
+        brain = Brain.open(tmp_path / "a", actor=CURATOR)
         seed(brain)
         subset = [MemoryType.CANONICAL, MemoryType.SEMANTIC]
         await brain.push(registry, REFERENCE, "lite", modules=subset)
@@ -332,7 +336,7 @@ class TestSelectivePublish:
     async def test_a_projection_and_the_full_brain_can_share_a_repository(
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:
-        brain = Brain.open(tmp_path / "a", actor=ALEX)
+        brain = Brain.open(tmp_path / "a", actor=CURATOR)
         seed(brain)
         await brain.push(registry, REFERENCE, "full")
         await brain.push(registry, REFERENCE, "lite", modules=[MemoryType.CANONICAL, MemoryType.SEMANTIC])
@@ -353,31 +357,31 @@ class TestRebuildingWhatArrivedAnotherWay:
     """
 
     def test_reopening_rebuilds_a_structural_index(self, tmp_path: Path) -> None:
-        Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [RebuildableIndex()]})
-        seed(Brain.open(tmp_path / "a", actor=ALEX))
+        Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [RebuildableIndex()]})
+        seed(Brain.open(tmp_path / "a", actor=CURATOR))
 
         index = RebuildableIndex()
-        reopened = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [index]})
+        reopened = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [index]})
 
         assert index.count == len(reopened.module(MemoryType.SEMANTIC).block_ids) == 1
 
     def test_reopening_does_not_rebuild_a_travelling_index(self, tmp_path: Path) -> None:
         """Regenerating it would replace what a peer published with whatever this client produced."""
-        seed(Brain.open(tmp_path / "a", actor=ALEX))
+        seed(Brain.open(tmp_path / "a", actor=CURATOR))
 
         travelling = FakeVectorIndex()
-        Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [travelling]})
+        Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [travelling]})
 
         assert travelling.vectors == {}
 
     async def test_installing_rebuilds_a_structural_index(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
         """What ``plan_pull`` reports under ``rebuild_indices``, actually done."""
-        source = Brain.open(tmp_path / "a", actor=ALEX)
+        source = Brain.open(tmp_path / "a", actor=CURATOR)
         seed(source)
         await source.push(registry, REFERENCE, "v1")
 
         index = RebuildableIndex()
-        target = Brain.open(tmp_path / "b", actor=ALEX, indices={MemoryType.SEMANTIC: [index]})
+        target = Brain.open(tmp_path / "b", actor=CURATOR, indices={MemoryType.SEMANTIC: [index]})
         plan = await target.plan_pull(registry, REFERENCE, "v1")
         assert IndexKind.HASH_MAP.value in plan.rebuild_indices
 
@@ -388,7 +392,7 @@ class TestRebuildingWhatArrivedAnotherWay:
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:
         """The layer's vectors survive the rebuild that follows a pull."""
-        source = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        source = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         seed(source)
         await source.push(registry, REFERENCE, "v1")
         published = source.open_index(MemoryType.SEMANTIC, IndexKind.VECTOR)
@@ -396,7 +400,7 @@ class TestRebuildingWhatArrivedAnotherWay:
         landed = FakeVectorIndex()
         target = Brain.open(
             tmp_path / "b",
-            actor=ALEX,
+            actor=CURATOR,
             indices={MemoryType.SEMANTIC: [landed, RebuildableIndex()]},
         )
         await target.pull(registry, REFERENCE, "v1")
@@ -412,18 +416,18 @@ class TestRebuildingWhatArrivedAnotherWay:
         make the brain impossible to reopen.
         """
         policy = RetentionPolicy(redactable_media_types=["application/pdf"])
-        brain = Brain.open(tmp_path / "a", actor=ALEX, policy=policy)
+        brain = Brain.open(tmp_path / "a", actor=CURATOR, policy=policy)
         source = seed(brain)
         brain.redact(source, MemoryType.CANONICAL, reason="unreadable now")
 
         index = RebuildableIndex()
-        reopened = Brain.open(tmp_path / "a", actor=ALEX, policy=policy, indices={MemoryType.CANONICAL: [index]})
+        reopened = Brain.open(tmp_path / "a", actor=CURATOR, policy=policy, indices={MemoryType.CANONICAL: [index]})
 
         assert source in reopened.module(MemoryType.CANONICAL)
         assert index.count == 0
 
     def test_rebuilding_a_module_with_no_index_is_a_no_op(self, tmp_path: Path) -> None:
-        brain = Brain.open(tmp_path / "a", actor=ALEX)
+        brain = Brain.open(tmp_path / "a", actor=CURATOR)
         seed(brain)
         brain.rebuild_indices()
         brain.rebuild_indices([MemoryType.EPISODIC])
@@ -438,15 +442,15 @@ class TestPublishingOnlyWhatItCanVouchFor:
     """
 
     def test_an_empty_travelling_index_is_not_published(self, tmp_path: Path) -> None:
-        seed(Brain.open(tmp_path / "a", actor=ALEX))
+        seed(Brain.open(tmp_path / "a", actor=CURATOR))
 
-        reopened = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        reopened = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         manifest = reopened.pack(tag="v1")
 
         assert manifest.vector_index_for(MemoryType.SEMANTIC) is None
 
     def test_an_index_built_by_a_write_is_published(self, tmp_path: Path) -> None:
-        brain = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        brain = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         seed(brain)
 
         layer = brain.pack(tag="v1").vector_index_for(MemoryType.SEMANTIC)
@@ -457,11 +461,11 @@ class TestPublishingOnlyWhatItCanVouchFor:
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:
         """A consumer that installed a brain is as entitled to publish it as the brain that built it."""
-        source = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        source = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         seed(source)
         await source.push(registry, REFERENCE, "v1")
 
-        target = Brain.open(tmp_path / "b", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        target = Brain.open(tmp_path / "b", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         await target.pull(registry, REFERENCE, "v1")
 
         republished = target.pack(tag="v2").vector_index_for(MemoryType.SEMANTIC)
@@ -475,13 +479,13 @@ class TestSurvivingAReopen:
     """The index the layout already holds is the only one a reopened brain can get back."""
 
     def test_reopening_restores_a_packed_travelling_index(self, tmp_path: Path) -> None:
-        brain = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        brain = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         seed(brain)
         brain.pack(tag="v1")
         published = brain.open_index(MemoryType.SEMANTIC, IndexKind.VECTOR)
 
         landed = FakeVectorIndex()
-        reopened = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [landed]})
+        reopened = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [landed]})
 
         assert landed.vectors == published.vectors
         assert reopened.pack(tag="v1").vector_index_for(MemoryType.SEMANTIC) is not None
@@ -490,15 +494,15 @@ class TestSurvivingAReopen:
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:
         """The case the sandbox hit: ingest in one process, push from another, publish an empty index."""
-        source = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        source = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         seed(source)
         await source.push(registry, REFERENCE, "v1")
 
-        target = Brain.open(tmp_path / "b", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        target = Brain.open(tmp_path / "b", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         await target.pull(registry, REFERENCE, "v1")
 
         landed = FakeVectorIndex()
-        reopened = Brain.open(tmp_path / "b", actor=ALEX, indices={MemoryType.SEMANTIC: [landed]})
+        reopened = Brain.open(tmp_path / "b", actor=CURATOR, indices={MemoryType.SEMANTIC: [landed]})
 
         assert landed.loads == 1
         assert landed.vectors == source.open_index(MemoryType.SEMANTIC, IndexKind.VECTOR).vectors
@@ -507,28 +511,28 @@ class TestSurvivingAReopen:
     def test_a_manifest_for_another_version_is_not_used(self, tmp_path: Path) -> None:
         """Its index describes blocks this version may not have, and the digest of the config is what says
         which version a manifest belongs to."""
-        brain = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        brain = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         seed(brain)
         brain.pack(tag="v1")
         seed(brain, label="Laplace")  # moves the snapshot on, without packing again
 
         landed = FakeVectorIndex()
-        Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [landed]})
+        Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [landed]})
         assert landed.vectors == {}
 
     def test_a_reclaimed_index_layer_is_skipped(self, tmp_path: Path) -> None:
-        brain = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        brain = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         seed(brain)
         layer = brain.pack(tag="v1").vector_index_for(MemoryType.SEMANTIC)
         assert layer is not None
         brain.store.delete(layer.digest)
 
         landed = FakeVectorIndex()
-        Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [landed]})
+        Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [landed]})
         assert landed.vectors == {}
 
     def test_a_store_with_no_layout_index_opens_normally(self) -> None:
-        brain = Brain(MemoryBlockStore(), actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        brain = Brain(MemoryBlockStore(), actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         seed(brain)
         assert brain.verify()
 
@@ -542,7 +546,7 @@ class TestOpeningIsNotInstalling:
     """
 
     def test_an_index_from_another_model_does_not_block_opening(self, tmp_path: Path) -> None:
-        brain = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        brain = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         seed(brain)
         brain.pack(tag="v1")
 
@@ -550,7 +554,7 @@ class TestOpeningIsNotInstalling:
             def __init__(self) -> None:
                 super().__init__(model="qwen3-embedding@2.0")
 
-        reopened = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [Newer()]})
+        reopened = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [Newer()]})
 
         assert reopened.verify()
         assert MemoryType.SEMANTIC not in reopened.travelling_indices
@@ -558,13 +562,13 @@ class TestOpeningIsNotInstalling:
 
     async def test_a_pull_still_refuses_it(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
         """Installing an artifact is a request, and mixing representation spaces is not what was asked."""
-        source = Brain.open(tmp_path / "a", actor=ALEX, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        source = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         seed(source)
         await source.push(registry, REFERENCE, "v1")
 
         target = Brain.open(
             tmp_path / "b",
-            actor=ALEX,
+            actor=CURATOR,
             indices={MemoryType.SEMANTIC: [FakeVectorIndex(model="qwen3-embedding@2.0")]},
         )
         with pytest.raises(DistributionError, match="representation spaces"):

@@ -6,10 +6,13 @@ downloaded (paper Section 7.2). So a layer holds exactly one module, and pulling
 that module and nothing else.
 
 **What a layer must contain.** The composition document, so the version can be reopened, plus every
-blob the composition needs to be self-sufficient: each block's envelope, and -- for the canonical
-module -- the observed bytes each canonical block describes, together with any normalized view. A
-canonical layer without the originals would arrive as a set of claims about evidence the consumer
-cannot read.
+blob the composition needs to be self-sufficient: each block's envelope, and whatever content those
+blocks name but do not carry -- the observed bytes and normalized view of a canonical block, and the
+same for any other schema that keeps its datum in the store. A layer without them would arrive as a
+set of pointers the consumer cannot follow.
+
+The blocks are asked what they name rather than tested for their type, so a schema that starts naming
+content is packed correctly without touching this module.
 
 **Why the packing is deterministic.** A layer is content-addressed, so two clients packing the same
 module must produce the same digest, or push deduplication silently stops working and every push
@@ -24,8 +27,6 @@ import io
 import tarfile
 from typing import TYPE_CHECKING
 
-from boltzmann.blocks.canonical import CanonicalBlock
-from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.exceptions import DistributionError
 from boltzmann.identity.digest import BlockId, Digest, OciDigest
 from boltzmann.module.composition import Composition
@@ -52,21 +53,17 @@ def required_blobs(module: Module) -> list[Digest]:
         module (Module): The module version to pack.
 
     Returns:
-        list[Digest]: The block envelopes, plus the observed bytes and normalized views that canonical
-        blocks describe. Sorted, so the answer does not depend on iteration order.
+        list[Digest]: The block envelopes, plus the content the blocks name but do not carry. Sorted, so
+        the answer does not depend on iteration order.
     """
     needed: list[Digest] = list(module.composition.block_ids)
 
-    if module.memory_type is MemoryType.CANONICAL:
-        for block_id in module.composition.block_ids:
-            if not module.store.is_resolvable(block_id):
-                continue
-            block = module.get(block_id)
-            if not isinstance(block, CanonicalBlock):
-                continue
-            needed.append(block.blob)
-            if block.normalized_view is not None:
-                needed.append(block.normalized_view.blob)
+    # Asked of every module, not only canonical: a block of any type may name its content, and content
+    # this misses is a published layer whose pointers lead nowhere.
+    for block_id in module.composition.block_ids:
+        if not module.store.is_resolvable(block_id):
+            continue
+        needed.extend(module.get(block_id).content_digests)
 
     unique = {digest.hex: digest for digest in needed}
     return [unique[key] for key in sorted(unique)]
