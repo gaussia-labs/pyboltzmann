@@ -61,9 +61,11 @@ class InclusionProof(BaseModel):
         if self.leaf_index >= self.tree_size:
             return False
 
-        # RFC 6962, Section 2.1.1. ``fn`` tracks the position of the running hash
-        # within its level; ``sn`` tracks the position of the last node at that
-        # level, which is how the algorithm recognizes a right edge.
+        # RFC 9162, Section 2.1.3.2, which is where this algorithm is written down:
+        # RFC 6962 defined the proof but left verification to the reader. ``fn``
+        # tracks the position of the running hash within its level; ``sn`` tracks the
+        # position of the last node at that level, which is how the algorithm
+        # recognizes a right edge.
         position = self.leaf_index
         last = self.tree_size - 1
         running = hash_leaf(self.block_id.raw)

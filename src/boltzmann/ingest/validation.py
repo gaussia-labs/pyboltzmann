@@ -193,42 +193,54 @@ def validate(
         REVIEW_CODES,
         build_block,
         conflicts_for,
+        gate_batch,
+        gate_pass,
     )
 
     checks = DEFAULT_VALIDATORS if validators is None else validators
     results = []
 
-    for candidate in candidates.candidates:
-        issues = [issue for check in checks for issue in check.check(candidate, task, modules)]
-        codes = {issue.code for issue in issues}
+    # Answers that depend on the installed modules rather than on any one candidate -- which held
+    # blocks state which claim -- are computed once for the whole set instead of once per proposal.
+    with gate_batch():
+        for candidate in candidates.candidates:
+            # One candidate, one set of derived answers -- and the scope has to cover the whole verdict,
+            # not just the checks. The gate itself asks for two of the same things the checks did: the
+            # typed block for a validated proposal, and the conflicting blocks for a contradicted one,
+            # which is the identical scan ``ContradictionValidator`` has already run. Nothing here writes,
+            # so nothing those answers depend on can change while the verdict is being decided.
+            with gate_pass():
+                issues = [issue for check in checks for issue in check.check(candidate, task, modules)]
+                codes = {issue.code for issue in issues}
 
-        if not issues:
-            results.append(
-                ValidatedCandidate(
-                    candidate=candidate,
-                    status=ValidationStatus.VALIDATED,
-                    block=build_block(candidate),
+                if not issues:
+                    results.append(
+                        ValidatedCandidate(
+                            candidate=candidate,
+                            status=ValidationStatus.VALIDATED,
+                            block=build_block(candidate),
+                        )
+                    )
+                    continue
+
+                # Three verdicts, and they are not a severity scale. A malformed proposal can never be
+                # committed. A contradiction is well-formed and disagrees with what is held, which is
+                # information rather than a defect. And a check may decline to decide, which is not the
+                # same as deciding against.
+                if codes <= CONTRADICTION_CODES:
+                    status = ValidationStatus.CONTRADICTED
+                elif codes <= CONTRADICTION_CODES | REVIEW_CODES:
+                    status = ValidationStatus.PENDING_REVIEW
+                else:
+                    status = ValidationStatus.REJECTED
+
+                results.append(
+                    ValidatedCandidate(
+                        candidate=candidate,
+                        status=status,
+                        issues=issues,
+                        conflicts_with=conflicts_for(candidate, modules) if codes & CONTRADICTION_CODES else [],
+                    )
                 )
-            )
-            continue
-
-        # Three verdicts, and they are not a severity scale. A malformed proposal can never be committed.
-        # A contradiction is well-formed and disagrees with what is held, which is information rather than
-        # a defect. And a check may decline to decide, which is not the same as deciding against.
-        if codes <= CONTRADICTION_CODES:
-            status = ValidationStatus.CONTRADICTED
-        elif codes <= CONTRADICTION_CODES | REVIEW_CODES:
-            status = ValidationStatus.PENDING_REVIEW
-        else:
-            status = ValidationStatus.REJECTED
-
-        results.append(
-            ValidatedCandidate(
-                candidate=candidate,
-                status=status,
-                issues=issues,
-                conflicts_with=conflicts_for(candidate, modules) if codes & CONTRADICTION_CODES else [],
-            )
-        )
 
     return ValidationReport(results=results, producer=candidates.producer, task_id=task.task_id)

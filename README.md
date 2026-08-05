@@ -23,17 +23,10 @@ await brain.push(client, "ghcr.io/org/brain", "v1")
 ```
 
 The line it draws: **the SDK does whatever the protocol defines mechanically; the
-implementer supplies whatever the paper assigns elsewhere.** So identity, the wire
+implementer supplies whatever the paper assigns elsewhere.** Identity, the wire
 formats, the four operation paths and a conformance suite are here; the model, the
-ranking, the index engines and any CLI or MCP server are yours.
-
-It embeds no language model. Interpretation enters through `CandidateProposer` and
-nowhere else.
-
-There are **no `NotImplementedError` stubs**, and a test enforces it. An
-unimplemented function is worse than an interface: it looks callable and is not.
-Nothing is declared and unreachable either — every type, enum member and constant
-is produced by something, and a test enforces that too.
+ranking, the index engines and any CLI or MCP server are yours. No language model is
+embedded — interpretation enters through `CandidateProposer` and nowhere else.
 
 ## Installation
 
@@ -46,14 +39,11 @@ pip install 'pyboltzmann[oci]'   # plus the network registry transport
 import boltzmann                 # the import package
 ```
 
-The two names differ because `boltzmann` on PyPI belongs to an unrelated package. It is the same split as
-`pygaussia` providing `gaussia`.
+The two names differ because `boltzmann` on PyPI belongs to an unrelated package —
+the same split as `pygaussia` providing `gaussia`.
 
-The core needs **`pydantic` and `rfc8785`**. Everything else is optional: `[oci]`
-adds a network registry transport, and moving a brain between OCI layouts on disk
-needs nothing at all.
-
-Python >= 3.11.
+Python >= 3.11. The core needs only `pydantic` and `rfc8785`; `[oci]` adds the
+network registry transport.
 
 ## Usage
 
@@ -106,10 +96,6 @@ assert brain.prove(block_id, MemoryType.SEMANTIC).verify(brain.root_of(MemoryTyp
 assert brain.verify()
 ```
 
-Removing knowledge cascades through provenance, publishing is a copy rather than a
-conversion, and an implementation in any language can prove it conforms against the
-golden vectors that ship in the wheel. Each of those has a guide.
-
 ## Documentation
 
 The [`docs/`](https://github.com/gaussia-labs/pyboltzmann/tree/master/docs) directory
@@ -125,7 +111,7 @@ is the source of truth, and it is published as the Boltzmann SDK section of the
 | [Architecture](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/architecture.mdx) | Blocks, compositions, modules, snapshots |
 | [Memory types](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/memory-types.mdx) | The five typed blocks and the rules each obeys |
 | [Identity](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/identity.mdx) | JCS, the three levels of hashes, the values a payload refuses |
-| [Merkle DAGs](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/merkle.mdx) | RFC 6962 over sorted leaves, and inclusion proofs |
+| [Merkle DAGs](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/merkle.mdx) | RFC 9162 over sorted leaves, and inclusion proofs |
 | [Interfaces](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/interfaces.mdx) | The protocol surface, and the four things you plug in |
 | [Ingestion](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/guides/ingestion.mdx) | Preserve the source, delegate the interpretation, validate |
 | [Query](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/guides/query.mdx) | Evidence Bundles, filters, and supplying a planner |
