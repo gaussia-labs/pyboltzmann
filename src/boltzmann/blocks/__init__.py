@@ -2,6 +2,7 @@
 
 from boltzmann.blocks.base import ENVELOPE_KEYS, Block
 from boltzmann.blocks.canonical import CanonicalBlock, NormalizedView
+from boltzmann.blocks.content import ContentRef
 from boltzmann.blocks.episodic import EpisodicBlock
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.procedural import ProceduralBlock, Step
@@ -28,6 +29,7 @@ __all__ = [
     "ActorKind",
     "Block",
     "CanonicalBlock",
+    "ContentRef",
     "DemotionRecord",
     "DerivationRecord",
     "EpisodicBlock",

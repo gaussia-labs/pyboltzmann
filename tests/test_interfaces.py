@@ -127,7 +127,7 @@ class TestSatisfyingAnInterface:
             def __init__(self) -> None:
                 self.members: set[BlockId] = set()
 
-            def build(self, blocks):
+            def build(self, blocks, content):
                 self.members = {block.block_id for block in blocks}
 
             def search(self, query, limit=10):

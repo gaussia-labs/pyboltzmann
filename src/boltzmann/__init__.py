@@ -33,6 +33,7 @@ from boltzmann.blocks import (
     ActorKind,
     Block,
     CanonicalBlock,
+    ContentRef,
     EpisodicBlock,
     MemoryType,
     NormalizedView,
@@ -49,7 +50,7 @@ from boltzmann.brain import Brain, BrainState
 from boltzmann.exceptions import BoltzmannError
 from boltzmann.identity import BlockId, MerkleRoot, OciDigest
 from boltzmann.identity.time import utc_timestamp
-from boltzmann.indices import Index, IndexKind
+from boltzmann.indices import ContentReader, Index, IndexKind
 from boltzmann.ingest import (
     Candidate,
     CandidateProposer,
@@ -109,6 +110,8 @@ __all__ = [
     "CandidateSet",
     "CanonicalBlock",
     "CommitResult",
+    "ContentReader",
+    "ContentRef",
     "Composition",
     "DropRequest",
     "DropResult",

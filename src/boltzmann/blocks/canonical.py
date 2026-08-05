@@ -19,14 +19,15 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
 from boltzmann.blocks.base import Block
+from boltzmann.blocks.content import ContentRef
 from boltzmann.blocks.memory_type import MemoryType
-from boltzmann.identity.digest import OciDigest
+from boltzmann.identity.digest import Digest, OciDigest
 
 
-class NormalizedView(BaseModel):
+class NormalizedView(ContentRef):
     """
     A deterministic transform of an original blob.
 
@@ -35,17 +36,12 @@ class NormalizedView(BaseModel):
     Normalized views live in canonical rather than semantic memory because they are
     still evidence for ingestion, not consolidated knowledge.
 
-    Attributes:
-        blob (OciDigest): Content address of the normalized bytes.
-        media_type (str): IANA media type of the normalized bytes.
-        size (int): Length of the normalized bytes in bytes.
+    Adds no field to :class:`~boltzmann.blocks.content.ContentRef`, and must not: the
+    three it inherits are exactly what a normalized view is, and any change to the
+    shape would change every canonical ``block_id`` that carries one. It stays a
+    distinct name because *what* a view is -- evidence produced by a named pipeline --
+    is not the same as the general fact that a block names bytes.
     """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    blob: OciDigest
-    media_type: str = Field(min_length=1)
-    size: int = Field(ge=0)
 
 
 class CanonicalBlock(Block):
@@ -74,3 +70,10 @@ class CanonicalBlock(Block):
     media_type: str = Field(min_length=1)
     size: int = Field(ge=0)
     normalized_view: NormalizedView | None = None
+
+    @property
+    def content_digests(self) -> tuple[Digest, ...]:
+        """The observed bytes, and the normalized view when one was produced."""
+        if self.normalized_view is None:
+            return (self.blob,)
+        return (self.blob, self.normalized_view.blob)

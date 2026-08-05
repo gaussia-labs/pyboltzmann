@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from boltzmann.blocks.canonical import CanonicalBlock, NormalizedView
+from boltzmann.blocks.content import ContentRef
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import (
     Actor,
@@ -672,6 +673,34 @@ class Brain:
         )
         return view, record
 
+    def put_content(self, data: bytes, media_type: str) -> ContentRef:
+        """
+        Materialize bytes a block will name rather than carry.
+
+        A payload is JSON, canonically serialized and hashed on every access, so a datum large enough to
+        matter belongs in the store with the block naming it. This stores the bytes and returns the
+        reference to put in a payload.
+
+        It writes no block, touches no composition and publishes no snapshot -- there is nothing to
+        commit yet. The bytes become reachable only once a committed block names them, and until then a
+        ``prune`` will reclaim them, which is the correct outcome for content nothing refers to.
+
+        **This is not registration.** Evidence goes through :meth:`register`: it lands in the canonical
+        composition, other blocks cite it, and dropping it cascades to everything derived from it.
+        Content is the block's own datum, so nothing cites it and nothing needs to; it lives and dies
+        with its block. If other blocks are going to cite these bytes, they are a source, and the call
+        is :meth:`register`.
+
+        Args:
+            data (bytes): The content, stored exactly as given.
+            media_type (str): IANA media type, recorded in the reference so a consumer can decide
+                whether to fetch the bytes without holding them.
+
+        Returns:
+            ContentRef: The reference a payload names.
+        """
+        return ContentRef(blob=self.store.put_bytes(data), media_type=media_type, size=len(data))
+
     # --- Ingestion: delegate, validate, commit --------------------------------
 
     def define_task(
@@ -1011,7 +1040,9 @@ class Brain:
         blocks = [block_id for block_id in module.block_ids if module.store.is_resolvable(block_id)]
         decoded = [module.get(block_id) for block_id in blocks]
         for index in indices:
-            index.build(decoded)
+            # The store is passed as a ContentReader: an index over blocks that name their content
+            # cannot work from the blocks alone, and narrowing the type is what keeps it from writing.
+            index.build(decoded, module.store)
             if not index.rebuildable:
                 # Built from this composition by this client's own engine, so it describes the version and
                 # can be published.
@@ -1341,13 +1372,10 @@ class Brain:
         self.policy.authorize(RemovalMechanism.TOMBSTONE, memory_type)
         self._require_members([block], memory_type)
 
-        destroyed: list[Digest] = [block]
-        if memory_type is MemoryType.CANONICAL:
-            evidence = self.module(memory_type).get(block)
-            if isinstance(evidence, CanonicalBlock):
-                destroyed.append(evidence.blob)
-                if evidence.normalized_view is not None:
-                    destroyed.append(evidence.normalized_view.blob)
+        # The envelope, plus whatever content the block names. Asked of every module, not only canonical:
+        # a redaction that leaves the bytes behind for another memory type is a redaction that did not
+        # happen, and the caller was told otherwise.
+        destroyed: list[Digest] = [block, *self.module(memory_type).get(block).content_digests]
 
         record = ProvenanceBlock(
             record=RemovalRecord(

@@ -16,6 +16,14 @@ terms present* -- coverage, not relevance. An implementation that wants relevanc
 :class:`~boltzmann.query.planner.QueryPlanner` and replaces candidate generation entirely; verification
 stays where it is either way.
 
+**Content a block names is not read here, deliberately.** A block whose datum is large or binary keeps
+it in the store and names it by digest, and the scan has no reader and no ranking: fetching those bytes
+would turn a linear pass over envelopes into a linear pass over every blob a module holds, and the cost
+would arrive silently, on a call that used to be cheap. An index over content is where that belongs --
+it is handed a :class:`~boltzmann.indices.base.ContentReader` for exactly this reason. So the scan
+matches the text a block carries, and a block that carries none is filtered and verified but not
+matched on.
+
 Two things the scan does get for free, because the protocol stores them symbolically on the block
 rather than only in a derived index:
 

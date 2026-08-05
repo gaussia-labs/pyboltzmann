@@ -51,7 +51,7 @@ class FakeVectorIndex(AbstractIndex):
     def model_tag(self) -> str | None:
         return self.model
 
-    def build(self, blocks) -> None:
+    def build(self, blocks, content) -> None:
         self.vectors = {block.block_id.hex: [len(block.label)] for block in blocks}
 
     def search(self, query, limit: int = 10):
@@ -71,7 +71,7 @@ class UndumpableIndex(AbstractIndex):
     KIND = IndexKind.VECTOR
     REBUILDABLE = False
 
-    def build(self, blocks) -> None:
+    def build(self, blocks, content) -> None:
         return None
 
     def search(self, query, limit: int = 10):
@@ -87,7 +87,7 @@ class RebuildableIndex(AbstractIndex):
     def __init__(self) -> None:
         self.count = 0
 
-    def build(self, blocks) -> None:
+    def build(self, blocks, content) -> None:
         self.count = sum(1 for _ in blocks)
 
     def search(self, query, limit: int = 10):

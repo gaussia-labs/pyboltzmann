@@ -474,7 +474,7 @@ class TestOpenIndex:
         class Counting(AbstractIndex):
             KIND = IndexKind.HASH_MAP
 
-            def build(self, blocks):
+            def build(self, blocks, content):
                 self.count = sum(1 for _ in blocks)
 
             def search(self, query, limit=10):
@@ -494,7 +494,7 @@ class TestOpenIndex:
                 self.count = 0
                 self.rebuilds = 0
 
-            def build(self, blocks):
+            def build(self, blocks, content):
                 self.count = sum(1 for _ in blocks)
                 self.rebuilds += 1
 
