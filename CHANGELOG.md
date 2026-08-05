@@ -144,6 +144,9 @@ BREAKING CHANGE: SortedRfc6962Layout is now SortedRfc9162Layout. Only the name c
   alias would leave the obsoleted RFC in the public surface, which is the thing this commit removes.
 
 
+## v0.2.0 (2026-08-05)
+
+
 ## v0.2.0-b.2 (2026-08-05)
 
 ### Bug Fixes
