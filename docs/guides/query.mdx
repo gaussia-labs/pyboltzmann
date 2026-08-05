@@ -104,7 +104,7 @@ class MyPlanner:
     def plan(self, query: Query, modules: dict[MemoryType, Module]) -> EvidenceBundle:
         ...
 
-brain = Brain.open("./my-brain", actor=alex, planner=MyPlanner())
+brain = Brain.open("./my-brain", actor=curator, planner=MyPlanner())
 ```
 
 A planner must return knowledge blocks with their provenance and a retrieval score, must verify every
