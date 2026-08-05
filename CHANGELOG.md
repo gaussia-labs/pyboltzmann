@@ -1,6 +1,84 @@
 # CHANGELOG
 
 
+## v0.2.0-b.1 (2026-08-05)
+
+### Documentation
+
+- Document content a block names rather than carries
+  ([`16e8389`](https://github.com/gaussia-labs/pyboltzmann/commit/16e83897d88b334b5e67b661a42414f93889e04f))
+
+The Index page still showed `build(self, blocks)`, which no longer exists, so the one example a
+  reader would copy was the one that would not run.
+
+Adds `content_digests`, `put_content` and `ContentRef` to the architecture page, with the
+  distinction that keeps the audit model intact: content is the block's own datum and nothing cites
+  it, while evidence is canonical and everything derived from it cascades on a drop.
+
+Both new snippets were executed against the SDK before being written down.
+
+- Use a generic actor in the examples
+  ([`37c6b0c`](https://github.com/gaussia-labs/pyboltzmann/commit/37c6b0cafd668a9c200f4d9d857271733279d89a))
+
+Every example opened a brain as `Actor(id="alex")`, which is the maintainer's own name in
+  documentation an international audience reads. `curator` says what the role is instead of who
+  happened to write the page, so `actor=curator` now reads as the sentence it always meant.
+
+An episodic block's `participants` became `["lecturer", "students"]`, which also fits the lecture
+  the surrounding example is about.
+
+The README matters most here: it is the PyPI landing page, so it is the first example anyone sees.
+  Its snippet was executed again afterwards.
+
+### Features
+
+- **blocks**: Let any block name content it does not carry
+  ([`838fb72`](https://github.com/gaussia-labs/pyboltzmann/commit/838fb724ed4e9333b28eb283a6f2480e7048e135))
+
+A payload is JSON, canonically serialized and hashed on every access, so a datum large enough to
+  matter belongs in the store with the block naming it. Canonical always worked that way. Nothing
+  else could, and the concept was never first class: the three operations that must account for
+  those bytes each recovered them by asking `isinstance(block, CanonicalBlock)`, which is a
+  different question from the one they needed answered.
+
+That made two of them silently wrong for any other schema that named bytes. `reachability` would not
+  mark them, so `prune` deletes content a retained root still names -- data loss. `redact` would not
+  destroy them, so a redaction reports success and leaves the bytes -- a compliance failure. And
+  `required_blobs` would not pack them, publishing an artifact whose pointers lead nowhere. All
+  three now ask the block through `content_digests`, so the schema that eventually names content
+  inherits the behaviour instead of rediscovering these three bugs.
+
+`ContentRef` generalizes a shape that was already proven: `NormalizedView` had exactly these three
+  fields, and now subclasses it. It adds no field and must not, or every canonical block_id carrying
+  a view would move.
+
+The scan deliberately does not read content. It is linear and holds no reader; fetching blobs would
+  turn a pass over envelopes into a pass over every blob a module holds, and the cost would arrive
+  silently on a call that was cheap. Indexing content is what an index is for.
+
+The envelope keeps its five keys and PROTOCOL_VERSION stays 1. Verified additive on both published
+  surfaces: the golden vectors pass unregenerated, and the JSON Schema emitted to a model is
+  byte-identical.
+
+BREAKING CHANGE: Index.build takes a second argument, a ContentReader. An index over blocks that
+  name their content cannot work from the blocks alone, and the caller previously had to construct
+  the store itself and thread it in. The reader is narrower than BlockStore on purpose -- an index
+  has no business calling put_bytes, tombstone or delete -- and keeps the store's own get_bytes
+  name, so a BlockStore satisfies it structurally. Done now rather than through an optional hook
+  because Index is a published protocol: an implementation in another language would never learn a
+  hook exists.
+
+### Breaking Changes
+
+- **blocks**: Index.build takes a second argument, a ContentReader. An index over blocks that name
+  their content cannot work from the blocks alone, and the caller previously had to construct the
+  store itself and thread it in. The reader is narrower than BlockStore on purpose -- an index has
+  no business calling put_bytes, tombstone or delete -- and keeps the store's own get_bytes name, so
+  a BlockStore satisfies it structurally. Done now rather than through an optional hook because
+  Index is a published protocol: an implementation in another language would never learn a hook
+  exists.
+
+
 ## v0.1.1 (2026-08-04)
 
 ### Bug Fixes
