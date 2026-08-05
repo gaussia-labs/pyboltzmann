@@ -449,11 +449,20 @@ class Brain:
 
     def resolvability(self) -> ResolvabilityReport:
         """
-        Report which blocks resolve, which were tombstoned, and which are simply missing.
+        Report what resolves, what was tombstoned, and what is simply missing.
 
         The three-way split is required, not cosmetic: a redacted block and a corrupted one both fail to
         read, and a consumer that cannot tell them apart cannot tell a lawful erasure from a broken
         store (paper Section 10.6).
+
+        The same split is reported for the content a block names but does not carry. Such a block can be
+        whole and its composition consistent while the datum it names is gone, and no other reader would
+        say so: :meth:`verify` tolerates absent bytes by design, and a ``prune`` finds nothing to reclaim
+        because a retained root still names them. Without this the store looks intact until the module is
+        packed for publication, which is the worst place to learn it.
+
+        This reads no content. Classifying it asks the store which digests it holds, exactly as the block
+        half does, so the cost stays a pass over envelopes.
 
         Returns:
             ResolvabilityReport: The classification, per module.
@@ -461,18 +470,43 @@ class Brain:
         resolvable: dict[MemoryType, list[BlockId]] = {}
         tombstoned: dict[MemoryType, list[BlockId]] = {}
         missing: dict[MemoryType, list[BlockId]] = {}
+        content_resolvable: dict[MemoryType, list[Digest]] = {}
+        content_tombstoned: dict[MemoryType, list[Digest]] = {}
+        content_missing: dict[MemoryType, list[Digest]] = {}
 
         for memory_type in self._snapshot.installed:
             module = self.module(memory_type)
-            for block_id in module.block_ids:
-                if self.store.is_resolvable(block_id):
-                    resolvable.setdefault(memory_type, []).append(block_id)
-                elif self.store.has(block_id):
-                    tombstoned.setdefault(memory_type, []).append(block_id)
-                else:
-                    missing.setdefault(memory_type, []).append(block_id)
+            classified: set[str] = set()
 
-        return ResolvabilityReport(resolvable=resolvable, tombstoned=tombstoned, missing=missing)
+            for block_id in module.block_ids:
+                if not self.store.is_resolvable(block_id):
+                    unreadable = tombstoned if self.store.has(block_id) else missing
+                    unreadable.setdefault(memory_type, []).append(block_id)
+                    continue
+
+                resolvable.setdefault(memory_type, []).append(block_id)
+
+                # Only a readable block can say what it names, which is why this lives here rather
+                # than in a second pass. Two blocks may name the same datum; it is one datum.
+                for digest in module.get(block_id).content_digests:
+                    if digest.hex in classified:
+                        continue
+                    classified.add(digest.hex)
+                    if self.store.is_resolvable(digest):
+                        content_resolvable.setdefault(memory_type, []).append(digest)
+                    elif self.store.has(digest):
+                        content_tombstoned.setdefault(memory_type, []).append(digest)
+                    else:
+                        content_missing.setdefault(memory_type, []).append(digest)
+
+        return ResolvabilityReport(
+            resolvable=resolvable,
+            tombstoned=tombstoned,
+            missing=missing,
+            content_resolvable=content_resolvable,
+            content_tombstoned=content_tombstoned,
+            content_missing=content_missing,
+        )
 
     def open_index(self, memory_type: MemoryType, kind: IndexKind) -> Index:
         """

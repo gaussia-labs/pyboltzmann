@@ -92,6 +92,32 @@ def naming(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return build
 
 
+@pytest.fixture
+def dangling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A brain holding an episodic block that names content the store never received.
+
+    The realistic paths into this state are an external proposer that puts a reference in a payload
+    without materializing the bytes, and a brain copied without all of its blobs. Reached here by
+    skipping ``put_content``, which is the same envelope either way.
+    """
+
+    def build(**kwargs: object) -> tuple[Brain, object, ContentRef]:
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR, **kwargs)  # type: ignore[arg-type]
+        reference = ContentRef(blob=OciDigest.of(TRANSCRIPT), media_type="text/plain", size=len(TRANSCRIPT))
+        assert not brain.store.has(reference.blob)
+
+        monkeypatch.setattr(EpisodicBlock, "content_digests", property(lambda self: (reference.blob,)), raising=False)
+
+        commit = brain.ingest(
+            b"%PDF-1.7 lecture", RegistrationRequest(media_type="application/pdf", actor=CURATOR), _proposer
+        )
+        episodic = brain.module(MemoryType.EPISODIC).block_ids
+        assert len(episodic) == 1, commit
+        return brain, episodic[0], reference
+
+    return build
+
+
 class TestTheDefault:
     """A self-contained block names nothing, which is what keeps this change additive."""
 
@@ -223,6 +249,96 @@ class TestIndicesReceiveAReader:
         # second spelling of the same read to keep in sync.
         assert isinstance(Brain.open(tmp_path / "brain", actor=CURATOR).store, ContentReader)
         assert isinstance(MemoryBlockStore(), ContentReader)
+
+
+class TestResolvability:
+    """The state nothing reported: a whole block naming a datum that is gone.
+
+    Every other reader is silent about it and correctly so. ``verify`` skips bytes it cannot read, so a
+    block whose content vanished verifies. The composition verifies, because its root is over identities.
+    A ``prune`` reclaims nothing, because a retained root still names the digest. The failure surfaced
+    only at ``pack_module``, which is the last place it can be found and the worst: by then the snapshot
+    was believed publishable.
+    """
+
+    def test_content_a_block_names_is_reported(self, naming) -> None:
+        brain, _, reference = naming()
+
+        report = brain.resolvability()
+
+        assert reference.blob in report.content_resolvable[MemoryType.EPISODIC]
+        assert report.is_intact
+
+    def test_missing_content_is_reported_as_missing(self, dangling) -> None:
+        brain, _, reference = dangling()
+
+        report = brain.resolvability()
+
+        assert reference.blob in report.content_missing[MemoryType.EPISODIC]
+        assert not report.content_tombstoned
+
+    def test_the_snapshot_is_not_intact_when_a_datum_is_gone(self, dangling) -> None:
+        # The whole point: this is the call that now answers the question, before publication asks it.
+        brain, _, _ = dangling()
+
+        assert not brain.resolvability().is_intact
+
+    def test_the_block_itself_is_still_reported_resolvable(self, dangling) -> None:
+        # The block is whole. Saying otherwise would be a different lie, and would make a damaged
+        # envelope indistinguishable from a missing datum.
+        brain, block_id, _ = dangling()
+
+        report = brain.resolvability()
+
+        assert block_id in report.resolvable[MemoryType.EPISODIC]
+        assert not report.missing
+
+    def test_canonical_content_was_always_covered_by_this(self, tmp_path: Path) -> None:
+        # Canonical has named its original since the beginning, so the gap was never episodic-only.
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
+        result = brain.register(b"%PDF-1.7 lecture", RegistrationRequest(media_type="application/pdf", actor=CURATOR))
+        blob = brain.module(MemoryType.CANONICAL).get(result.block_id).content_digests[0]
+
+        assert blob in brain.resolvability().content_resolvable[MemoryType.CANONICAL]
+
+    def test_a_lawful_erasure_does_not_read_as_damage(self, naming) -> None:
+        # Section 10.6 for content: redaction tombstones the block and its datum together, so neither
+        # is missing. A store that reported this as corruption would be unusable after any erasure.
+        brain, block_id, _ = naming(policy=RetentionPolicy(redactable_media_types=["text/plain"]))
+        brain.redact(block_id, MemoryType.EPISODIC, reason="erasure request")
+
+        report = brain.resolvability()
+
+        assert block_id in report.tombstoned[MemoryType.EPISODIC]
+        assert not report.content_missing
+        assert report.is_intact
+
+    def test_one_datum_named_twice_is_reported_once(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
+        reference = brain.put_content(TRANSCRIPT, media_type="text/plain")
+        monkeypatch.setattr(EpisodicBlock, "content_digests", property(lambda self: (reference.blob,)), raising=False)
+
+        def two_episodes(task: object, source: bytes) -> CandidateSet:
+            return CandidateSet(
+                producer=DETECTOR,
+                candidates=[
+                    Candidate(
+                        memory_type=MemoryType.EPISODIC,
+                        evidence=[task.source],  # type: ignore[attr-defined]
+                        payload={"summary": summary, "occurred_at": utc_timestamp()},
+                    )
+                    for summary in ("the lecture was recorded", "the lecture was transcribed")
+                ],
+            )
+
+        brain.ingest(
+            b"%PDF-1.7 lecture", RegistrationRequest(media_type="application/pdf", actor=CURATOR), two_episodes
+        )
+
+        report = brain.resolvability()
+
+        assert len(report.resolvable[MemoryType.EPISODIC]) == 2
+        assert report.content_resolvable[MemoryType.EPISODIC] == [reference.blob]
 
 
 class TestRedaction:
