@@ -35,21 +35,16 @@ from boltzmann.blocks import (
     CanonicalBlock,
     ContentRef,
     EpisodicBlock,
-    EpisodicBlockV2,
     MemoryType,
-    NamesContent,
     NormalizedView,
     ProceduralBlock,
-    ProceduralBlockV2,
     Producer,
     ProvenanceBlock,
     Relation,
     RemovalMechanism,
     SemanticBlock,
-    SemanticBlockV2,
     SemanticKind,
     Step,
-    require_media_type,
 )
 from boltzmann.brain import Brain, BrainState
 from boltzmann.exceptions import BoltzmannError
@@ -92,7 +87,7 @@ from boltzmann.retention import (
 )
 from boltzmann.store import BlockStore, MemoryBlockStore, OciLayoutStore
 
-__version__ = "0.3.0-b.1"
+__version__ = "0.3.0"
 
 __all__ = [
     "PROTOCOL_VERSION",
@@ -126,7 +121,6 @@ __all__ = [
     "ResolvabilityReport",
     "SupersessionResult",
     "EpisodicBlock",
-    "EpisodicBlockV2",
     "EvidenceBundle",
     "InclusionProof",
     "Ledger",
@@ -140,12 +134,10 @@ __all__ = [
     "MerkleTree",
     "Module",
     "ModuleRef",
-    "NamesContent",
     "NormalizedView",
     "OciDigest",
     "OciLayoutStore",
     "ProceduralBlock",
-    "ProceduralBlockV2",
     "ProcessingTask",
     "Producer",
     "ProvenanceBlock",
@@ -160,7 +152,6 @@ __all__ = [
     "RetentionPolicy",
     "RetrievalMode",
     "SemanticBlock",
-    "SemanticBlockV2",
     "SemanticKind",
     "Snapshot",
     "Step",
@@ -168,6 +159,5 @@ __all__ = [
     "ValidationStatus",
     "Validator",
     "__version__",
-    "require_media_type",
     "utc_timestamp",
 ]
