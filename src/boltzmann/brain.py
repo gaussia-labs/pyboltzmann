@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from boltzmann.blocks.canonical import CanonicalBlock, NormalizedView
-from boltzmann.blocks.content import ContentRef
+from boltzmann.blocks.content import ContentRef, require_media_type
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import (
     Actor,
@@ -733,14 +733,25 @@ class Brain:
         with its block. If other blocks are going to cite these bytes, they are a source, and the call
         is :meth:`register`.
 
+        **The reference this returns is a fact, not a claim.** ``size`` is measured from the bytes
+        rather than accepted from the caller, and ``media_type`` has to be shaped like one. Both end up
+        in a payload, hashed into a ``block_id`` and published, and a consumer reads them to decide
+        whether to fetch the content at all -- so a wrong value is not correctable afterwards, only
+        replaceable by a different block. This is the one point where the bytes are in hand, which
+        makes it the only place the declaration can be checked for free.
+
         Args:
             data (bytes): The content, stored exactly as given.
-            media_type (str): IANA media type, recorded in the reference so a consumer can decide
-                whether to fetch the bytes without holding them.
+            media_type (str): IANA media type as ``type/subtype``, recorded in the reference so a
+                consumer can decide whether to fetch the bytes without holding them.
 
         Returns:
-            ContentRef: The reference a payload names.
+            ContentRef: The reference a payload names, with ``size`` measured from ``data``.
+
+        Raises:
+            ProtocolError: If ``media_type`` is not of the form ``type/subtype``.
         """
+        require_media_type(media_type)
         return ContentRef(blob=self.store.put_bytes(data), media_type=media_type, size=len(data))
 
     # --- Ingestion: delegate, validate, commit --------------------------------

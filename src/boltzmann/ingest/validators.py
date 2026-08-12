@@ -20,9 +20,10 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from boltzmann.blocks.base import Block
+from boltzmann.blocks.content import require_media_type
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.semantic import SemanticBlock
-from boltzmann.exceptions import BlockSchemaError
+from boltzmann.exceptions import BlockSchemaError, ProtocolError
 from boltzmann.identity.digest import BlockId
 from boltzmann.ingest.validation import ValidationIssue
 
@@ -434,6 +435,71 @@ class RelationValidator:
         ]
 
 
+class ContentValidator:
+    """What a block says about the content it names has to be true of the bytes.
+
+    ``put_content`` measures both fields from the bytes it is handed, so a payload built through the
+    SDK cannot fail this. A payload does not have to come from the SDK: a proposer composes one from
+    whatever it knows, and ``media_type`` and ``size`` are exactly the two fields a consumer reads to
+    decide whether to fetch content -- before it holds the bytes that would contradict them.
+
+    Both end up hashed into ``block_id``, so this is the last point at which either can be corrected
+    rather than superseded.
+    """
+
+    code: ClassVar[str] = "content-mismatch"
+
+    def check(
+        self,
+        candidate: Candidate,
+        task: ProcessingTask,
+        modules: dict[MemoryType, Module],
+    ) -> list[ValidationIssue]:
+        """
+        Check a named content reference against the store.
+
+        Args:
+            candidate (Candidate): The proposal.
+            task (ProcessingTask): Unused.
+            modules (dict[MemoryType, Module]): The installed modules, for the store behind them.
+
+        Returns:
+            list[ValidationIssue]: Issues for a malformed media type or a size that contradicts the
+            stored bytes. Content the store does not hold yields nothing: a block may legitimately
+            name bytes this brain has not received, and a selective install is the ordinary way that
+            happens.
+        """
+        try:
+            block = build_block(candidate)
+        except (BlockSchemaError, ValueError):
+            return []
+        content = getattr(block, "content", None)
+        if content is None:
+            return []
+
+        issues = []
+        try:
+            require_media_type(content.media_type)
+        except ProtocolError as error:
+            issues.append(ValidationIssue(code=self.code, detail=str(error), field="content"))
+
+        store = next((module.store for module in modules.values()), None)
+        if store is not None and store.is_resolvable(content.blob):
+            actual = len(store.get_bytes(content.blob))
+            if actual != content.size:
+                issues.append(
+                    ValidationIssue(
+                        code=self.code,
+                        detail=(
+                            f"content {content.blob.short} declares {content.size} bytes but the store "
+                            f"holds {actual}; a consumer reads this to size a fetch it has not made yet"
+                        ),
+                        field="content",
+                    )
+                )
+        return issues
+
+
 class ContradictionValidator:
     """Basic contradiction detection: the same claim stated two different ways.
 
@@ -582,6 +648,7 @@ DEFAULT_VALIDATORS = (
     EvidenceValidator(),
     DuplicateValidator(),
     RelationValidator(),
+    ContentValidator(),
     ContradictionValidator(),
 )
 """The checks Section 8.3 assigns to the protocol, in the order they are cheapest to fail."""
