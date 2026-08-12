@@ -257,3 +257,46 @@ class TestRemovalMechanisms:
         policy = RetentionPolicy(redactable_media_types=["*/*"], allowed_mechanisms=[RemovalMechanism.TOMBSTONE])
         with pytest.raises(RetentionPolicyError, match="policy permits only"):
             policy.authorize(mechanism, MemoryType.CANONICAL)
+
+
+class TestThePackageExportsWhatItImplements:
+    """The top-level package must not silently fall behind the modules under it.
+
+    ``boltzmann/__init__.py`` is a hand-maintained list, so it is the one file whose content is not
+    derived from anything. It lost five names in a merge -- the conflict was on the version line and
+    the resolution took the whole file from the other side -- and every test kept passing, because
+    the suite imports from ``boltzmann.blocks.*`` and nothing compared the two surfaces. The gap
+    reached PyPI: 0.4.0 shipped ``SemanticBlockV2`` working, and ``from boltzmann import
+    SemanticBlockV2`` raising ImportError.
+    """
+
+    def test_every_registered_block_schema_is_importable_from_the_package(self) -> None:
+        """A schema a caller cannot name is a schema they cannot construct."""
+        import boltzmann
+        from boltzmann.blocks.base import Block
+
+        missing = sorted(
+            block_class.__name__
+            for block_class in Block.registry().values()
+            if not hasattr(boltzmann, block_class.__name__)
+        )
+        assert not missing, f"registered but not exported from boltzmann: {missing}"
+
+    def test_what_the_package_imports_it_also_declares(self) -> None:
+        """A name imported into the package namespace but left out of ``__all__`` is half-exported.
+
+        Not the inverse -- ``boltzmann.blocks`` deliberately exposes more than the package does, such
+        as the individual provenance record types -- so this asks only that the package finish what it
+        starts, which is the half a merge is able to undo silently.
+        """
+        import boltzmann
+        import boltzmann.blocks
+
+        imported = {name for name in boltzmann.blocks.__all__ if name in vars(boltzmann)}
+        assert not sorted(imported - set(boltzmann.__all__))
+
+    def test_everything_declared_is_actually_bound(self) -> None:
+        """An ``__all__`` entry with nothing behind it fails only at the caller's import."""
+        import boltzmann
+
+        assert not sorted(name for name in boltzmann.__all__ if not hasattr(boltzmann, name))
