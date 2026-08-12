@@ -7,6 +7,11 @@ on:
       - 'src/boltzmann/**'
       - 'pyproject.toml'
       - '.github/workflows/release.yml'
+  # No path filter, and deliberately wider than the push trigger. A push is filtered because it may
+  # cut a release and a docs commit should not; a pull request decides whether to merge at all, and
+  # a change to the test suite or the lockfile can break the build as surely as one to src.
+  pull_request:
+    branches: [master, develop]
 
 jobs:
   test:
@@ -41,11 +46,17 @@ jobs:
 
   release:
     needs: test
+    # A pull request runs the tests and stops there. Releasing from one would tag and publish a
+    # merge that has not happened, from a ref that disappears when it does.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     concurrency: release
     permissions:
       id-token: write
       contents: write
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      tag: ${{ steps.release.outputs.tag }}
 
     steps:
       - uses: actions/checkout@v4
@@ -78,3 +89,73 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ steps.release.outputs.tag }}
+
+  # A release on master writes a chore(release) commit that only master has. semantic-release reads
+  # the current version from the branch it runs on, so until develop is told, its next release is
+  # computed from a version that is no longer the highest one published -- which is how v0.3.0-b.1
+  # came to sit below v0.3.0 on PyPI while containing strictly more.
+  #
+  # Opening a pull request rather than pushing the merge, because the conflict is not incidental: a
+  # release rewrites the same three files on both branches, every time, so an automatic merge would
+  # fail on every release and teach everyone to ignore it. A PR makes the step impossible to forget
+  # while leaving the resolution to someone who can read the changelog.
+  back-merge:
+    needs: release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Open the back-merge pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin master develop
+
+          if git merge-base --is-ancestor origin/master origin/develop; then
+            echo "develop already contains master; nothing to back-merge."
+            exit 0
+          fi
+
+          existing=$(gh pr list --base develop --head master --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "PR #${existing} is already open for this."
+            exit 0
+          fi
+
+          # Reported, not resolved. Which side wins depends on what was released, and the changelog
+          # needs both sides kept in the order the releases were tagged -- neither is a merge driver.
+          if git merge-tree --write-tree origin/develop origin/master >/dev/null 2>&1; then
+            echo "This merges cleanly." > body.md
+          else
+            cat > body.md <<'CONFLICTS'
+          Expect conflicts in the release artifacts: `CHANGELOG.md`, `pyproject.toml`,
+          `src/boltzmann/__init__.py`.
+
+          Take **master's** number in `pyproject.toml` and `__init__.py`. It is the higher,
+          already-published one, and moving the version backwards is precisely what makes the next
+          release collide. Keep both `CHANGELOG.md` sections, ordered by the date each was tagged.
+          CONFLICTS
+          fi
+
+          {
+            echo "Opened automatically after a release on \`master\`."
+            echo
+            echo "Without it, \`develop\` computes its next version from a release commit it never"
+            echo "received, and publishes a prerelease that sorts *below* a version already on PyPI"
+            echo "while containing strictly more than it."
+            echo
+            cat body.md
+          } > pr-body.md
+
+          gh pr create --base develop --head master \
+            --title "chore: back-merge ${TAG:-the latest release} into develop" \
+            --body-file pr-body.md
