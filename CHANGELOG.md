@@ -1,6 +1,35 @@
 # CHANGELOG
 
 
+## v0.4.1 (2026-08-12)
+
+### Bug Fixes
+
+- **blocks**: Re-export the v2 schemas from the package
+  ([`322a2a0`](https://github.com/gaussia-labs/pyboltzmann/commit/322a2a0b1ee7bb87298f5aa3b487b051cf490986))
+
+0.4.0 shipped SemanticBlockV2, EpisodicBlockV2 and ProceduralBlockV2 working -- registered, selected
+  by payload, round-tripping -- and `from boltzmann import SemanticBlockV2` raising ImportError.
+  Only the long path worked.
+
+They were lost in 77e3b11. The merge conflicted on __version__ and the resolution took the whole
+  file from the other side, which was master at 0.3.0 and predated the exports. Ten lines went with
+  it: five imports and five __all__ entries, including NamesContent and require_media_type.
+
+Nothing failed. The suite imports from boltzmann.blocks.* throughout, and the one test that reads
+  the package surface walks __all__ -- so a name deleted from __all__ takes its own check with it.
+
+The guard asks the question that has an answer independent of the file: every schema in
+  Block.registry() must be reachable from the package. A registry entry is produced by declaring a
+  class, so the two cannot drift without the test noticing. The weaker half -- that a name imported
+  into the package namespace is also declared -- covers the same merge undoing half an export rather
+  than all of it.
+
+Deliberately not asserting that boltzmann re-exports all of boltzmann.blocks.__all__: nine names
+  have always been module-only, the provenance record types among them, and that is curation rather
+  than oversight.
+
+
 ## v0.4.0 (2026-08-12)
 
 ### Build System
