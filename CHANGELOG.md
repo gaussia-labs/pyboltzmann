@@ -1,6 +1,187 @@
 # CHANGELOG
 
 
+## v0.3.0-b.1 (2026-08-12)
+
+### Build System
+
+- Sync uv.lock with the version in pyproject.toml
+  ([`6870a4c`](https://github.com/gaussia-labs/pyboltzmann/commit/6870a4c6f18c0ffe5b2123ef051cea8802e5bedf))
+
+The lock still recorded 0.1.1 while pyproject had moved through three prereleases and a release.
+  Nothing consumed the stale number -- the project is an editable install and the entry carries no
+  hashes -- but a lockfile that disagrees with the manifest it locks is a question every reader has
+  to answer before trusting the rest of it.
+
+### Documentation
+
+- **concepts**: Describe content on derived blocks and version skew
+  ([`e7b4fd4`](https://github.com/gaussia-labs/pyboltzmann/commit/e7b4fd4663508cdd0e3f07ed860d924e945167ce))
+
+The content section documented put_content under a heading promising content a block names, while no
+  schema outside canonical had a field to name it with -- an example a reader could reasonably
+  believe worked, and could not run. It now shows the payload that reaches a committed block.
+
+Adds what a publisher and a consumer each need to know across SDK versions: which version a payload
+  resolves to, what the schema-versions annotation is for, and the error an older client gets.
+
+### Features
+
+- **blocks**: Let semantic, episodic and procedural blocks name content
+  ([`63d19c0`](https://github.com/gaussia-labs/pyboltzmann/commit/63d19c055bb9e38dcc14f63905f89d2d7cd7f512))
+
+Only canonical could point at bytes. A semantic block was text and nothing else, so an
+  interpretation whose subject is an image, a recording or any other file had no way to state what
+  it claims about that file -- the datum had to be inlined into a JSON payload that is canonically
+  serialized and hashed on every access, or left out.
+
+Schema version 2 of the three derived types adds an optional content reference, through a mixin that
+  carries the field and the content_digests override together. Separating them is the bug the mixin
+  exists to prevent: content nothing reports is content a prune reclaims while its block still names
+  it, and a redaction leaves behind.
+
+The text stays required. searchable_text reads statement, summary and goal to answer a
+  natural-language query, so a block without them would be present in the composition, provable
+  against the root, and invisible to every query in the system. When the content is binary the text
+  is what the block claims about it, which is the part that is knowledge.
+
+Each version subclasses its v1, so every reader that dispatches on the v1 type keeps working
+  untouched.
+
+Provenance is deliberately left at v1. Its records are small by construction, and the removal ledger
+  is the last thing that should sit behind a version barrier: it is what an auditor reads to find
+  out what happened.
+
+The emitted JSON Schema now advertises v2, so the $defs key for a block payload is named after the
+  newest class. Its required fields are unchanged and content is optional, so a proposal written
+  against the previous document still validates.
+
+- **blocks**: Resolve a payload to the oldest schema that accepts it
+  ([`b9c1d0d`](https://github.com/gaussia-labs/pyboltzmann/commit/b9c1d0d855a32328a646c289c349209e5e0810b0))
+
+Selecting the newest registered schema meant that declaring a class anywhere in the process silently
+  re-versioned every block written after it, including blocks using nothing the new schema added.
+  Since schema_version sits inside the hashed envelope, that is a change of block_id: knowledge an
+  older consumer could have read perfectly well becomes unreadable to it, to record nothing that
+  consumer was missing.
+
+Oldest-that-fits inverts the default. A payload validates against the earliest schema whose fields
+  cover it, so an artifact only stops being readable by an older client at the point where it
+  genuinely uses something that client has no schema for.
+
+The candidate does not get a say. A version is not a preference, it is a statement about which
+  fields the payload uses, and the payload already answers that -- so there is no new wire field and
+  an older client's Candidate, which forbids extras, still parses.
+
+_latest in ingest.schema deliberately keeps the opposite policy and now says so: what a proposer may
+  *send* has to be the whole surface, or a field would be unreachable to every producer that learns
+  the shape from the emitted JSON Schema.
+
+- **distribution**: Declare each module's schema versions on the manifest
+  ([`bd0893f`](https://github.com/gaussia-labs/pyboltzmann/commit/bd0893f0443dfd4548bfb6bf341c5a4a52707102))
+
+A block commits to its schema version inside the hashed envelope, so the information was always in
+  the artifact -- but only reachable by fetching and parsing envelopes, which is after the download
+  a consumer may not be able to use. An old client meeting a brain written by a newer one had no way
+  to find out before paying for it.
+
+Worse, it often did not find out at all until much later: the first decode during a pull is
+  conditional on the module having a rebuildable index registered, so a consumer with none installs
+  the artifact cleanly and fails at the first query, with nothing tying the failure back to the
+  artifact it came from.
+
+pull now checks the declaration between resolving the manifest and fetching the config blob, so a
+  refusal costs no bytes. It is scoped to the modules being installed rather than to the artifact: a
+  brain whose semantic module needs a schema you lack is still installable if what you asked for is
+  the episodic one, and refusing the whole thing would deny a consumer knowledge it can read to
+  protect it from knowledge it never requested. An artifact published before the annotation existed
+  declares nothing, and absence is read as unknown rather than as permission.
+
+Protocol-owned annotation keys are now written after the caller's rather than before. Splatting the
+  caller's last let it overwrite the protocol version -- the one annotation a consumer refuses on,
+  disabled by the side that benefits from disabling it.
+
+- **ingest**: Verify what a content reference declares, where it is written
+  ([`060e052`](https://github.com/gaussia-labs/pyboltzmann/commit/060e052cbb9be60966859e0c4b6b029669e08734))
+
+media_type was any non-empty string and size was any non-negative integer, neither checked against
+  the bytes. Both are read by a consumer deciding whether to fetch content it does not hold -- so
+  they are exactly the two fields it cannot verify for itself -- and both are hashed into block_id,
+  which makes a wrong value permanent rather than correctable.
+
+put_content now measures size from the bytes rather than accepting a caller's number, and requires a
+  media type shaped type/subtype. It is the one point where the bytes are in hand, so the
+  declaration costs nothing to check there. A payload composed by a proposer does not go through it,
+  so the gate performs the same checks and additionally compares the declared size against the store
+  when the brain holds the blob. Content the store does not hold yields nothing: a block may
+  legitimately name bytes this brain never received, which is what a selective install produces.
+
+A shape check rather than a registry lookup, because IANA moves without this SDK moving -- but "png"
+  and " " are wrong under any registry, and they are the mistakes that happen.
+
+Neither check is a model validator. NormalizedView extends ContentRef and takes its media type from
+  a third-party normalization pipeline, so a malformed one may already sit inside a published
+  canonical block_id; validating on the model would run on decode and make this SDK unable to read a
+  brain an older one wrote -- strictness aimed at the past instead of the future.
+
+### Refactoring
+
+- **blocks**: Parse media types with the standard library
+  ([`10092f9`](https://github.com/gaussia-labs/pyboltzmann/commit/10092f9c2e53ceb83413120ea69219d901119cc7))
+
+Review feedback on #5: the hand-rolled character-class regex was the wrong tool.
+  email.headerregistry is the RFC 2045 grammar as CPython implements it, so what counts as a media
+  type stops being this module's opinion, and header injection and quoting are somebody else's
+  solved problem. No new dependency -- this SDK ships two, and neither is for string validation.
+
+The parser alone is not the check, though. It is defect-reporting and correctly lenient:
+  'image/png;' and 'image/png; charset=utf-8' parse without complaint, and 'IMAGE/PNG' parses to the
+  lowercase form. Every one of those is fine for a header and wrong for this field, because
+  media_type is hashed into block_id -- a value merely equivalent to another under the RFC's
+  comparison rules would give the same content two identities.
+
+So the value has to equal what the parse reconstructs. That one comparison rejects parameters,
+  trailing punctuation, stray whitespace and non-canonical case together, and refuses rather than
+  normalizes for the reason LocalLayoutRegistry refuses a reference rather than rewriting it: filing
+  a caller's content under a string they never passed is worse than telling them the string is
+  unusable.
+
+Adds the RFC 6838 length bound, which the regex enforced only by accident of its repetition counts,
+  and coverage for the spellings the regex silently accepted.
+
+### Testing
+
+- Cover two live schema versions across SDK and brain
+  ([`3ebe345`](https://github.com/gaussia-labs/pyboltzmann/commit/3ebe3459d9c8ba4db23fbe5fe05db69a2a7dd5af))
+
+The registry holds two versions of one memory type for the first time, and the interesting cases are
+  about a client rather than about a brain: a current SDK reading either shape, and an older SDK
+  meeting a brain that uses a schema it never implemented.
+
+The last of those was untestable before. conftest gains an autouse fixture that restores the block
+  registry after each test, which retires the workaround test_content documented -- declaring a
+  schema anywhere used to change the shape of every proposal of that type for the rest of the
+  session -- and an old_client helper that forgets a registry entry. Nothing is mocked: the checks
+  under test read that same registry, so forgetting a version is a faithful stand-in for an SDK
+  without it.
+
+Also closes the gap that made this necessary. Decoding was version-safe by construction and well
+  covered; encoding was neither asserted nor visible to the golden vectors, so nothing anywhere
+  stated which version a newly built block gets.
+
+
+## v0.2.0 (2026-08-05)
+
+### Documentation
+
+- **readme**: Trim the prose to what a reader needs
+  ([`6c1aef8`](https://github.com/gaussia-labs/pyboltzmann/commit/6c1aef8c79803a4c3cc23dba0785e823424f3eb6))
+
+Cut the no-stubs/no-dead-code paragraph and the closing recap of the guides (the docs table already
+  lists them), and fold the model-agnosticism note and the dependency lines into the sections they
+  belong to.
+
+
 ## v0.2.0-b.4 (2026-08-05)
 
 ### Bug Fixes
@@ -142,9 +323,6 @@ BREAKING CHANGE: SortedRfc6962Layout is now SortedRfc9162Layout. Only the name c
   layout, computes the same roots, and reports the same layout identifier. Code that reaches
   DEFAULT_LAYOUT or the MerkleLayout protocol is unaffected. Renamed rather than aliased because an
   alias would leave the obsoleted RFC in the public surface, which is the thing this commit removes.
-
-
-## v0.2.0 (2026-08-05)
 
 
 ## v0.2.0-b.2 (2026-08-05)
