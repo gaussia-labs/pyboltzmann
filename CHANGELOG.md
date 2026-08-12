@@ -1,7 +1,23 @@
 # CHANGELOG
 
 
+## v0.4.0-b.1 (2026-08-12)
+
+
+## v0.3.0 (2026-08-05)
+
+
 ## v0.3.0-b.1 (2026-08-12)
+
+### Build System
+
+- Sync uv.lock with the version in pyproject.toml
+  ([`6870a4c`](https://github.com/gaussia-labs/pyboltzmann/commit/6870a4c6f18c0ffe5b2123ef051cea8802e5bedf))
+
+The lock still recorded 0.1.1 while pyproject had moved through three prereleases and a release.
+  Nothing consumed the stale number -- the project is an editable install and the entry carries no
+  hashes -- but a lockfile that disagrees with the manifest it locks is a question every reader has
+  to answer before trusting the rest of it.
 
 ### Documentation
 
@@ -158,18 +174,6 @@ The last of those was untestable before. conftest gains an autouse fixture that 
 Also closes the gap that made this necessary. Decoding was version-safe by construction and well
   covered; encoding was neither asserted nor visible to the golden vectors, so nothing anywhere
   stated which version a newly built block gets.
-
-## v0.3.0 (2026-08-05)
-
-### Build System
-
-- Sync uv.lock with the version in pyproject.toml
-  ([`6870a4c`](https://github.com/gaussia-labs/pyboltzmann/commit/6870a4c6f18c0ffe5b2123ef051cea8802e5bedf))
-
-The lock still recorded 0.1.1 while pyproject had moved through three prereleases and a release.
-  Nothing consumed the stale number -- the project is an editable install and the entry carries no
-  hashes -- but a lockfile that disagrees with the manifest it locks is a question every reader has
-  to answer before trusting the rest of it.
 
 
 ## v0.2.0 (2026-08-05)
