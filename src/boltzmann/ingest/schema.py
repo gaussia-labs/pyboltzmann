@@ -139,7 +139,19 @@ def wire_schemas() -> dict[str, dict[str, Any]]:
 
 
 def _latest(memory_type: MemoryType) -> type[Block]:
-    """The newest registered schema for a memory type."""
+    """
+    The newest registered schema for a memory type.
+
+    Deliberately the opposite of :meth:`~boltzmann.blocks.base.Block.build`, which picks the
+    oldest schema a payload satisfies. The two answer different questions. ``build`` asks what
+    a *given* payload is, and the conservative answer keeps a brain readable by older clients.
+    This asks what a proposer is *allowed* to send, and the answer has to be the whole surface:
+    advertising v1 while the gate accepts v2 would make a field unreachable to every producer
+    that learns the shape from here, which is what this module exists to prevent.
+
+    A proposal that uses nothing the newer schema added still round-trips to the older one,
+    because ``build`` resolves on the payload rather than on what the schema permitted.
+    """
     registry = Block.registry()
     versions = sorted(version for kind, version in registry if kind is memory_type)
     if not versions:

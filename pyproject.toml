@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 # where `pygaussia` provides `gaussia`. What a user types to install and what they type to import differ
 # by three letters, which is why the README says both.
 name = "pyboltzmann"
-version = "0.3.0"
+version = "0.4.0-b.1"
 description = "An SDK for the Boltzmann Protocol: portable, verifiable, model-agnostic knowledge"
 readme = "README.md"
 license = {text = "MIT"}
@@ -299,7 +299,15 @@ major_version_zero = true
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 version_variables = ["src/boltzmann/__init__.py:__version__"]
-build_command = "pip install build && python -m build"
+# `uv lock` re-stamps the project's own version in uv.lock, which semantic-release does not know
+# about and therefore left behind at every release -- the lock has had to be corrected by hand
+# twice. `uv` is installed here rather than assumed: this command runs inside the release action's
+# container, which has python and pip and nothing the runner installed. The lock is refreshed
+# before the build so that a failure aborts the release rather than tagging a half-updated tree.
+build_command = "pip install build uv && uv lock && python -m build"
+# Files added to the release commit beyond the version locations above. The build runs before the
+# staging step, so what `uv lock` rewrites is what gets committed.
+assets = ["uv.lock"]
 commit_message = "chore(release): v{version}"
 tag_format = "v{version}"
 # Stay in 0.x until 1.0.0 is a deliberate decision rather than a side effect of the first

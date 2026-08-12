@@ -80,6 +80,25 @@ SemanticBlock(
 `kind` is one of `concept`, `fact`, `formula`, `relation`, `constraint`. A `Relation` is an explicit
 symbolic edge; its target must resolve in the snapshot, or the candidate is rejected.
 
+Schema version 2 adds an optional `content`, for an interpretation whose subject is not text:
+
+```python
+from boltzmann import SemanticBlockV2
+
+SemanticBlockV2(
+    kind=SemanticKind.CONCEPT,
+    label="Phase diagram",
+    statement="The diagram shows the solid-liquid transition",
+    content=brain.put_content(diagram, media_type="image/png"),
+)
+```
+
+`statement` stays required — it is what the block claims about those bytes, and what a text query can
+reach. `EpisodicBlockV2` and `ProceduralBlockV2` add the same field on the same terms. You rarely name
+these classes: a payload is [resolved to the oldest schema that
+accepts it](/sdks/boltzmann/concepts/architecture#content-a-block-names-but-does-not-carry), so passing
+`content` is what selects v2.
+
 ## Procedural
 
 A way of performing a task.

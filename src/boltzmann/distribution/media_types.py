@@ -53,6 +53,22 @@ annotation is what closes that gap (paper Section 4.3).
 ANNOTATION_PROTOCOL_VERSION = "ai.gaussia.boltzmann.protocol-version"
 """Protocol version the artifact conforms to."""
 
+ANNOTATION_SCHEMA_VERSIONS = "ai.gaussia.boltzmann.schema-versions"
+"""Which block schema versions each module holds, as ``{"semantic": [1, 2]}``.
+
+A block commits to its schema version inside the envelope that ``block_id`` is computed over, so
+the information was always *in* the artifact -- but only reachable by fetching and parsing
+envelopes, which is to say after the download a consumer may not be able to use. Declaring it on
+the manifest is what lets a client refuse a brain it cannot read before it moves a single byte,
+and say why.
+
+Protocol version is a different question and stays a different annotation. That one asks whether
+this is a Boltzmann artifact at all; this one asks whether this client has the schemas for the
+knowledge inside it. A brain using a schema you lack is still a brain -- your SDK is just too old
+to read that module -- so it must be possible to install the modules you *can* read, which a
+protocol-level refusal could not express.
+"""
+
 ANNOTATION_MERKLE_LAYOUT = "ai.gaussia.boltzmann.merkle-layout"
 """Merkle layout that produced the root. Roots are only comparable between clients that agree here."""
 
