@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
+from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.distribution.media_types import (
@@ -42,6 +43,7 @@ from boltzmann.distribution.media_types import (
     ANNOTATION_MERKLE_LAYOUT,
     ANNOTATION_MERKLE_ROOT,
     ANNOTATION_PROTOCOL_VERSION,
+    ANNOTATION_SCHEMA_VERSIONS,
     ARTIFACT_TYPE,
     CONFIG_MEDIA_TYPE,
     MANIFEST_MEDIA_TYPE,
@@ -54,6 +56,8 @@ from boltzmann.identity.digest import MerkleRoot, OciDigest
 from boltzmann.identity.serialization import canonicalize
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping, Sequence
+
     from boltzmann.module.snapshot import ModuleRef, Snapshot
     from boltzmann.store.base import BlockStore
 
@@ -270,9 +274,12 @@ def build_manifest(
     manifest = BrainManifest(
         config=config,
         layers=layers,
+        # Protocol-owned keys are written last. Splatting the caller's annotations after them let a
+        # caller overwrite the protocol version -- the one annotation a consumer refuses on -- so the
+        # check could be disabled by the side that benefits from disabling it.
         annotations={
-            ANNOTATION_PROTOCOL_VERSION: str(PROTOCOL_VERSION),
             **(annotations or {}),
+            ANNOTATION_PROTOCOL_VERSION: str(PROTOCOL_VERSION),
         },
     )
 
@@ -283,6 +290,103 @@ def build_manifest(
             f"them, so a consumer could not fetch what the manifest claims"
         )
     return manifest
+
+
+def declare_schema_versions(versions: Mapping[MemoryType, Sequence[int]]) -> str:
+    """
+    Encode a module-to-schema-versions map for :data:`ANNOTATION_SCHEMA_VERSIONS`.
+
+    Canonically serialized rather than merely dumped, because the annotation travels inside the
+    manifest and the manifest's digest is what push deduplication and the fast-forward check
+    compare. Two clients publishing the same brain have to produce the same bytes.
+
+    Args:
+        versions (Mapping[MemoryType, Sequence[int]]): Versions present in each module. A module
+            with no versions -- an empty composition -- is omitted rather than declared empty.
+
+    Returns:
+        str: The annotation value.
+    """
+    declared = {kind.value: sorted(set(present)) for kind, present in versions.items() if present}
+    return canonicalize(declared).decode()
+
+
+def schema_versions_of(manifest: BrainManifest) -> dict[MemoryType, tuple[int, ...]]:
+    """
+    Which block schema versions each module of an artifact holds, as the manifest declares them.
+
+    An artifact published before this annotation existed carries no declaration, and an empty
+    result means exactly that: *unknown*, not *none*. A consumer cannot distinguish "this brain
+    needs nothing special" from "this publisher was too old to say", so absence must fall through
+    to the decode-time check rather than be read as permission.
+
+    Args:
+        manifest (BrainManifest): The manifest to read.
+
+    Returns:
+        dict[MemoryType, tuple[int, ...]]: Versions per module, empty when undeclared or
+        unparseable. Unknown memory types are skipped: a module this client has no concept of is
+        not one it can be asked to install.
+    """
+    declared = manifest.annotations.get(ANNOTATION_SCHEMA_VERSIONS)
+    if not declared:
+        return {}
+
+    try:
+        parsed = json.loads(declared)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+
+    versions: dict[MemoryType, tuple[int, ...]] = {}
+    for name, present in parsed.items():
+        try:
+            memory_type = MemoryType(name)
+        except ValueError:
+            continue
+        # Registry-supplied, so the types are untrusted too, not just the values.
+        if isinstance(present, list) and all(
+            isinstance(version, int) and not isinstance(version, bool) for version in present
+        ):
+            versions[memory_type] = tuple(sorted(set(present)))
+    return versions
+
+
+def require_supported_schemas(manifest: BrainManifest, wanted: Iterable[MemoryType]) -> None:
+    """
+    Refuse an artifact whose wanted modules use a block schema this client does not implement.
+
+    Scoped to the modules actually being installed. A brain whose semantic module uses a newer
+    schema is still perfectly installable if what you asked for is the episodic one, and refusing
+    the whole artifact would deny a consumer knowledge it can read to protect it from knowledge it
+    never requested.
+
+    Args:
+        manifest (BrainManifest): The artifact's manifest.
+        wanted (Iterable[MemoryType]): The modules about to be installed.
+
+    Raises:
+        DistributionError: If a wanted module declares a schema version with no registered class.
+            Raised before any layer is fetched, so nothing is downloaded and nothing is written.
+    """
+    declared = schema_versions_of(manifest)
+    if not declared:
+        return
+
+    registry = Block.registry()
+    for memory_type in wanted:
+        known = sorted(version for kind, version in registry if kind is memory_type)
+        unsupported = [version for version in declared.get(memory_type, ()) if version not in known]
+        if unsupported:
+            raise DistributionError(
+                f"the {memory_type.value} module holds blocks with schema "
+                f"{'versions' if len(unsupported) > 1 else 'version'} "
+                f"{', '.join(str(version) for version in unsupported)}; this client implements {known}. "
+                f"The artifact was published by a newer SDK -- upgrade boltzmann to one that implements "
+                f"schema version {max(unsupported)} for {memory_type.value} blocks, or install only the "
+                f"modules this client has schemas for"
+            )
 
 
 @dataclass(frozen=True, slots=True)
