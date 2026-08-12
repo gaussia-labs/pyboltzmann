@@ -137,3 +137,4 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org/) — 
 ## License
 
 MIT — see [LICENSE](https://github.com/gaussia-labs/pyboltzmann/blob/master/LICENSE).
+
