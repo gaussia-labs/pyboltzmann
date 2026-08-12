@@ -67,7 +67,10 @@ publishes no snapshot: until a committed block names them, the bytes are unreach
 reclaims them.
 
 The reference it returns is a **fact, not a claim**: `size` is measured from the bytes, and `media_type`
-must be shaped `type/subtype`. Both are hashed into the resulting `block_id` and are what a consumer
+must be a bare, lowercase `type/subtype` — no parameters, no trailing punctuation. Media types are
+parsed with the standard library's RFC 2045 parser and then required to round-trip exactly, because
+`image/png`, `IMAGE/PNG` and `image/png; charset=utf-8` are the same type to compare and three
+different strings to hash. Both fields are hashed into the resulting `block_id` and are what a consumer
 reads to decide whether to fetch content it does not hold, so a wrong value cannot be corrected later —
 only superseded by a different block. A payload assembled by a proposer rather than by `put_content` is
 checked in the validation gate instead, which also compares the declared `size` against the stored bytes

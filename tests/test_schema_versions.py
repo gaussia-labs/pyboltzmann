@@ -215,17 +215,52 @@ class TestWhatAReferenceDeclares:
         assert reference.size == len(DIAGRAM)
         assert brain.store.get_bytes(reference.blob) == DIAGRAM
 
-    @pytest.mark.parametrize("media_type", ["png", " ", "image/", "/png", "image png", "image/png/extra"])
+    @pytest.mark.parametrize(
+        "media_type",
+        ["png", " ", "", "image/", "/png", "image png", "image/png/extra", "\n", "image/png\r\nX-Evil: 1"],
+        ids=["no-slash", "blank", "empty", "no-subtype", "no-type", "space", "two-slashes", "newline", "injection"],
+    )
     def test_put_content_refuses_a_thing_that_is_not_a_media_type(self, tmp_path: Path, media_type: str) -> None:
         brain = Brain.open(tmp_path / "brain", actor=CURATOR)
-        with pytest.raises(ProtocolError, match="is not a media type"):
+        with pytest.raises(ProtocolError, match="not a usable media type"):
             brain.put_content(DIAGRAM, media_type=media_type)
 
     @pytest.mark.parametrize(
-        "media_type", ["image/png", "application/octet-stream", "text/plain", "application/vnd.ms-excel", "audio/ogg"]
+        "media_type",
+        ["IMAGE/PNG", "image/PNG", "image/png; charset=utf-8", "image/png;", "image/png ", "a" * 200 + "/b"],
+        ids=["upper", "upper-subtype", "parameter", "trailing-semicolon", "trailing-space", "too-long"],
+    )
+    def test_a_spelling_a_parser_forgives_and_a_digest_does_not(self, tmp_path: Path, media_type: str) -> None:
+        """Each of these parses cleanly. Each would give the same content two identities.
+
+        ``media_type`` is hashed into ``block_id``, so a value merely *equivalent* to another under
+        the RFC's own comparison rules is not equivalent here. Refused rather than normalized, for
+        the reason ``LocalLayoutRegistry`` refuses a reference rather than rewriting it: filing a
+        caller's content under a string they never passed is worse than telling them it is unusable.
+        """
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR)
+        with pytest.raises(ProtocolError, match=r"not a usable media type|bounds a type"):
+            brain.put_content(DIAGRAM, media_type=media_type)
+
+    @pytest.mark.parametrize(
+        "media_type",
+        [
+            "image/png",
+            "application/octet-stream",
+            "text/plain",
+            "application/vnd.ms-excel",
+            "audio/ogg",
+            "application/vnd.oci.image.manifest.v1+json",
+            "image/x-custom",
+            "application/ld+json",
+        ],
     )
     def test_real_media_types_are_accepted(self, tmp_path: Path, media_type: str) -> None:
-        """A shape check, not a registry lookup: IANA moves without this SDK moving."""
+        """Grammar, not a registry lookup: IANA moves without this SDK moving.
+
+        Vendor trees, ``x-`` subtypes and structured ``+json`` suffixes all have to pass, or the
+        check would be refusing types that are correct today and types that become correct later.
+        """
         brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         assert brain.put_content(DIAGRAM, media_type=media_type).media_type == media_type
 
