@@ -25,9 +25,11 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from boltzmann.blocks.base import Block
 from boltzmann.blocks.canonical import CanonicalBlock
+from boltzmann.blocks.content import ContentRef
 from boltzmann.blocks.memory_type import MemoryType
-from boltzmann.blocks.semantic import SemanticBlock, SemanticKind
+from boltzmann.blocks.semantic import SemanticBlock, SemanticBlockV2, SemanticKind
 from boltzmann.conformance import golden
 from boltzmann.exceptions import (
     AppendOnlyViolationError,
@@ -45,6 +47,8 @@ from boltzmann.merkle.tree import MerkleTree, merkle_root
 from boltzmann.module.composition import Composition
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from boltzmann.store.base import BlockStore
 
 
@@ -64,6 +68,47 @@ def sample_semantic(label: str = "Fourier series") -> SemanticBlock:
         statement="f(x) = a0/2 + sum(a_n cos(nx) + b_n sin(nx))",
         subject="signals",
     )
+
+
+def sample_semantic_v2(label: str = "Phase diagram") -> SemanticBlockV2:
+    """
+    A semantic block whose datum sits in the store rather than in its payload.
+
+    Args:
+        label (str): Label of the block, varied to obtain distinct identities.
+
+    Returns:
+        SemanticBlockV2: The block, naming content it does not carry.
+    """
+    content = b"a deterministic stand-in for a phase diagram, hashed as-is"
+    return SemanticBlockV2(
+        kind=SemanticKind.CONCEPT,
+        label=label,
+        statement="The diagram shows the solid-liquid transition",
+        subject="thermodynamics",
+        content=ContentRef(blob=OciDigest.of(content), media_type="image/png", size=len(content)),
+    )
+
+
+def sample_blocks() -> list[Block]:
+    """
+    One block of every registered schema, of every version.
+
+    Derived from the registry rather than listed, so a schema added later is exercised by the
+    suites that use this without anyone remembering to extend a literal. The version axis is the
+    reason it matters: a client may implement two versions of a memory type, and a conformance
+    claim that only ever saw the first would be reporting on less than it says.
+
+    Returns:
+        list[Block]: A sample per registered ``(memory_type, schema_version)`` this module knows how
+        to build. Schemas with no sampler are skipped rather than guessed at.
+    """
+    samplers: dict[tuple[MemoryType, int], Callable[[], Block]] = {
+        (MemoryType.CANONICAL, 1): sample_canonical,
+        (MemoryType.SEMANTIC, 1): sample_semantic,
+        (MemoryType.SEMANTIC, 2): sample_semantic_v2,
+    }
+    return [build() for key, build in samplers.items() if key in Block.registry()]
 
 
 def sample_canonical(payload: bytes = b"%PDF-1.7 lecture notes") -> CanonicalBlock:
@@ -231,9 +276,16 @@ class BlockStoreConformance(ABC):
         assert recovered.block_id == block_id
 
     def test_round_trips_every_memory_type(self) -> None:
-        """Every block schema survives the store."""
+        """Every block schema survives the store, including every version of one.
+
+        Walks the registry rather than a literal pair. It said "every block schema" while testing
+        two, which was harmless until a memory type had more than one version -- at which point the
+        claim and the coverage diverge in exactly the direction a conformance suite must not.
+        """
         store = self.make_store()
-        for block in (sample_semantic(), sample_canonical()):
+        samples = sample_blocks()
+        assert len(samples) >= 2
+        for block in samples:
             assert store.get_block(store.put_block(block)) == block
 
     def test_missing_block_raises(self) -> None:

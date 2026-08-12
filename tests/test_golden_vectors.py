@@ -60,6 +60,19 @@ class TestBlockIdVectors:
         covered = {vector["memory_type"] for vector in golden.load("block_ids.json")["vectors"]}
         assert covered == {"canonical", "episodic", "semantic", "procedural", "provenance"}
 
+    def test_every_registered_schema_version_is_covered(self) -> None:
+        """A memory type is not a schema. Once one has two versions, only one of them was pinned.
+
+        These vectors are what another implementation compares itself against, so a version with no
+        vector is a version two clients can disagree about while both pass their own suites. Adding
+        a schema therefore means adding a vector -- appending one is allowed, changing one is not.
+        """
+        covered = {
+            (vector["memory_type"], vector["schema_version"]) for vector in golden.load("block_ids.json")["vectors"]
+        }
+        registered = {(memory_type.value, version) for memory_type, version in Block.registry()}
+        assert registered - covered == set(), "registered schemas with no golden vector"
+
 
 class TestMerkleRootVectors:
     """Roots must still be what the published vectors say they are."""

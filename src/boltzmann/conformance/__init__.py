@@ -22,8 +22,10 @@ if TYPE_CHECKING:
         CompositionConformance,
         IdentityConformance,
         MerkleConformance,
+        sample_blocks,
         sample_canonical,
         sample_semantic,
+        sample_semantic_v2,
     )
 
 _PYTEST_BACKED = frozenset(
@@ -33,8 +35,10 @@ _PYTEST_BACKED = frozenset(
         "CompositionConformance",
         "IdentityConformance",
         "MerkleConformance",
+        "sample_blocks",
         "sample_canonical",
         "sample_semantic",
+        "sample_semantic_v2",
     }
 )
 
@@ -66,6 +70,8 @@ __all__ = [
     "IdentityConformance",
     "MerkleConformance",
     "golden",
+    "sample_blocks",
     "sample_canonical",
     "sample_semantic",
+    "sample_semantic_v2",
 ]
