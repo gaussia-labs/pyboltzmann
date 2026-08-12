@@ -181,16 +181,16 @@ def build_block(candidate: Candidate) -> Block:
 
 def _type_candidate(candidate: Candidate) -> Block:
     """The uncached half of :func:`build_block`."""
-    registry = Block.registry()
-    versions = sorted(version for kind, version in registry if kind is candidate.memory_type)
-    if not versions:
-        raise BlockSchemaError(f"no schema registered for {candidate.memory_type.value} blocks")
-    block_class = registry[(candidate.memory_type, versions[-1])]
+    schemas = Block.schemas(candidate.memory_type)
 
+    # Read off the newest schema, which is a superset: a later version adds fields, so if any
+    # version of this memory type cites evidence they all do. Injecting before resolution also
+    # keeps the choice of version honest -- it is made against the payload that will be stored,
+    # not against a partial one that a stricter schema might have rejected for the wrong reason.
     payload = dict(candidate.payload)
-    if "evidence" in block_class.model_fields and payload.get("evidence") is None:
+    if "evidence" in schemas[-1].model_fields and payload.get("evidence") is None:
         payload["evidence"] = [str(cited) for cited in candidate.evidence]
-    return block_class.model_validate(payload)
+    return Block.build(candidate.memory_type, payload)
 
 
 class EvidenceConsistencyValidator:
