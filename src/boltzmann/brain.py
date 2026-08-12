@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from boltzmann.blocks.canonical import CanonicalBlock, NormalizedView
-from boltzmann.blocks.content import ContentRef
+from boltzmann.blocks.content import ContentRef, require_media_type
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import (
     Actor,
@@ -44,11 +44,19 @@ from boltzmann.blocks.provenance import (
 )
 from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.distribution.layers import pack_module, unpack_layer
-from boltzmann.distribution.manifest import BrainManifest, Descriptor, build_manifest, published_artifacts
+from boltzmann.distribution.manifest import (
+    BrainManifest,
+    Descriptor,
+    build_manifest,
+    declare_schema_versions,
+    published_artifacts,
+    require_supported_schemas,
+)
 from boltzmann.distribution.media_types import (
     ANNOTATION_EMBEDDING_MODEL,
     ANNOTATION_INDEX_KIND,
     ANNOTATION_MEMORY_TYPE,
+    ANNOTATION_SCHEMA_VERSIONS,
     ANNOTATION_SOURCE_SNAPSHOT,
     ARTIFACT_TYPE,
     CONFIG_MEDIA_TYPE,
@@ -725,14 +733,25 @@ class Brain:
         with its block. If other blocks are going to cite these bytes, they are a source, and the call
         is :meth:`register`.
 
+        **The reference this returns is a fact, not a claim.** ``size`` is measured from the bytes
+        rather than accepted from the caller, and ``media_type`` has to be shaped like one. Both end up
+        in a payload, hashed into a ``block_id`` and published, and a consumer reads them to decide
+        whether to fetch the content at all -- so a wrong value is not correctable afterwards, only
+        replaceable by a different block. This is the one point where the bytes are in hand, which
+        makes it the only place the declaration can be checked for free.
+
         Args:
             data (bytes): The content, stored exactly as given.
-            media_type (str): IANA media type, recorded in the reference so a consumer can decide
-                whether to fetch the bytes without holding them.
+            media_type (str): IANA media type as ``type/subtype``, recorded in the reference so a
+                consumer can decide whether to fetch the bytes without holding them.
 
         Returns:
-            ContentRef: The reference a payload names.
+            ContentRef: The reference a payload names, with ``size`` measured from ``data``.
+
+        Raises:
+            ProtocolError: If ``media_type`` is not of the form ``type/subtype``.
         """
+        require_media_type(media_type)
         return ContentRef(blob=self.store.put_bytes(data), media_type=media_type, size=len(data))
 
     # --- Ingestion: delegate, validate, commit --------------------------------
@@ -1576,12 +1595,17 @@ class Brain:
         published = self._modules_to_publish(modules)
 
         layers = []
+        schema_versions = {}
         for memory_type in published:
             module = self.module(memory_type)
             payload = pack_module(module)
             digest = self.store.put_bytes(payload)
             reference = self._snapshot.modules[memory_type]
             layers.append(Descriptor.for_module(reference, digest, len(payload)))
+            # Declared on the manifest so a consumer can decide whether it has the schemas for this
+            # brain before fetching a layer. Read from the blocks rather than from the registry: what
+            # matters is what this artifact actually contains, not what this SDK happens to implement.
+            schema_versions[memory_type] = module.schema_versions()
 
             index_layer = self._pack_index(memory_type, reference)
             if index_layer is not None:
@@ -1598,7 +1622,10 @@ class Brain:
             projected,
             config,
             layers,
-            annotations={ANNOTATION_SOURCE_SNAPSHOT: str(self._snapshot.digest)},
+            annotations={
+                ANNOTATION_SOURCE_SNAPSHOT: str(self._snapshot.digest),
+                ANNOTATION_SCHEMA_VERSIONS: declare_schema_versions(schema_versions),
+            },
         )
         manifest_bytes = manifest.to_bytes()
         manifest_digest = self.store.put_bytes(manifest_bytes)
@@ -1816,11 +1843,18 @@ class Brain:
             Snapshot: The newly installed state.
 
         Raises:
-            DistributionError: If a wanted module is not in the artifact, or a layer does not verify.
+            DistributionError: If a wanted module is not in the artifact, a wanted module uses a block
+                schema this client does not implement, or a layer does not verify.
         """
         manifest = await client.resolve(reference, tag)
         wanted = list(modules) if modules is not None else manifest.modules
         self._require_carried(manifest, wanted)
+        # Before the config blob, which is the first thing this method would otherwise download. A
+        # brain whose blocks this client has no schema for is not installable, and finding that out
+        # from a decode failure means finding it out after the transfer -- or later still, since
+        # ``rebuild_indices`` below only decodes for a module with a rebuildable index registered, so
+        # a client with none installs the artifact cleanly and fails at the first query instead.
+        require_supported_schemas(manifest, wanted)
 
         if not self.store.is_resolvable(manifest.config.digest):
             await client.pull_blob(reference, manifest.config.digest, self.store)

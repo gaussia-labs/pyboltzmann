@@ -12,6 +12,7 @@ from typing import ClassVar, Self
 from pydantic import Field, model_validator
 
 from boltzmann.blocks.base import Block
+from boltzmann.blocks.content import NamesContent
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.identity.digest import BlockId
 from boltzmann.identity.time import Timestamp, parse_timestamp
@@ -50,3 +51,19 @@ class EpisodicBlock(Block):
         if self.ended_at is not None and parse_timestamp(self.ended_at) < parse_timestamp(self.occurred_at):
             raise ValueError(f"ended_at {self.ended_at} precedes occurred_at {self.occurred_at}")
         return self
+
+
+class EpisodicBlockV2(NamesContent, EpisodicBlock):
+    """
+    An episode that may name a recording rather than only describe one.
+
+    The transcript of a lecture, the audio of a call, the capture of a session: an episode's
+    own datum, which nothing else cites and which is meaningless apart from the episode it
+    belongs to. That is content, not evidence -- so it lives and dies with this block, and a
+    source that other blocks will cite stays canonical.
+
+    ``summary`` stays required for the reason it always was: it is what the episode *says*
+    happened, and it is what a text query can reach. A recording is not a summary of itself.
+    """
+
+    SCHEMA_VERSION: ClassVar[int] = 2

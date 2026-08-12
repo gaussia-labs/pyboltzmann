@@ -180,6 +180,78 @@
       },
       "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"provenance\",\"payload\":{\"record\":{\"actor\":{\"id\":\"curator\",\"kind\":\"human\",\"name\":\"Example Curator\"},\"at\":\"2026-07-24T09:30:00Z\",\"block\":\"sha256:62a73a972c4b69bdfba88de9ba0c0b9e3b6c4248a0f5ffeaff61ea8e70a21163\",\"license\":\"CC-BY-4.0\",\"origin\":\"https://example.edu/signals/lecture-07.pdf\",\"record_type\":\"registration\"}},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
       "block_id": "sha256:febdc629a4bd3aa5f50cd49b07f548815b9062a47ccbdff70c43f20c18d25d54"
+    },
+    {
+      "name": "semantic_naming_content",
+      "memory_type": "semantic",
+      "schema_version": 2,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "semantic",
+        "payload": {
+          "kind": "concept",
+          "label": "Phase diagram",
+          "statement": "The diagram shows the solid-liquid transition",
+          "content": {
+            "blob": "sha256:0e607134856762edd36fe8284f52b5dee1528f5cd957978d49f7fbf8204512f2",
+            "media_type": "image/png",
+            "size": 58
+          }
+        },
+        "schema_version": 2,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"semantic\",\"payload\":{\"content\":{\"blob\":\"sha256:0e607134856762edd36fe8284f52b5dee1528f5cd957978d49f7fbf8204512f2\",\"media_type\":\"image/png\",\"size\":58},\"kind\":\"concept\",\"label\":\"Phase diagram\",\"statement\":\"The diagram shows the solid-liquid transition\"},\"schema_version\":2,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:1a1f41ef6b2356750440022013d63db02dba1ce1bc5442a2326429565effcb0a"
+    },
+    {
+      "name": "episodic_naming_content",
+      "memory_type": "episodic",
+      "schema_version": 2,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "episodic",
+        "payload": {
+          "summary": "Lecture 07 was recorded",
+          "occurred_at": "2026-05-14T14:00:00Z",
+          "content": {
+            "blob": "sha256:5a52fc41c593de70918e8dd9fcec8273784cf1c0bbf6808f97ff91ea23250d50",
+            "media_type": "audio/ogg",
+            "size": 55
+          }
+        },
+        "schema_version": 2,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"episodic\",\"payload\":{\"content\":{\"blob\":\"sha256:5a52fc41c593de70918e8dd9fcec8273784cf1c0bbf6808f97ff91ea23250d50\",\"media_type\":\"audio/ogg\",\"size\":55},\"occurred_at\":\"2026-05-14T14:00:00Z\",\"summary\":\"Lecture 07 was recorded\"},\"schema_version\":2,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:0d016282c0aca976c8e170940a02854a0ba8086cc1e457b3475ba28435456753"
+    },
+    {
+      "name": "procedural_naming_content",
+      "memory_type": "procedural",
+      "schema_version": 2,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "procedural",
+        "payload": {
+          "label": "Read the diagram",
+          "goal": "Locate the triple point",
+          "steps": [
+            {
+              "action": "find where the three phase boundaries meet"
+            }
+          ],
+          "content": {
+            "blob": "sha256:0e607134856762edd36fe8284f52b5dee1528f5cd957978d49f7fbf8204512f2",
+            "media_type": "image/png",
+            "size": 58
+          }
+        },
+        "schema_version": 2,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"procedural\",\"payload\":{\"content\":{\"blob\":\"sha256:0e607134856762edd36fe8284f52b5dee1528f5cd957978d49f7fbf8204512f2\",\"media_type\":\"image/png\",\"size\":58},\"goal\":\"Locate the triple point\",\"label\":\"Read the diagram\",\"steps\":[{\"action\":\"find where the three phase boundaries meet\"}]},\"schema_version\":2,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:8608c536db574b5a7b01b26e525df71e2b4a0e83f9fda0a870c43e70c3a2f4ad"
     }
   ]
 }

@@ -38,6 +38,7 @@ from abc import ABC
 from typing import Any, ClassVar, Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import ValidationError as PydanticValidationError
 
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.constants import PROTOCOL_VERSION
@@ -207,7 +208,9 @@ class Block(BaseModel, ABC):
         if block_class is None:
             known = sorted(version for kind, version in _REGISTRY if kind is memory_type)
             raise BlockSchemaError(
-                f"no schema registered for {memory_type} version {schema_version!r}; this client knows {known}"
+                f"no schema registered for {memory_type} version {schema_version!r}; this client knows {known}. "
+                f"A block declaring a version this client does not implement was written by a newer SDK, so "
+                f"upgrade boltzmann to read it -- the schema cannot be inferred from the bytes"
             )
 
         if envelope["serialization"] != block_class.SERIALIZATION:
@@ -234,3 +237,67 @@ class Block(BaseModel, ABC):
             schema version to the class that implements it.
         """
         return dict(_REGISTRY)
+
+    @staticmethod
+    def schemas(memory_type: MemoryType) -> tuple[type[Block], ...]:
+        """
+        Every registered schema for a memory type, oldest version first.
+
+        Args:
+            memory_type (MemoryType): Which kind of block.
+
+        Returns:
+            tuple[type[Block], ...]: The classes, ordered by ``SCHEMA_VERSION``.
+
+        Raises:
+            BlockSchemaError: If no schema is registered for that memory type.
+        """
+        versions = sorted(version for kind, version in _REGISTRY if kind is memory_type)
+        if not versions:
+            raise BlockSchemaError(f"no schema registered for {memory_type.value} blocks")
+        return tuple(_REGISTRY[(memory_type, version)] for version in versions)
+
+    @staticmethod
+    def build(memory_type: MemoryType, payload: dict[str, Any]) -> Block:
+        """
+        Build a block under the **oldest** registered schema its payload satisfies.
+
+        Choosing the newest instead would mean that registering a schema anywhere in the
+        process silently re-versions every block written afterwards, including the ones
+        that use nothing the new schema added. Since ``schema_version`` is part of the
+        envelope, and therefore of ``block_id``, that is not a cosmetic difference: it
+        makes an artifact unreadable to every consumer that has not upgraded, to record
+        knowledge those consumers could have read perfectly well.
+
+        Oldest-that-fits inverts that. A payload naming no content still validates under
+        v1 and is written as v1, so a brain only stops being readable by an older client
+        at the point where it genuinely uses something that client has no schema for.
+
+        The candidate does not get to choose. A version is not a preference -- it is a
+        statement about which fields the payload uses, which the payload itself already
+        answers.
+
+        Args:
+            memory_type (MemoryType): Which kind of block to build.
+            payload (dict[str, Any]): The block's payload.
+
+        Returns:
+            Block: The typed block, under the oldest schema that accepts the payload.
+
+        Raises:
+            BlockSchemaError: If no schema is registered for that memory type.
+            pydantic.ValidationError: If no registered schema accepts the payload. The
+                error is the **newest** schema's, because it is the one that knows about
+                the most fields and therefore explains the most.
+        """
+        schemas = Block.schemas(memory_type)
+        for block_class in schemas[:-1]:
+            try:
+                return block_class.model_validate(dict(payload))
+            except PydanticValidationError:
+                continue
+        # Unguarded: the newest schema's failure is the one worth reporting. A payload that
+        # is invalid at every version is invalid, and NonDeterministicValueError -- which is
+        # not a pydantic error and so is never caught above -- must escape from the first
+        # schema that sees it, since no later one would accept it either.
+        return schemas[-1].model_validate(dict(payload))

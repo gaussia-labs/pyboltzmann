@@ -48,13 +48,52 @@ block.content_digests    # the content addresses this block names; () when self-
 ```
 
 ```python
-reference = brain.put_content(transcript, media_type="text/plain")
-reference.blob, reference.media_type, reference.size
+reference = brain.put_content(diagram, media_type="image/png")
+
+brain.validate(CandidateSet(candidates=[Candidate(
+    memory_type=MemoryType.SEMANTIC,
+    evidence=[source],
+    payload={
+        "kind": "concept",
+        "label": "Phase diagram",
+        "statement": "The diagram shows the solid-liquid transition",
+        "content": reference.model_dump(mode="json"),
+    },
+)]), task)
 ```
 
 `put_content` stores the bytes and returns a `ContentRef` for a payload to name. It writes no block and
 publishes no snapshot: until a committed block names them, the bytes are unreachable and a `prune`
 reclaims them.
+
+The reference it returns is a **fact, not a claim**: `size` is measured from the bytes, and `media_type`
+must be a bare, lowercase `type/subtype` — no parameters, no trailing punctuation. Media types are
+parsed with the standard library's RFC 2045 parser and then required to round-trip exactly, because
+`image/png`, `IMAGE/PNG` and `image/png; charset=utf-8` are the same type to compare and three
+different strings to hash. Both fields are hashed into the resulting `block_id` and are what a consumer
+reads to decide whether to fetch content it does not hold, so a wrong value cannot be corrected later —
+only superseded by a different block. A payload assembled by a proposer rather than by `put_content` is
+checked in the validation gate instead, which also compares the declared `size` against the stored bytes
+when the brain holds them.
+
+Both checks sit on the write path and never on `decode`. `NormalizedView` extends `ContentRef` and takes
+its media type from a third-party normalization pipeline, so a malformed one may already be inside a
+published `block_id`; refusing it at decode would make this SDK unable to read a brain an older one
+wrote.
+
+Canonical has named its original since the beginning. Semantic, episodic and procedural blocks gained an
+optional `content` field in **schema version 2**, so an interpretation whose subject is an image, a
+recording, or any other file can state what it claims about that file without inlining it. The text stays
+required — `statement`, `summary` and `goal` are what a natural-language query can reach, and when the
+content is binary they are the interpretation.
+
+<Note>
+  **A block is written under the oldest schema its payload satisfies.** A payload naming no content is
+  still built as v1, so adding a version does not re-version knowledge that does not use it. Since
+  `schema_version` is inside the hashed envelope, that choice is a choice of `block_id`: a brain only
+  becomes unreadable to an older client at the point where it genuinely uses something that client has
+  no schema for.
+</Note>
 
 <Note>
   **Content is not evidence.** Evidence is canonical — it lives in the canonical composition, other blocks
@@ -67,6 +106,23 @@ Everything that must account for those bytes — packing a layer, marking reacha
 destroying them on redaction — asks the block through `content_digests` rather than testing its type. So a
 schema that starts naming content is handled correctly by all of them at once, and an
 [index](/sdks/boltzmann/concepts/interfaces#index) is handed a reader for exactly this reason.
+
+### Publishing across SDK versions
+
+An artifact declares which schema versions each of its modules holds, in the
+`ai.gaussia.boltzmann.schema-versions` manifest annotation. A `pull` checks it against the schemas the
+client implements, scoped to the modules being installed, and refuses **before fetching any blob**:
+
+```text
+DistributionError: the semantic module holds blocks with schema version 2; this client
+implements [1]. The artifact was published by a newer SDK -- upgrade boltzmann to one that
+implements schema version 2 for semantic blocks, or install only the modules this client
+has schemas for
+```
+
+The declaration is per module, so a client that lacks a schema for the semantic module can still install
+the episodic one. An artifact published before the annotation existed declares nothing, and absence is
+read as *unknown* rather than as permission: those fall through to the decode-time check instead.
 
 ## Compositions
 

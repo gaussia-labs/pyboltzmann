@@ -161,6 +161,24 @@ class Module:
         for block_id in self.composition:
             yield self.get(block_id)
 
+    def schema_versions(self) -> tuple[int, ...]:
+        """
+        The distinct block schema versions this version holds, ascending.
+
+        What a consumer needs in order to answer "can my SDK read this module?" without
+        holding the module. Published on the artifact's manifest so the question can be
+        answered before the download rather than after it.
+
+        Returns:
+            tuple[int, ...]: The versions present, or empty for an empty composition.
+
+        Raises:
+            BlockNotFoundError: If a block the composition names cannot be read. A version
+                map that silently skipped unreadable blocks would understate what the module
+                requires, which is the one way this could mislead a consumer.
+        """
+        return tuple(sorted({block.SCHEMA_VERSION for block in self.blocks()}))
+
     def inclusion_proof(self, block_id: BlockId) -> InclusionProof:
         """
         Prove that a block belongs to this version.

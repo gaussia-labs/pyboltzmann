@@ -11,6 +11,7 @@ from typing import ClassVar
 from pydantic import BaseModel, ConfigDict, Field
 
 from boltzmann.blocks.base import Block
+from boltzmann.blocks.content import NamesContent
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.identity.digest import BlockId
 
@@ -60,3 +61,15 @@ class ProceduralBlock(Block):
     success_criteria: list[str] | None = None
     subject: str | None = None
     evidence: list[BlockId] | None = None
+
+
+class ProceduralBlockV2(NamesContent, ProceduralBlock):
+    """
+    A procedure that may name an artifact the steps produce or consume.
+
+    A worked example, a reference output to diff against, a template the procedure fills in:
+    the procedure's own datum. ``steps`` stays the procedure -- content does not replace the
+    ordered actions, which are what makes this knowledge rather than an attachment.
+    """
+
+    SCHEMA_VERSION: ClassVar[int] = 2
