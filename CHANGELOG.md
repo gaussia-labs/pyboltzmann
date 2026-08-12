@@ -1,6 +1,67 @@
 # CHANGELOG
 
 
+## v0.4.0 (2026-08-12)
+
+### Build System
+
+- Keep uv.lock current through the release
+  ([`6a5c08e`](https://github.com/gaussia-labs/pyboltzmann/commit/6a5c08e50234c96103f0c8720990cc85114f6497))
+
+semantic-release rewrites pyproject.toml and src/boltzmann/__init__.py and knows nothing about
+  uv.lock, so the lock recorded a version the project had already left at every release. It has been
+  corrected by hand twice, and both times only because someone happened to run uv and find a dirty
+  tree.
+
+`uv lock` re-stamps only the project's own entry -- verified against a bump, where the diff is one
+  line and no dependency is re-resolved -- and `assets` puts the result in the release commit. The
+  order works out: semantic-release builds the path list, runs build_command, and stages afterwards,
+  so what the lock is rewritten to is what gets committed.
+
+uv is installed by the build command rather than assumed, because the release action is a Docker
+  action: the uv that setup-uv puts on the runner does not exist inside it, and only python, pip and
+  git do. The whole command was run in a clean python:3.11-slim container to confirm it, since
+  finding out otherwise would mean a failed release rather than a failed test.
+
+CI also asserts the lock is current. If this ever stops working the symptom is silence, which is how
+  it went unnoticed twice.
+
+- Sync uv.lock with the version in pyproject.toml
+  ([`153f816`](https://github.com/gaussia-labs/pyboltzmann/commit/153f816af349c3fea7cd29049c88949ce6ab04ec))
+
+semantic-release bumps pyproject.toml and src/boltzmann/__init__.py, and nothing updates the lock,
+  so it goes stale on every release. Nothing consumes the number -- the project is an editable
+  install and the entry carries no hashes -- but a lockfile that disagrees with the manifest it
+  locks is a question every reader has to answer first.
+
+### Continuous Integration
+
+- Run the suite on pull requests and back-merge master automatically
+  ([`1ed30b4`](https://github.com/gaussia-labs/pyboltzmann/commit/1ed30b4e5e66144b13392b5520c9de65cec413f9))
+
+Two gaps that produced the same bug from opposite ends.
+
+The workflow only ran on push to master and develop, so no pull request ever reported a check. #4
+  and #5 were both merged on the strength of a local run, and a contributor without the repo checked
+  out had nothing at all. The pull_request trigger carries no path filter, deliberately: a push is
+  filtered because it may cut a release and a docs commit should not, but a pull request decides
+  whether to merge, and a change to the tests or the lockfile breaks the build as surely as one to
+  src. The release job is gated to push events -- releasing from a pull request would tag and
+  publish a merge that has not happened.
+
+The back-merge is the step that was missing entirely. A release on master writes a chore(release)
+  commit only master has, and semantic-release reads the current version from the branch it runs on,
+  so until develop is told its next release is computed from a version that is no longer the highest
+  published. That is how v0.3.0-b.1 came to sit below v0.3.0 on PyPI while containing strictly more,
+  and it is the same divergence that made #4 conflict.
+
+It opens a pull request rather than pushing the merge. The conflict is not incidental: a release
+  rewrites the same three files on both branches, every time, so an automatic merge would fail on
+  every release and train everyone to ignore it. A PR makes the step impossible to forget while
+  leaving resolution to someone who can read the changelog, and the body says which side to take and
+  why. It is a no-op when develop already contains master, or when the PR is already open.
+
+
 ## v0.4.0-b.1 (2026-08-12)
 
 
