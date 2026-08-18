@@ -102,6 +102,7 @@ plan.reuse_layers            # reused by digest, not transferred again
 plan.fetch_blocks
 plan.rebuild_indices         # structural indices, regenerated locally
 plan.fetch_vector_indices    # travelling indices, which must be transferred
+plan.ignored_vector_indices  # travelling indices explicitly omitted by the caller
 plan.is_noop                 # already at the target state
 ```
 
@@ -122,6 +123,28 @@ snapshot = await consumer.pull(
 
 What you install carries the digest that was published, and the layers you already hold are reused by
 digest rather than transferred again.
+
+### Ignore incompatible vector indices
+
+A vector index can only be loaded by a consumer using the same representation space. When an artifact was
+published with an unavailable or incompatible embedding model, install the verified module blocks without its
+vector layers:
+
+```python
+plan = await consumer.plan_pull(
+    registry, "ghcr.io/org/brain", "v1",
+    ignore_vector_indices=True,
+)
+snapshot = await consumer.pull(
+    registry, "ghcr.io/org/brain", "v1",
+    ignore_vector_indices=True,
+)
+```
+
+This option does not weaken module verification and does not silently translate vectors: every requested module
+is still checked against the published Merkle root. The SDK is model-agnostic, so the caller must then build a
+compatible local vector index before relying on semantic retrieval. The default remains strict and rejects a
+published index from a different model space.
 
 ## Publishing without a registry
 
