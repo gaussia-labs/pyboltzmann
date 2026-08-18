@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.5.0 (2026-08-18)
+
+### Features
+
+- **distribution**: Allow ignoring vector indices on pull
+  ([`5151b27`](https://github.com/gaussia-labs/pyboltzmann/commit/5151b27421e9b0224f1cfd99ed4b1f2cd04b73bc))
+
+
 ## v0.4.1 (2026-08-12)
 
 ### Bug Fixes
