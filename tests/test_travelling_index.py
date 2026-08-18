@@ -236,6 +236,32 @@ class TestPullingTheIndex:
         with pytest.raises(DistributionError, match="mix representation spaces"):
             await target.pull(registry, REFERENCE, "v1")
 
+    async def test_an_index_from_another_model_can_be_ignored(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        """The blocks remain portable even when the consumer cannot use the producer's vectors."""
+        source = Brain.open(
+            tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex("qwen3@1.0")]}
+        )
+        seed(source)
+        await source.push(registry, REFERENCE, "v1")
+        manifest = await registry.resolve(REFERENCE, "v1")
+        index_layer = manifest.vector_index_for(MemoryType.SEMANTIC)
+        assert index_layer is not None
+
+        received = FakeVectorIndex("other@2.0")
+        target = Brain.open(tmp_path / "b", actor=CURATOR, indices={MemoryType.SEMANTIC: [received]})
+        plan = await target.plan_pull(registry, REFERENCE, "v1", ignore_vector_indices=True)
+        installed = await target.pull(registry, REFERENCE, "v1", ignore_vector_indices=True)
+
+        assert plan.fetch_vector_indices == []
+        assert plan.ignored_vector_indices == [MemoryType.SEMANTIC]
+        assert received.loads == 0
+        assert not target.store.is_resolvable(index_layer.digest)
+        assert installed.digest == source.snapshot().digest
+        assert target.root_of(MemoryType.SEMANTIC) == source.root_of(MemoryType.SEMANTIC)
+        assert target.verify()
+
     async def test_a_selective_pull_of_another_module_skips_the_index(
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:

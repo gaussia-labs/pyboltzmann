@@ -1761,6 +1761,8 @@ class Brain:
         reference: str,
         tag: str,
         modules: Iterable[MemoryType] | None = None,
+        *,
+        ignore_vector_indices: bool = False,
     ) -> InstallPlan:
         """
         Work out what a pull would transfer, without downloading any module.
@@ -1776,6 +1778,9 @@ class Brain:
             tag (str): Which version to inspect.
             modules (Iterable[MemoryType] | None): Which modules are wanted. Defaults to everything the
                 artifact carries.
+            ignore_vector_indices (bool): Do not transfer published vector-index layers. The module
+                blocks are still installed, and the caller becomes responsible for rebuilding a compatible
+                vector index when it has an embedding model available.
 
         Returns:
             InstallPlan: What would be fetched and what would be reused.
@@ -1794,18 +1799,26 @@ class Brain:
             assert layer is not None  # checked above
             (reuse if self.store.is_resolvable(layer.digest) else fetch).append(memory_type)
 
-        indices = [
-            memory_type
-            for memory_type in wanted
-            if (layer := manifest.vector_index_for(memory_type)) is not None
-            and not self.store.is_resolvable(layer.digest)
+        carried_indices = [
+            memory_type for memory_type in wanted if (layer := manifest.vector_index_for(memory_type)) is not None
         ]
+        indices = (
+            []
+            if ignore_vector_indices
+            else [
+                memory_type
+                for memory_type in carried_indices
+                if (layer := manifest.vector_index_for(memory_type)) is not None
+                and not self.store.is_resolvable(layer.digest)
+            ]
+        )
 
         return InstallPlan(
             modules=wanted,
             fetch_layers=fetch,
             reuse_layers=reuse,
             fetch_vector_indices=indices,
+            ignored_vector_indices=carried_indices if ignore_vector_indices else [],
             rebuild_indices=[
                 index.kind.value
                 for memory_type in wanted
@@ -1820,6 +1833,8 @@ class Brain:
         reference: str,
         tag: str,
         modules: Iterable[MemoryType] | None = None,
+        *,
+        ignore_vector_indices: bool = False,
     ) -> Snapshot:
         """
         Fetch a published brain into this local layout, selectively.
@@ -1838,6 +1853,9 @@ class Brain:
             tag (str): Which version to install.
             modules (Iterable[MemoryType] | None): Which modules are wanted. Defaults to everything the
                 artifact carries.
+            ignore_vector_indices (bool): Do not download or load published vector-index layers. This
+                is an explicit compatibility escape hatch: modules and their Merkle roots are still
+                installed and verified, but the caller must rebuild compatible vectors locally.
 
         Returns:
             Snapshot: The newly installed state.
@@ -1892,7 +1910,7 @@ class Brain:
 
             # The one derived structure a model-agnostic client cannot rebuild, so it travels.
             index_layer = manifest.vector_index_for(memory_type)
-            if index_layer is not None:
+            if index_layer is not None and not ignore_vector_indices:
                 if not self.store.is_resolvable(index_layer.digest):
                     await client.pull_blob(reference, index_layer.digest, self.store)
                 self._load_index(memory_type, index_layer)

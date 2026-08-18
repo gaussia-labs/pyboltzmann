@@ -46,6 +46,9 @@ class InstallPlan(BaseModel):
             because they are deterministic functions of the blocks.
         fetch_vector_indices (list[MemoryType]): Which vector indices must be downloaded, being the
             one derived structure a model-agnostic client cannot rebuild.
+        ignored_vector_indices (list[MemoryType]): Which published vector indices the caller chose not
+            to download. Their modules are still installed; the caller is responsible for supplying or
+            rebuilding a compatible index if semantic retrieval is required.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -56,6 +59,7 @@ class InstallPlan(BaseModel):
     fetch_blocks: list[BlockId] = Field(default_factory=list)
     rebuild_indices: list[str] = Field(default_factory=list)
     fetch_vector_indices: list[MemoryType] = Field(default_factory=list)
+    ignored_vector_indices: list[MemoryType] = Field(default_factory=list)
 
     @property
     def is_noop(self) -> bool:
