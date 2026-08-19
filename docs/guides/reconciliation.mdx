@@ -8,9 +8,50 @@ incomplete: it leaves the resolution to hand-editing, and it means a partial ins
 back over the tag it came from. Reconciliation is what that refusal was standing in for.
 
 The thing that makes it different from git is what is being merged. Git merges lines of text. Here the unit
-is an immutable, content-addressed block, so nothing is ever *the same block, slightly modified* — modifying
-a block yields a different identity. **A textual conflict is not representable.** Reconciling a module is
-set arithmetic over identifiers, and it converges whichever side you call yours.
+is an immutable, content-addressed block. **A textual conflict is not representable**, and everything below
+follows from that, so it is worth establishing first.
+
+## No block is ever modified
+
+You cannot edit a block, and neither can anyone else — not yours, not one you pulled from someone else's
+brain. This is not a permission the protocol withholds; there is no operation that could express it. Four
+things stand in the way, and each one is enough on its own:
+
+1. **The object is frozen.** Block models are immutable — `block.statement = "something else"` raises.
+2. **`block_id` is the hash of the envelope.** Write the "same" block with a different statement and you get
+   `sha256:c261…` where you had `sha256:ad3d…`. That is not the block modified; it is a different block.
+3. **The store cannot file bytes under a foreign identity.** `put_bytes` returns the hash of what you handed
+   it. There is no way to say *store these bytes as that identity*.
+4. **Tampering is caught on read.** Corrupt a blob out of band and resolving it raises `stored bytes for
+   block_id sha256:ad3d… hash to sha256:c261…: the store is corrupt`. A consumer recomputes the hash, so a
+   publisher cannot serve different bytes under a known identity either.
+
+So the question "what if two people edit the same block?" has no answer here, because the situation cannot
+arise. What people actually do is one of three things, and each is a case reconciliation handles:
+
+| You want to… | What you actually do | The block you started from |
+| --- | --- | --- |
+| correct it | write a **new** block and record that it supersedes the old one | untouched, still verifies, still a member |
+| disagree with it | add your claim without superseding anything | untouched |
+| get rid of it | `drop`: a new composition that excludes it | untouched; only the new root stops naming it |
+
+None of them touches the original. That is why reconciling a module is set arithmetic over identifiers, and
+why it converges whichever side you call yours.
+
+<Note>
+  One property that surprises people coming from git: if two people make the **same** correction
+  independently, they produce the same bytes, therefore the same `block_id`, therefore nothing to reconcile.
+  Identical work converges for free rather than conflicting.
+</Note>
+
+<Warning>
+  There is exactly one operation that touches bytes already written, and it does not modify them — it
+  destroys them. `redact` tombstones a block's bytes for law or safety, never for correcting knowledge. It is
+  refused by the default policy *and* by `PERMISSIVE_POLICY`; a deployment must name the redactable media
+  types explicitly. Afterwards the block is still a member, the composition still verifies, and resolving it
+  raises `BlockTombstonedError` — reported as tombstoned rather than missing, so a removed block is never
+  indistinguishable from a corrupted one. See [Retention](/sdks/boltzmann/guides/retention).
+</Warning>
 
 ## The whole structural change
 
@@ -159,7 +200,7 @@ crosses that boundary.
 
 So the structural result is validated as if it were an ingestion:
 
-<Card title="A conflict in this protocol is a validation failure, not a differencing failure." icon="scale-balanced" />
+> **A conflict in this protocol is a validation failure, not a differencing failure.**
 
 Every question these conflicts raise — does this evidence exist, does this contradict what is held, is this
 relation admissible, does the payload satisfy a registered schema — is already asked on the ingestion path.
@@ -171,16 +212,36 @@ from boltzmann.reconcile.gate import RECONCILE_VALIDATORS
 plan = brain.plan_reconcile(theirs, validators=[*RECONCILE_VALIDATORS, MyDomainCheck()])
 ```
 
-| Conflict | Verdict |
-| --- | --- |
-| They drop evidence you derived from | Structurally invisible, semantically fatal. The dependent follows the evidence out — see [the cascade](#withdrawn-evidence-takes-what-cites-it) |
-| You dropped evidence they derived from | The incoming block is `REJECTED` by the evidence check |
-| Both sides add blocks that contradict each other | Not structurally detectable. `CONTRADICTED`, with the conflicting blocks named |
-| Both sides supersede the same block differently | Both successors are admissible and both edges are recorded. `PENDING_REVIEW`, because the precedence is a decision |
-
 Only blocks that emerge `VALIDATED` enter on their own. **If anything did not apply cleanly, nothing is
 written** — the reconciliation stops and waits for you. The same holds if it would take work *out* of your
 brain; see [removals](#when-the-reconciliation-removes-your-work).
+
+## Every case, and what you do about it
+
+Automatic unless the last column says otherwise. Nothing here is a merge conflict in the git sense — there is
+no half-merged state on disk and nothing to hand-edit, because the unit is an immutable block and the only
+questions are whether it enters and, where two histories disagree, which one prevails.
+
+| Situation | What the protocol does | What you do |
+| --- | --- | --- |
+| Each side added different blocks | Both enter. Equation 1 keeps everything either side added | nothing |
+| Both sides made the **same** correction | Same bytes, same `block_id`, nothing to reconcile | nothing |
+| Both corrected the same block **differently**, each recording a supersession | Both successors enter and both edges are recorded. The precedence is `PENDING_REVIEW` | `prefer(winner)` — writes one more edge, from the winner over the loser |
+| Both added claims that disagree, without superseding | `CONTRADICTED`, with the conflicting blocks named | `admit` to hold both, or `reject` |
+| They dropped a block you still hold | Exclusion has precedence, so it leaves your composition. Their removal record travels with it | `reconcile_accept_removals()`, or `reconcile_abort()` |
+| They withdrew evidence **you** derived from | The dependent follows the evidence out, via the same cascade a `drop` runs | `reconcile_accept_removals()`, or `reconcile_abort()` |
+| **You** dropped evidence they derived from | Their block is `REJECTED` — it would cite evidence the composition does not hold | `reject` it, or abort, re-admit the evidence, reconcile again |
+| They shipped a derived block without its source | `REJECTED`, diagnosed `NEVER_HELD` | tell them to resend it whole; `reject` for now |
+| One side does not hold a module at all | Not a removal. That module's root is taken from the other side unchanged | nothing |
+| Their history dropped from the episodic module | Refused: `AppendOnlyViolationError`. No conforming history can have done it, so theirs is malformed | nothing to resolve — the history is invalid, not conflicting |
+| A domain check of yours declines to decide | `PENDING_REVIEW` | `admit` or `reject` |
+| The two histories share no ancestor | Refused: `NoCommonAncestorError` | nothing — a three-way merge needs the ancestor, and guessing is the one thing it must not do |
+| The two histories carry different trust roots | **Not implemented** — needs authenticity | see [what this does not do](#what-this-does-not-do) |
+
+<Note>
+  Only the rows that touch what you already hold, or that the protocol declines to decide, stop the
+  operation. A contribution whose every block applies commits in one call.
+</Note>
 
 ## Resolving what did not apply
 

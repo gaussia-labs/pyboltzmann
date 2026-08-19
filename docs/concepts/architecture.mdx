@@ -173,17 +173,24 @@ extending a brain goes through `commit`, which is the only write path.
 
 ## Snapshots
 
-A `Snapshot` is the state of a brain: one `ModuleRef` per installed module, plus a `parent` pointer that
-forms an auditable chain of versions.
+A `Snapshot` is the state of a brain: one `ModuleRef` per installed module, plus the snapshots it succeeds,
+which form an auditable history.
 
 ```python
 snapshot = brain.snapshot()
 
 snapshot.modules                       # {MemoryType: ModuleRef}
-snapshot.parent                        # the snapshot this one succeeds
+snapshot.parents                       # the snapshots this one succeeds
+snapshot.first_parent                  # the history it was produced onto
+snapshot.is_reconciliation             # True when it names more than one
 snapshot.created_at
 snapshot.boltzmann                     # protocol version
 ```
+
+`parents` is a list because history is a DAG rather than a chain: a linear history carries one entry, a root
+snapshot none, and a snapshot that joined two histories two or more. Order matters in exactly one way — the
+first parent is the one every rule meaning *the parent* refers to. See
+[Reconciliation](/sdks/boltzmann/guides/reconciliation).
 
 Each `ModuleRef` carries the module's `root`, the `composition` digest, the `block_count`, the Merkle
 `layout` identifier, and the `embedding_model` behind a travelling vector index when one ships with it.
@@ -194,14 +201,22 @@ Each `ModuleRef` carries the module's `root`, the `composition` digest, the `blo
   module when you ask for one you do not have.
 </Note>
 
-The one piece of mutable state a brain has is which snapshot is current:
+The mutable state a brain has is which snapshot is current — and, while one is being resolved, a
+reconciliation in progress:
 
 ```python
-brain.state()          # the mutable pointer, for tooling that inspects a layout
-brain.history()         # the retained snapshots, most recent first
-brain.ancestry()        # snapshot digests reachable by walking `parent`
-brain.origin            # where this brain was pulled from, if it was
+brain.state()               # the mutable pointer, for tooling that inspects a layout
+brain.history()             # the retained snapshots, most recent first
+brain.ancestry()            # the first-parent chain: how this brain got here
+brain.reachable_history()   # every snapshot it contains, following all parents
+brain.origin                # where this brain was pulled from, if it was
 ```
+
+<Note>
+  `ancestry` and `reachable_history` answer different questions. The first is the line an audit follows. The
+  second is what a containment check asks — a history merged in is genuinely contained without appearing on
+  the first-parent chain, which is why a push compares against that one.
+</Note>
 
 ## The store
 
