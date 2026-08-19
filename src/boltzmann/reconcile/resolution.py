@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import Actor
 from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.identity.digest import BlockId, OciDigest
@@ -89,6 +90,33 @@ class Resolution(BaseModel):
     at: Timestamp = Field(default_factory=utc_timestamp)
 
 
+class RemovalAcceptance(BaseModel):
+    """Someone's statement that they accept the work a reconciliation removes.
+
+    Not a per-block decision, because the granularity would be false: exclusion has precedence in
+    Equation 1, so a block the other history dropped cannot be kept by choosing to keep it. Deliberately
+    re-admitting it remains possible and remains an ordinary commit, which is where the paper puts a
+    decision of that kind. What is genuinely open is whether this reconciliation happens at all, and that is
+    one answer rather than many.
+
+    The blocks are recorded with it so the acceptance cannot outlive what it covered: if the plan is
+    recomputed and something else would now leave, the earlier statement no longer answers the question.
+
+    Attributes:
+        blocks (dict[MemoryType, list[BlockId]]): What was accepted as leaving.
+        actor (Actor): Who accepted it.
+        reason (str | None): Why.
+        at (Timestamp): When.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    blocks: dict[MemoryType, list[BlockId]] = Field(default_factory=dict)
+    actor: Actor
+    reason: str | None = None
+    at: Timestamp = Field(default_factory=utc_timestamp)
+
+
 class ReconcileState(BaseModel):
     """
     A reconciliation in progress, as stored in the ``reconcile`` pointer.
@@ -108,6 +136,8 @@ class ReconcileState(BaseModel):
         head (OciDigest): The snapshot that was current when it started. If the brain has moved since, this
             state describes a reconciliation of something else.
         resolutions (dict[BlockId, Resolution]): What has been decided so far.
+        accepted_removals (RemovalAcceptance | None): The statement that the work this reconciliation
+            removes may go, if it has been made.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -120,6 +150,7 @@ class ReconcileState(BaseModel):
     reason: str = Field(min_length=1)
     head: OciDigest
     resolutions: dict[BlockId, Resolution] = Field(default_factory=dict)
+    accepted_removals: RemovalAcceptance | None = None
 
     def with_resolution(self, block: BlockId, resolution: Resolution) -> ReconcileState:
         """
@@ -135,6 +166,18 @@ class ReconcileState(BaseModel):
         """
         return self.model_copy(update={"resolutions": {**self.resolutions, block: resolution}})
 
+    def with_acceptance(self, acceptance: RemovalAcceptance) -> ReconcileState:
+        """
+        Derive a state that records the removals as accepted.
+
+        Args:
+            acceptance (RemovalAcceptance): The statement.
+
+        Returns:
+            ReconcileState: The updated state.
+        """
+        return self.model_copy(update={"accepted_removals": acceptance})
+
 
 class ReconcileStatus(BaseModel):
     """
@@ -146,6 +189,9 @@ class ReconcileStatus(BaseModel):
         unresolved (list[BlockId]): Blocks that did not apply cleanly and have no decision yet. While this is
             non-empty the reconciliation cannot be concluded.
         resolved (list[BlockId]): Blocks that did not apply cleanly and now have one.
+        withdrawn (dict[MemoryType, list[BlockId]]): What this brain holds that the reconciliation removes.
+        removals_accepted (bool): Whether someone has stated that those removals may go. Always true when
+            there are none.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -154,11 +200,13 @@ class ReconcileStatus(BaseModel):
     plan: ReconcilePlan
     unresolved: list[BlockId] = Field(default_factory=list)
     resolved: list[BlockId] = Field(default_factory=list)
+    withdrawn: dict[MemoryType, list[BlockId]] = Field(default_factory=dict)
+    removals_accepted: bool = True
 
     @property
     def is_resolved(self) -> bool:
         """Whether every open question has an answer, and the reconciliation can be concluded."""
-        return not self.unresolved
+        return not self.unresolved and self.removals_accepted
 
     def verdict_for(self, block: BlockId) -> ValidationStatus | None:
         """

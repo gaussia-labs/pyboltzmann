@@ -767,3 +767,190 @@ class TestPrecedence:
         assert opened is not None
         with pytest.raises(ResolutionRefusedError, match="must name one of the competing successors"):
             upstream.reconcile_resolve(opened.unresolved[0], ResolutionKind.PREFER, prefer=ids["original"])
+
+
+class TestRemovals:
+    """A reconciliation can take work out of this brain, and that is a decision someone has to make."""
+
+    async def dropped_by_them(self, tmp_path: Path, registry: LocalLayoutRegistry) -> tuple[Brain, OciDigest, BlockId]:
+        """An upstream, and a contribution whose history withdrew a block the upstream still holds."""
+        seed = Brain.open(tmp_path / "seed", actor=MAINTAINER, policy=PERMISSIVE_POLICY)
+        seed.ingest(b"%PDF-1.7 Lecture 07", paper(), llm("kept", "withdrawn-later"))
+        await seed.push(registry, UPSTREAM, "v1")
+        semantic = seed.module(MemoryType.SEMANTIC)
+        doomed = next(block for block in semantic.block_ids if semantic.get(block).label == "withdrawn-later")
+
+        upstream = Brain.open(tmp_path / "upstream", actor=MAINTAINER, policy=PERMISSIVE_POLICY)
+        await upstream.pull(registry, UPSTREAM, "v1")
+        contributor = Brain.open(tmp_path / "contrib", actor=CONTRIBUTOR, policy=PERMISSIVE_POLICY)
+        await contributor.pull(registry, UPSTREAM, "v1")
+
+        contributor.drop(
+            DropRequest(
+                blocks=[doomed],
+                memory_type=MemoryType.SEMANTIC,
+                actor=CONTRIBUTOR,
+                reason="the claim was wrong",
+            )
+        )
+        await contributor.push(registry, PROPOSAL, "proposal")
+
+        fetched = await upstream.fetch(registry, PROPOSAL, "proposal")
+        return upstream, fetched.digest, doomed
+
+    async def test_it_stops_rather_than_removing_work_unasked(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        """Exclusion has precedence in Equation 1, so their drop does take effect here -- which is exactly
+        why it cannot happen without being seen. Applying it silently is a decision taken on the operator's
+        behalf, the same thing the halt exists to prevent for an incoming block."""
+        upstream, theirs, doomed = await self.dropped_by_them(tmp_path, registry)
+        before = upstream.snapshot().digest
+
+        with pytest.raises(ReconciliationHaltedError, match="would be removed"):
+            upstream.merge(theirs, reason="reviewed")
+
+        assert upstream.snapshot().digest == before
+        assert doomed in upstream.module(MemoryType.SEMANTIC).block_ids
+
+        status = upstream.reconcile_status()
+        assert status is not None
+        assert status.withdrawn[MemoryType.SEMANTIC] == [doomed]
+        assert not status.removals_accepted
+        assert not status.is_resolved
+
+    async def test_continuing_without_accepting_is_refused(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
+        upstream, theirs, _ = await self.dropped_by_them(tmp_path, registry)
+        with pytest.raises(ReconciliationHaltedError):
+            upstream.merge(theirs, reason="reviewed")
+
+        with pytest.raises(ReconciliationBlockedError, match="nothing has said that is acceptable"):
+            upstream.reconcile_continue()
+
+    async def test_accepting_lets_the_removal_through(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
+        """The block is not destroyed: older retained roots still name it and still verify, and the bytes
+        stay in the store. Only the new root does not name it."""
+        upstream, theirs, doomed = await self.dropped_by_them(tmp_path, registry)
+        with pytest.raises(ReconciliationHaltedError):
+            upstream.merge(theirs, reason="reviewed")
+
+        status = upstream.reconcile_accept_removals(reason="they are right, the claim was wrong")
+        assert status.is_resolved
+
+        upstream.reconcile_continue()
+
+        assert doomed not in upstream.module(MemoryType.SEMANTIC).block_ids
+        assert upstream.store.is_resolvable(doomed)
+        # Auditable without a record written here: the history that dropped it wrote one, and Equation 1
+        # keeps it like any other provenance block.
+        assert doomed in Ledger.of(upstream.modules()).removed
+        assert upstream.verify()
+
+    async def test_accepting_nothing_is_an_error(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
+        upstream = await published(tmp_path / "upstream", registry)
+        await contributed(tmp_path / "contrib", registry)
+        fetched = await upstream.fetch(registry, PROPOSAL, "proposal")
+        upstream.merge(fetched.digest, reason="clean contribution")
+
+        with pytest.raises(ReconciliationError, match="nothing to accept"):
+            upstream.reconcile_accept_removals()
+
+
+class TestCascade:
+    """Withdrawing evidence takes what cited it, whichever history withdrew it."""
+
+    async def orphaning(self, tmp_path: Path, registry: LocalLayoutRegistry) -> tuple[Brain, OciDigest, BlockId]:
+        """An upstream holding a block derived from a source the other history then withdrew.
+
+        The mirror of the case Section 12.4 walks through. There the derived block is the incoming one and
+        the validation gate rejects it; here it is already held, so nobody proposed it and no gate looks at
+        it -- which is why the cascade has to.
+        """
+        seed = Brain.open(tmp_path / "seed", actor=MAINTAINER, policy=PERMISSIVE_POLICY)
+        seed.ingest(b"%PDF-1.7 Lecture 07", paper(), llm("first"))
+        await seed.push(registry, UPSTREAM, "v1")
+        source = next(iter(seed.module(MemoryType.CANONICAL).block_ids))
+
+        upstream = Brain.open(tmp_path / "upstream", actor=MAINTAINER, policy=PERMISSIVE_POLICY)
+        await upstream.pull(registry, UPSTREAM, "v1")
+        contributor = Brain.open(tmp_path / "contrib", actor=CONTRIBUTOR, policy=PERMISSIVE_POLICY)
+        await contributor.pull(registry, UPSTREAM, "v1")
+
+        # Derived here, after the two parted, from evidence they both still hold.
+        task = upstream.define_task(source, allowed=[MemoryType.SEMANTIC])
+        upstream.commit(
+            upstream.validate(
+                CandidateSet(
+                    producer=MODEL,
+                    candidates=[
+                        Candidate(
+                            memory_type=MemoryType.SEMANTIC,
+                            evidence=[source],
+                            payload={
+                                "kind": "fact",
+                                "label": "a later reading",
+                                "statement": "derived from the source",
+                                "subject": "signals",
+                            },
+                        )
+                    ],
+                ),
+                task,
+            )
+        )
+        semantic = upstream.module(MemoryType.SEMANTIC)
+        derived = next(block for block in semantic.block_ids if semantic.get(block).label == "a later reading")
+
+        contributor.drop(
+            DropRequest(
+                blocks=[source],
+                memory_type=MemoryType.CANONICAL,
+                actor=CONTRIBUTOR,
+                reason="the lecture was withdrawn",
+            )
+        )
+        await contributor.push(registry, PROPOSAL, "proposal")
+
+        fetched = await upstream.fetch(registry, PROPOSAL, "proposal")
+        return upstream, fetched.digest, derived
+
+    async def test_a_withdrawn_source_takes_the_blocks_that_cite_it(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        """Equation 1 is correct per module and the invariant it breaks runs between them: the canonical
+        block leaves and its dependent stays behind, citing evidence the composition no longer holds."""
+        upstream, theirs, derived = await self.orphaning(tmp_path, registry)
+
+        plan = upstream.plan_reconcile(theirs)
+
+        assert derived in plan.cascaded[MemoryType.SEMANTIC]
+        assert derived not in plan.members(MemoryType.SEMANTIC)
+        assert derived in plan.withdrawn[MemoryType.SEMANTIC]
+
+    async def test_r1_holds_after_the_reconciliation(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
+        """``verify`` would not catch this: it recomputes hashes and compositions, not citations across
+        modules. That is the same reason admitting a rejected block is refused."""
+        upstream, theirs, derived = await self.orphaning(tmp_path, registry)
+        with pytest.raises(ReconciliationHaltedError):
+            upstream.merge(theirs, reason="taking their withdrawal")
+        upstream.reconcile_accept_removals(reason="the source is gone, so what rests on it goes too")
+        upstream.reconcile_continue()
+
+        canonical = set(upstream.module(MemoryType.CANONICAL).block_ids)
+        semantic = set(upstream.module(MemoryType.SEMANTIC).block_ids)
+        ledger = Ledger.of(upstream.modules())
+
+        assert derived not in semantic
+        assert not [block for block in semantic for cited in ledger.evidence.get(block, []) if cited not in canonical]
+        assert upstream.verify()
+
+    async def test_the_cascade_records_why_it_removed_them(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
+        """The other history recorded withdrawing the evidence; nothing yet recorded the consequence here,
+        and an unexplained removal is not auditable."""
+        upstream, theirs, derived = await self.orphaning(tmp_path, registry)
+        with pytest.raises(ReconciliationHaltedError):
+            upstream.merge(theirs, reason="taking their withdrawal")
+        upstream.reconcile_accept_removals(reason="accepted by the maintainer")
+        upstream.reconcile_continue()
+
+        assert derived in Ledger.of(upstream.modules()).removed

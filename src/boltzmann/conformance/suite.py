@@ -29,7 +29,15 @@ from boltzmann.blocks.base import Block
 from boltzmann.blocks.canonical import CanonicalBlock
 from boltzmann.blocks.content import ContentRef
 from boltzmann.blocks.memory_type import MemoryType
-from boltzmann.blocks.provenance import Actor, ActorKind, ProvenanceBlock, SupersessionRecord
+from boltzmann.blocks.provenance import (
+    Actor,
+    ActorKind,
+    DerivationRecord,
+    Producer,
+    ProducerKind,
+    ProvenanceBlock,
+    SupersessionRecord,
+)
 from boltzmann.blocks.semantic import SemanticBlock, SemanticBlockV2, SemanticKind
 from boltzmann.conformance import golden
 from boltzmann.exceptions import (
@@ -55,6 +63,7 @@ from boltzmann.reconcile.ancestry import common_ancestor
 from boltzmann.reconcile.merge import merge_module
 from boltzmann.reconcile.requests import ReconcileStrategy
 from boltzmann.reconcile.strategies import attribution_table
+from boltzmann.retention.cascade import plan_many
 from boltzmann.store.memory import MemoryBlockStore
 
 if TYPE_CHECKING:
@@ -350,6 +359,36 @@ class ReconciliationConformance:
             assert not table[strategy].their_signatures_survive
             assert table[strategy].mints_new_identities
         assert table[ReconcileStrategy.SQUASH].snapshots_written == 1
+
+    def test_withdrawn_evidence_takes_what_cites_it(self) -> None:
+        """Equation 1 is applied per module and the invariants run between them, so excluding evidence in one
+        module leaves its dependents behind in another -- individually correct, and a violation of R1
+        overall. The cascade Section 10.3 defines is what resolves it, and reconciliation must run the same
+        one: a derived block whose evidence the composition does not hold cannot be audited against its
+        source, and recomputing hashes and compositions would not reveal it."""
+        store = MemoryBlockStore()
+        source = store.put_block(sample_canonical())
+        derived = store.put_block(sample_semantic("a later reading"))
+        record = store.put_block(
+            ProvenanceBlock(
+                record=DerivationRecord(
+                    block=derived,
+                    derived_from=[source],
+                    producer=Producer(kind=ProducerKind.MODEL, id="some-model", version="1"),
+                    actor=Actor(id="curator", kind=ActorKind.HUMAN),
+                    at=utc_timestamp(),
+                )
+            )
+        )
+        modules = {
+            MemoryType.CANONICAL: Module(MemoryType.CANONICAL, store, Composition(MemoryType.CANONICAL, [])),
+            MemoryType.SEMANTIC: Module(MemoryType.SEMANTIC, store, Composition(MemoryType.SEMANTIC, [derived])),
+            MemoryType.PROVENANCE: Module(MemoryType.PROVENANCE, store, Composition(MemoryType.PROVENANCE, [record])),
+        }
+
+        cascade = plan_many([source], MemoryType.CANONICAL, modules, Ledger.of(modules))
+
+        assert derived in cascade.dependents[MemoryType.SEMANTIC]
 
     def test_a_precedence_question_is_not_answered_by_the_ledger(self) -> None:
         """Two histories replacing the same block with different successors leaves two edges, and the ledger

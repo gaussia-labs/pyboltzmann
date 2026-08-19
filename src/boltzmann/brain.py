@@ -113,6 +113,7 @@ from boltzmann.reconcile.requests import (
 from boltzmann.reconcile.resolution import (
     ReconcileState,
     ReconcileStatus,
+    RemovalAcceptance,
     Resolution,
     ResolutionKind,
 )
@@ -1799,6 +1800,14 @@ class Brain:
             validators,
         )
 
+        # Equation 1 is applied per module and is individually correct in each, which is exactly why it is
+        # not sufficient: a block excluded in the canonical module leaves its dependents behind in the
+        # semantic one, citing evidence the composition no longer holds. The gate catches that for blocks
+        # arriving from the other history; it cannot catch it for blocks that were already here, because
+        # nobody proposed them. The cascade a drop runs is what does, and it is the same cascade.
+        cascaded = self._cascade_from(merged, modules, Ledger.of(modules))
+        withdrawn = self._withdrawn(merged, ours, cascaded)
+
         chain = snapshots_between(self.store, head, theirs, base_digest)
         replayable = [step for step in chain if is_reopenable(self.store, step)]
         return ReconcilePlan(
@@ -1806,12 +1815,70 @@ class Brain:
             theirs=theirs,
             modules=merged,
             incoming=report,
+            cascaded=cascaded,
+            withdrawn=withdrawn,
             attribution=attribution_table(len(chain), len(replayable)),
             collapsed=len(chain),
             replayable=len(replayable),
             untransferred=untransferred,
             carried=self._carried_verbatim(merged, head),
         )
+
+    def _cascade_from(
+        self,
+        merged: Mapping[MemoryType, ModuleReconciliation],
+        modules: dict[MemoryType, Module],
+        ledger: Ledger,
+    ) -> dict[MemoryType, list[BlockId]]:
+        """Which surviving blocks cite evidence the reconciliation excluded.
+
+        The cascade of Section 10.3, run over the compositions Equation 1 produced rather than over the
+        installed ones. Reusing it rather than writing an evidence check for this case is the point: a
+        reconciliation that removes evidence has the same consequence as a drop that removes it, and two
+        implementations of one consequence would eventually disagree.
+
+        It is not policy-gated, unlike :meth:`drop`. The removal already happened in the other history and
+        Equation 1 is a statement about sets, not a request to remove something -- a policy that refused it
+        here would not prevent the removal, only leave this brain unable to represent a history that
+        contains it.
+        """
+        reached: dict[MemoryType, set[BlockId]] = {}
+        for memory_type, result in merged.items():
+            if not result.removed:
+                continue
+            plan = plan_many(result.removed, memory_type, modules, ledger)
+            for kind, dependents in plan.dependents.items():
+                reached.setdefault(kind, set()).update(dependents)
+
+        surviving = {kind: set(result.block_ids) for kind, result in merged.items()}
+        return {
+            kind: sorted_leaves(blocks & surviving.get(kind, set()))
+            for kind, blocks in reached.items()
+            if blocks & surviving.get(kind, set())
+        }
+
+    @staticmethod
+    def _withdrawn(
+        merged: Mapping[MemoryType, ModuleReconciliation],
+        ours: Mapping[MemoryType, Composition | None],
+        cascaded: Mapping[MemoryType, list[BlockId]],
+    ) -> dict[MemoryType, list[BlockId]]:
+        """What this brain currently holds that the reconciliation would not name.
+
+        Both causes at once, because to the operator they are one thing: a block the other history dropped,
+        which exclusion's precedence in Equation 1 keeps out, and a block of theirs or ours that followed
+        the evidence it cited.
+        """
+        leaving = {}
+        for memory_type, result in merged.items():
+            mine = ours.get(memory_type)
+            if mine is None:
+                continue
+            final = set(result.block_ids) - set(cascaded.get(memory_type, []))
+            gone = set(mine) - final
+            if gone:
+                leaving[memory_type] = sorted_leaves(gone)
+        return leaving
 
     def reconcile(
         self,
@@ -1855,7 +1922,7 @@ class Brain:
         self._require_no_reconciliation(f"reconcile {request.theirs.short}")
         plan = self.plan_reconcile(request.theirs, request.ancestor, validators)
 
-        if not plan.incoming.is_clean:
+        if not plan.is_clean:
             self._put_reconcile_state(
                 ReconcileState(
                     theirs=request.theirs,
@@ -1867,11 +1934,20 @@ class Brain:
                 )
             )
             open_questions = [verdict for verdict in plan.incoming.verdicts if not verdict.is_admissible]
-            named = ", ".join(f"{verdict.block.short} ({verdict.status.value})" for verdict in open_questions[:5])
+            leaving = sum(len(blocks) for blocks in plan.withdrawn.values())
+            said = []
+            if open_questions:
+                named = ", ".join(f"{verdict.block.short} ({verdict.status.value})" for verdict in open_questions[:5])
+                said.append(
+                    f"{len(open_questions)} of {len(plan.incoming.verdicts)} incoming blocks need a decision ({named})"
+                )
+            if leaving:
+                said.append(
+                    f"{leaving} block(s) this brain holds would be removed, so it needs reconcile_accept_removals()"
+                )
             raise ReconciliationHaltedError(
-                f"the reconciliation of {request.theirs.short} stopped: {len(open_questions)} of "
-                f"{len(plan.incoming.verdicts)} incoming blocks need a decision ({named}). Nothing was "
-                f"written. Inspect it with reconcile_status(), decide each with reconcile_resolve(), then "
+                f"the reconciliation of {request.theirs.short} stopped: {'; and '.join(said)}. Nothing was "
+                f"written. Inspect it with reconcile_status(), answer what is open, then "
                 f"reconcile_continue() -- or reconcile_abort()."
             )
 
@@ -1883,6 +1959,7 @@ class Brain:
         theirs: OciDigest,
         strategy: ReconcileStrategy,
         resolutions: dict[BlockId, Resolution],
+        accepted: RemovalAcceptance | None = None,
     ) -> ReconcileResult:
         """
         Write the reconciliation: compositions first, the head pointer last.
@@ -1926,6 +2003,7 @@ class Brain:
         ancestors, _ = self._sides(base)
         refused = self._refused_after(plan, resolutions)
         precedence = self._precedence_records(plan, resolutions)
+        cascade = self._cascade_records(plan, accepted)
 
         steps = replay_steps(strategy, replayable) or [head]
         written: list[OciDigest] = []
@@ -1937,7 +2015,11 @@ class Brain:
             # state. The last step reconciles against their head, so all three strategies end identically.
             partial = reconciled_modules(ancestors, ours, self._sides(step)[0])
             members = {
-                kind: [block_id for block_id in result.block_ids if block_id not in set(refused.get(kind, []))]
+                kind: [
+                    block_id
+                    for block_id in result.block_ids
+                    if block_id not in {*refused.get(kind, []), *plan.cascaded.get(kind, [])}
+                ]
                 for kind, result in partial.items()
             }
             snapshot, roots = self._write_reconciliation(
@@ -1945,7 +2027,7 @@ class Brain:
                 plan.carried,
                 [] if contained else (merged_parents(strategy, theirs) if last else []),
                 retain=[theirs] if last and strategy is ReconcileStrategy.MERGE else [],
-                extra=precedence if last else (),
+                extra=[*precedence, *cascade] if last else (),
             )
             written.append(self._state.snapshot if self._state else snapshot.digest)
 
@@ -2016,11 +2098,16 @@ class Brain:
 
         plan = self.plan_reconcile(state.theirs, state.ancestor, validators)
         open_questions = [verdict.block for verdict in plan.incoming.verdicts if not verdict.is_admissible]
+        accepted = state.accepted_removals
         return ReconcileStatus(
             state=state,
             plan=plan,
             unresolved=[block for block in open_questions if block not in state.resolutions],
             resolved=[block for block in open_questions if block in state.resolutions],
+            withdrawn=plan.withdrawn,
+            # Compared against what was accepted, not merely present: an acceptance that covered a different
+            # set of blocks answered a different question.
+            removals_accepted=not plan.withdrawn or (accepted is not None and accepted.blocks == plan.withdrawn),
         )
 
     def reconcile_resolve(
@@ -2080,6 +2167,56 @@ class Brain:
         assert resolved is not None  # just written
         return resolved
 
+    def reconcile_accept_removals(
+        self,
+        reason: str | None = None,
+        actor: Actor | None = None,
+        validators: Sequence[Validator] | None = None,
+    ) -> ReconcileStatus:
+        """
+        State that the work this reconciliation removes may go.
+
+        One answer rather than one per block, because the granularity would be false. Exclusion has
+        precedence in Equation 1 -- a block the other history dropped does not come back because this one
+        still held it -- so there is no per-block choice to offer. What is genuinely open is whether this
+        reconciliation happens, and the alternative to accepting is :meth:`reconcile_abort`.
+
+        Re-admitting a removed block afterwards remains possible and remains an ordinary commit, which is
+        where a decision of that kind belongs: doing it inside a reconciliation would make the arithmetic
+        depend on who was resolving it.
+
+        Args:
+            reason (str | None): Why the removals are accepted.
+            actor (Actor | None): Who accepts them. Defaults to this handle's actor.
+            validators (Sequence[Validator] | None): Checks to apply, as in :meth:`reconcile_status`.
+
+        Returns:
+            ReconcileStatus: The state after recording it.
+
+        Raises:
+            ReconciliationError: If nothing is in progress, or the reconciliation removes nothing.
+        """
+        status = self.reconcile_status(validators)
+        if status is None:
+            raise ReconciliationError("no reconciliation is in progress, so there is nothing to accept")
+        if not status.withdrawn:
+            raise ReconciliationError(
+                f"the reconciliation of {status.state.theirs.short} removes nothing this brain holds, so "
+                f"there is nothing to accept"
+            )
+
+        state = status.state.with_acceptance(
+            RemovalAcceptance(
+                blocks=status.withdrawn,
+                actor=actor if actor is not None else self.actor,
+                reason=reason,
+            )
+        )
+        self._put_reconcile_state(state)
+        accepted = self.reconcile_status(validators)
+        assert accepted is not None  # just written
+        return accepted
+
     def reconcile_continue(self, validators: Sequence[Validator] | None = None) -> ReconcileResult:
         """
         Conclude the reconciliation now that its questions are answered.
@@ -2098,11 +2235,17 @@ class Brain:
         status = self.reconcile_status(validators)
         if status is None:
             raise ReconciliationError("no reconciliation is in progress, so there is nothing to continue")
-        if not status.is_resolved:
+        if status.unresolved:
             named = ", ".join(block.short for block in status.unresolved[:5])
             raise ReconciliationBlockedError(
                 f"{len(status.unresolved)} question(s) are still open ({named}); decide them with "
                 f"reconcile_resolve() before continuing"
+            )
+        if not status.removals_accepted:
+            leaving = sum(len(blocks) for blocks in status.withdrawn.values())
+            raise ReconciliationBlockedError(
+                f"this reconciliation removes {leaving} block(s) this brain holds and nothing has said that "
+                f"is acceptable; call reconcile_accept_removals() or reconcile_abort()"
             )
 
         return self._conclude(
@@ -2110,6 +2253,7 @@ class Brain:
             status.state.theirs,
             status.state.strategy,
             status.state.resolutions,
+            status.state.accepted_removals,
         )
 
     def reconcile_abort(self) -> None:
@@ -2185,6 +2329,39 @@ class Brain:
                 continue
             refused.setdefault(verdict.memory_type, []).append(verdict.block)
         return refused
+
+    def _cascade_records(
+        self,
+        plan: ReconcilePlan,
+        accepted: RemovalAcceptance | None,
+    ) -> list[ProvenanceBlock]:
+        """Removal records for the blocks the cascade takes with the evidence they cited.
+
+        The exclusions Equation 1 itself performs need no record from here: the history that dropped those
+        blocks wrote one, and it arrives as a provenance block like any other. What has no record yet is the
+        consequence -- a block of this brain's that followed its evidence out -- so this writes it, in the
+        same version as the composition it describes, and attributes it to whoever accepted the removals.
+        """
+        if not plan.cascaded:
+            return []
+        actor = accepted.actor if accepted is not None else self.actor
+        at = accepted.at if accepted is not None else utc_timestamp()
+        reason = f"the evidence these blocks cite was withdrawn by the history reconciled from {plan.theirs.short}"
+        if accepted is not None and accepted.reason:
+            reason = f"{reason}; accepted: {accepted.reason}"
+        return [
+            ProvenanceBlock(
+                record=RemovalRecord(
+                    blocks=blocks,
+                    mechanism=RemovalMechanism.DROP,
+                    memory_type=memory_type,
+                    actor=actor,
+                    at=at,
+                    reason=reason,
+                )
+            )
+            for memory_type, blocks in plan.cascaded.items()
+        ]
 
     def _precedence_records(
         self,

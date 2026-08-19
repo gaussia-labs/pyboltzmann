@@ -173,12 +173,14 @@ plan = brain.plan_reconcile(theirs, validators=[*RECONCILE_VALIDATORS, MyDomainC
 
 | Conflict | Verdict |
 | --- | --- |
-| One side drops evidence the other derived from | Structurally invisible, semantically fatal. `REJECTED` by the evidence check |
+| They drop evidence you derived from | Structurally invisible, semantically fatal. The dependent follows the evidence out — see [the cascade](#withdrawn-evidence-takes-what-cites-it) |
+| You dropped evidence they derived from | The incoming block is `REJECTED` by the evidence check |
 | Both sides add blocks that contradict each other | Not structurally detectable. `CONTRADICTED`, with the conflicting blocks named |
 | Both sides supersede the same block differently | Both successors are admissible and both edges are recorded. `PENDING_REVIEW`, because the precedence is a decision |
 
 Only blocks that emerge `VALIDATED` enter on their own. **If anything did not apply cleanly, nothing is
-written** — the reconciliation stops and waits for you.
+written** — the reconciliation stops and waits for you. The same holds if it would take work *out* of your
+brain; see [removals](#when-the-reconciliation-removes-your-work).
 
 ## Resolving what did not apply
 
@@ -257,6 +259,60 @@ ledger.successors_of(original)   # {first, second} -- both edges, still there
 ledger.contested(original)       # set() -- settled
 ledger.is_accessible(first)      # False
 ```
+
+## When the reconciliation removes your work
+
+Exclusion has precedence in Equation 1, so a block the other history dropped leaves your composition too.
+That is deliberate — it is what stops a drop from being undone by whoever still held the block — and it is
+also a decision about your work, so it does not happen without being seen:
+
+```python
+try:
+    brain.merge(theirs, reason="reviewed")
+except ReconciliationHaltedError:
+    pass
+
+status = brain.reconcile_status()
+status.withdrawn            # {MemoryType.SEMANTIC: [BlockId('sha256:8f3a…')]}
+status.removals_accepted    # False
+
+brain.reconcile_accept_removals(reason="they are right, the claim was wrong")
+brain.reconcile_continue()
+```
+
+One answer rather than one per block, because the granularity would be false: there is no per-block choice
+to offer when exclusion wins by construction. What is genuinely open is whether this reconciliation happens
+at all, and the alternative to accepting is `reconcile_abort()`. Re-admitting a removed block afterwards
+remains possible and remains an ordinary commit — doing it inside a reconciliation would make the arithmetic
+depend on who was resolving it.
+
+Nothing is destroyed. The bytes stay in the store, older retained roots still name the block and still
+verify, and the removal is auditable without a record written here: the history that dropped it wrote one,
+and Equation 1 keeps it like any other provenance block.
+
+<Note>
+  The acceptance records what it covered. If the plan is recomputed and something else would now leave — you
+  fetched the rest of a partial history, say — the earlier statement no longer answers the question and
+  `removals_accepted` goes back to `False`.
+</Note>
+
+### Withdrawn evidence takes what cites it
+
+```python
+plan.cascaded    # {MemoryType.SEMANTIC: [BlockId('sha256:44dc…')]}
+```
+
+Equation 1 is applied per module and is individually correct in each, which is exactly why it is not
+enough. If the other history withdrew a canonical source and you hold a block derived from it, the source
+leaves and the dependent would stay behind, citing evidence the composition no longer holds. R1 is violated
+and `verify()` would not catch it — it recomputes hashes and compositions, not citations across modules.
+
+So the reconciliation runs the same cascade a `drop` runs, and the dependent follows its evidence out. The
+validation gate catches the mirror case, where the derived block is the incoming one; it cannot catch this
+one, because nobody proposed the block — it was already here.
+
+The consequence gets its own removal record, attributed to whoever accepted the removals: the other history
+recorded withdrawing the evidence, and nothing yet recorded what that cost here.
 
 ### Abandoning
 

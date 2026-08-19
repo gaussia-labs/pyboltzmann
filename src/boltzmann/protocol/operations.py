@@ -544,6 +544,12 @@ class BrainReconciliation(Protocol):
         must then be validated as if it were an ingestion, and must not be committed while any candidate is
         still ``PENDING_REVIEW``. Only validated blocks enter the reconciled composition.
 
+        Because the arithmetic runs one module at a time and the invariants run between them, excluding
+        evidence in one module strands its dependents in another. An implementation **must** cascade through
+        provenance exactly as a drop does, or it will publish a version in which a derived block cites
+        evidence the composition does not hold -- a state that verifies, because verifying recomputes hashes
+        and compositions rather than citations.
+
         Args:
             request (ReconcileRequest): Which history to join, how to record it, by whom, and why.
 
@@ -585,6 +591,23 @@ class BrainReconciliation(Protocol):
             block (BlockId): Which incoming block to decide.
             kind (ResolutionKind): What to do with it.
             prefer (BlockId | None): The winning successor, for a precedence question.
+
+        Returns:
+            ReconcileStatus: The state after recording it.
+        """
+        ...
+
+    def reconcile_accept_removals(self) -> ReconcileStatus:
+        """
+        State that the work this reconciliation removes may go.
+
+        An implementation **must not** let a reconciliation remove blocks the brain holds without this being
+        stated. Exclusion has precedence in Equation 1, so a block the other history dropped does leave --
+        that is the rule and it is deliberate -- but applying it is a decision about work that is already
+        here, and taking it silently is the same failure as deciding an undecided candidate.
+
+        It is one answer and not one per block: there is no per-block choice to offer when exclusion wins by
+        construction. Re-admitting a removed block remains possible and remains an ordinary commit.
 
         Returns:
             ReconcileStatus: The state after recording it.

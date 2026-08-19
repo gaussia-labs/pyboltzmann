@@ -93,6 +93,7 @@ from boltzmann.reconcile import (
     ReconcileState,
     ReconcileStatus,
     ReconcileStrategy,
+    RemovalAcceptance,
     Resolution,
     ResolutionKind,
 )
@@ -187,6 +188,7 @@ __all__ = [
     "RegistrationResult",
     "Relation",
     "RemovalMechanism",
+    "RemovalAcceptance",
     "Resolution",
     "ResolutionKind",
     "RetentionPolicy",

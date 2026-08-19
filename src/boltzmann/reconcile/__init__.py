@@ -34,6 +34,7 @@ from boltzmann.reconcile.requests import (
 from boltzmann.reconcile.resolution import (
     ReconcileState,
     ReconcileStatus,
+    RemovalAcceptance,
     Resolution,
     ResolutionKind,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "ReconcileRequest",
     "ReconcileResult",
     "ReconcileStrategy",
+    "RemovalAcceptance",
     "ResolutionKind",
     "Resolution",
     "ReconcileStatus",

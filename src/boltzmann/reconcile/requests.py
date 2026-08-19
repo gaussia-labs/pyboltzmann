@@ -18,6 +18,7 @@ between the three is attribution, and a default would be this SDK choosing whose
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,6 +28,9 @@ from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
 from boltzmann.module.snapshot import ModuleRef, Snapshot
 from boltzmann.reconcile.gate import IncomingReport
 from boltzmann.reconcile.merge import ModuleReconciliation
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
 
 
 class ReconcileStrategy(StrEnum):
@@ -128,6 +132,15 @@ class ReconcilePlan(BaseModel):
         modules (dict[MemoryType, ModuleReconciliation]): What Equation 1 produced, per module.
         incoming (IncomingReport): The verdict on every block entering this brain.
         attribution (dict[ReconcileStrategy, AttributionReport]): What each of the three would cost.
+        cascaded (dict[MemoryType, list[BlockId]]): Blocks this brain holds that leave because the evidence
+            they cite does. Equation 1 is set arithmetic over one module at a time, so a block excluded in
+            the canonical module leaves its dependents behind in the semantic one -- individually correct,
+            and a violation of R1 overall. The cascade a drop runs is what resolves it, and it is the same
+            cascade (paper Sections 10.3 and 12.4).
+        withdrawn (dict[MemoryType, list[BlockId]]): Everything leaving this brain's compositions, which is
+            the exclusions of Equation 1 plus what they cascaded to. A reconciliation that removes work
+            cannot be committed until someone says so, for the same reason one that cannot decide a
+            candidate cannot: it would be a decision taken on the operator's behalf.
         collapsed (int): How many snapshots the other history added on top of the ancestor. This is what a
             squash collapses into one.
         replayable (int): How many of those versions can be reopened here, and therefore how many snapshots
@@ -148,21 +161,30 @@ class ReconcilePlan(BaseModel):
     theirs: OciDigest
     modules: dict[MemoryType, ModuleReconciliation] = Field(default_factory=dict)
     incoming: IncomingReport = Field(default_factory=IncomingReport)
+    cascaded: dict[MemoryType, list[BlockId]] = Field(default_factory=dict)
+    withdrawn: dict[MemoryType, list[BlockId]] = Field(default_factory=dict)
     attribution: dict[ReconcileStrategy, AttributionReport] = Field(default_factory=dict)
     collapsed: int = Field(default=0, ge=0)
     replayable: int = Field(default=0, ge=0)
     untransferred: list[MemoryType] = Field(default_factory=list)
     carried: dict[MemoryType, ModuleRef] = Field(default_factory=dict)
 
-    def admitted(self, memory_type: MemoryType) -> list[BlockId]:
+    def members(
+        self,
+        memory_type: MemoryType,
+        refused: Mapping[MemoryType, Iterable[BlockId]] | None = None,
+    ) -> list[BlockId]:
         """
-        One module's reconciled composition, with the refused blocks withheld.
+        One module's membership as a commit would write it.
 
-        Only blocks that emerge ``VALIDATED`` enter (paper Section 12.4), so this is the membership a
-        commit would write -- Equation 1's result minus whatever the gate turned away.
+        Equation 1's result, minus what the gate turned away and minus what the cascade took with the
+        evidence it cited. Only blocks that emerge ``VALIDATED`` enter (paper Section 12.4).
 
         Args:
             memory_type (MemoryType): Which module.
+            refused (Mapping[MemoryType, Iterable[BlockId]] | None): Which incoming blocks to withhold.
+                Defaults to the gate's own refusals; a caller that has recorded decisions passes the
+                adjusted set.
 
         Returns:
             list[BlockId]: The members, in canonical leaf order.
@@ -170,8 +192,21 @@ class ReconcilePlan(BaseModel):
         merged = self.modules.get(memory_type)
         if merged is None:
             return []
-        refused = set(self.incoming.refused.get(memory_type, []))
-        return [block_id for block_id in merged.block_ids if block_id not in refused]
+        turned_away = self.incoming.refused if refused is None else refused
+        withheld = {*turned_away.get(memory_type, []), *self.cascaded.get(memory_type, [])}
+        return [block_id for block_id in merged.block_ids if block_id not in withheld]
+
+    def admitted(self, memory_type: MemoryType) -> list[BlockId]:
+        """
+        One module's membership under the gate's own verdicts, with no decisions applied.
+
+        Args:
+            memory_type (MemoryType): Which module.
+
+        Returns:
+            list[BlockId]: The members, in canonical leaf order.
+        """
+        return self.members(memory_type)
 
     @property
     def excluded(self) -> dict[MemoryType, list[BlockId]]:
@@ -188,6 +223,14 @@ class ReconcilePlan(BaseModel):
     def is_blocked(self) -> bool:
         """Whether a candidate is still ``PENDING_REVIEW``, which forbids committing."""
         return self.incoming.is_blocked
+
+    @property
+    def is_clean(self) -> bool:
+        """Whether this reconciliation can be carried out without anyone deciding anything.
+
+        Every incoming block applied, and nothing this brain holds leaves.
+        """
+        return self.incoming.is_clean and not self.withdrawn
 
     @property
     def is_noop(self) -> bool:
