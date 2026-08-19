@@ -54,10 +54,11 @@ def reachable_from(snapshot: Snapshot, store: BlockStore) -> set[str]:
         BlockSchemaError: If a present block cannot be decoded, for the same reason.
     """
     keep: set[str] = {snapshot.digest.hex}
-    if snapshot.parent is not None:
-        # The parent document itself, so the chain an audit walks stays readable. Its *contents* are
-        # only kept alive if the parent is itself retained.
-        keep.add(snapshot.parent.hex)
+    # Every parent document, so the history an audit walks stays readable. Their *contents* are only
+    # kept alive if the parent is itself retained. All of them and not just the first: a reconciliation
+    # keeps the other side's snapshots on record (paper Section 12.3), and marking only the first parent
+    # would let a sweep reclaim the merged-in documents and quietly turn that guarantee false.
+    keep.update(parent.hex for parent in snapshot.parents)
 
     for reference in snapshot.modules.values():
         keep.add(reference.composition.hex)

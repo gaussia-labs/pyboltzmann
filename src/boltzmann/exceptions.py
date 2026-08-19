@@ -145,3 +145,13 @@ class ReferenceNotFoundError(DistributionError):
     credential or a failing registry looks the same to a caller that cannot tell them apart, and a
     fast-forward check that treats every failure as absence stops protecting anything.
     """
+
+
+class DivergenceError(DistributionError):
+    """Exception raised when a remote is not an ancestor of the local snapshot.
+
+    Distinct from its parent because it is the one distribution failure with a defined remedy: the two
+    histories advanced from a common ancestor, and Section 12 says what to do about it. A caller that
+    can tell this apart from "the registry refused me" can offer to reconcile; one that cannot has to
+    treat a resolvable situation as a transport problem.
+    """

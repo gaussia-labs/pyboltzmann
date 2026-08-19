@@ -68,6 +68,7 @@ from boltzmann.distribution.registry import InstallPlan
 from boltzmann.exceptions import (
     BlockNotFoundError,
     DistributionError,
+    DivergenceError,
     ProtocolError,
     QueryError,
     ReferenceNotFoundError,
@@ -309,25 +310,61 @@ class Brain:
 
     def ancestry(self) -> list[OciDigest]:
         """
-        The snapshot digests reachable from the current one by walking ``parent``.
+        The first-parent chain from the current snapshot back.
 
-        This is what a fast-forward check compares against: a push is safe when the remote's snapshot
-        appears here, because that means the local history contains the remote's.
+        This is the line the protocol reads as *what this brain is*: the first parent is the history a
+        reconciliation was performed onto, and every rule that speaks of "the parent" means that one
+        (paper Section 12.1). It is therefore the chain an audit follows to see how the brain got here,
+        and -- once authenticity lands -- the positions a signature's scope is judged against.
+
+        It is **not** what a containment check asks. A merged-in history is genuinely contained in this
+        brain without appearing on this chain, so use :meth:`reachable_history` for that.
 
         Returns:
-            list[OciDigest]: The current snapshot first, then each ancestor still resolvable.
+            list[OciDigest]: The current snapshot first, then each first parent still resolvable.
         """
         if self._state is None:
             return []
         chain = [self._state.snapshot]
         snapshot: Snapshot | None = self._snapshot
-        while snapshot is not None and snapshot.parent is not None:
-            parent = snapshot.parent
+        while snapshot is not None and snapshot.first_parent is not None:
+            parent = snapshot.first_parent
             chain.append(parent)
             if not self.store.is_resolvable(parent):
                 break
             snapshot = Snapshot.model_validate_json(self.store.get_bytes(parent))
         return chain
+
+    def reachable_history(self) -> set[OciDigest]:
+        """
+        Every snapshot this brain's history contains, following all parents.
+
+        A reconciliation names more than one parent, so history is a DAG rather than a chain, and
+        "does this brain already contain that snapshot?" is a reachability question over the whole
+        thing. That is what a fast-forward check asks: a push is safe when the remote's snapshot is in
+        here, because then publishing drops nothing. Walking only :meth:`ancestry` would answer it
+        wrongly in exactly the case reconciliation exists for -- after merging a contribution, the
+        contributor's head is a parent of the local snapshot, and a push back to their repository would
+        still be reported as divergence.
+
+        Returns:
+            set[OciDigest]: The current snapshot and every ancestor reachable through any parent.
+            Traversal stops at snapshots the store cannot resolve, which are still reported: an
+            ancestor that was pruned is part of the history even when its document is gone.
+        """
+        if self._state is None:
+            return set()
+        seen = {self._state.snapshot}
+        frontier = [self._snapshot]
+        while frontier:
+            snapshot = frontier.pop()
+            for parent in snapshot.parents:
+                if parent in seen:
+                    continue
+                seen.add(parent)
+                if self.store.is_resolvable(parent):
+                    frontier.append(Snapshot.model_validate_json(self.store.get_bytes(parent)))
+        return seen
 
     # --- Discovery ------------------------------------------------------------
 
@@ -2052,13 +2089,15 @@ class Brain:
         # snapshot it came from and that is what the ancestry has to contain.
         source = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
         remote = OciDigest.parse(source) if source else manifest.config.digest
-        ancestry = self.ancestry()
-        if remote in ancestry:
+        # Reachability over every parent, not the first-parent chain: a history this brain merged is
+        # contained in it, and publishing over it drops nothing.
+        if remote in self.reachable_history():
             return
 
-        raise DistributionError(
+        raise DivergenceError(
             f"{reference}:{tag} is at snapshot {remote.short}, which is not in this brain's history; "
-            f"the two diverged. Pull and re-commit, or pass force=True to overwrite the remote."
+            f"the two diverged. Reconcile them -- fetch the remote and merge, rebase, or squash it -- "
+            f"or pass force=True to overwrite the remote."
         )
 
     # --- Introspection ---------------------------------------------------------

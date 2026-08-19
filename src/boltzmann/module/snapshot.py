@@ -11,9 +11,9 @@ two straight is the point of Section 6.4 of the paper.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.constants import PROTOCOL_VERSION
@@ -66,8 +66,10 @@ class Snapshot(BaseModel):
             hold a subset: selective installation is the point of packaging each
             module separately (paper Section 7.2).
         created_at (Timestamp): When the snapshot was produced.
-        parent (OciDigest | None): Digest of the snapshot this one succeeds, forming
-            an auditable chain of versions.
+        parents (list[OciDigest]): The snapshots this one succeeds, forming an auditable
+            history. A linear history is the ordinary case and carries one entry; a root
+            snapshot carries none; a reconciliation carries two or more
+            (paper Section 12.1).
         labels (dict[str, str] | None): Free-form annotations, such as a release tag.
     """
 
@@ -76,8 +78,65 @@ class Snapshot(BaseModel):
     boltzmann: int = PROTOCOL_VERSION
     modules: dict[MemoryType, ModuleRef] = Field(default_factory=dict)
     created_at: Timestamp = Field(default_factory=utc_timestamp)
-    parent: OciDigest | None = None
+    parents: list[OciDigest] = Field(default_factory=list)
     labels: dict[str, str] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_scalar_parent(cls, data: Any) -> Any:
+        """
+        Read a document written before ``parents`` was a list.
+
+        Every snapshot published under the scalar form is still a valid statement of composition, and
+        it is immutable: refusing it would make the histories that already exist unreadable in order
+        to gain nothing. So the scalar is accepted on the way in and normalized to a one-element list.
+
+        A document carrying *both* keys is refused rather than reconciled. It says two things about the
+        same lineage, and there is no reading of it that is not a guess -- the same reason this model
+        sets ``extra="forbid"``.
+        """
+        if not isinstance(data, dict) or "parent" not in data:
+            return data
+        if "parents" in data:
+            raise ValueError(
+                "a snapshot document names both 'parent' and 'parents'; the two state the same lineage "
+                "and a document that carries both cannot be read without guessing which one is meant"
+            )
+        scalar = data["parent"]
+        rest = {key: value for key, value in data.items() if key != "parent"}
+        return {**rest, "parents": [] if scalar is None else [scalar]}
+
+    @model_validator(mode="after")
+    def _reject_repeated_parents(self) -> Self:
+        """A history named twice is one history. Listing it twice would make ``parents`` order-dependent
+        for a question that is set-shaped, and no reconciliation needs it."""
+        if len(set(self.parents)) != len(self.parents):
+            named = ", ".join(digest.short for digest in self.parents)
+            raise ValueError(f"a snapshot names the same parent more than once: {named}")
+        return self
+
+    # --- Lineage --------------------------------------------------------------
+
+    @property
+    def first_parent(self) -> OciDigest | None:
+        """
+        The history this snapshot was produced onto.
+
+        Order is significant in exactly one way (paper Section 12.1): the first parent is the history a
+        reconciliation was performed onto, and every rule that speaks of "the parent" means this one --
+        the scope a signature must hold, the trust root in force, and the difference a consumer reads
+        as the change this snapshot made. The remaining parents are merged-in history, and **no
+        authorization is derived from them**.
+
+        Returns:
+            OciDigest | None: The first parent, or ``None`` for a root snapshot.
+        """
+        return self.parents[0] if self.parents else None
+
+    @property
+    def is_reconciliation(self) -> bool:
+        """Whether this snapshot names more than one parent, and therefore joined two histories."""
+        return len(self.parents) > 1
 
     # --- Access ---------------------------------------------------------------
 
@@ -128,10 +187,24 @@ class Snapshot(BaseModel):
         """
         The snapshot as canonical bytes, which is what gets published as the config blob.
 
+        One parent is written as the scalar ``parent``, two or more as the list ``parents``, and a root
+        snapshot writes neither. This is the rule of Section 6.6 applied to the snapshot document
+        rather than to a block: a version is a statement, not a preference, so a snapshot is written
+        under the oldest form that can express it. A linear history therefore keeps the exact bytes --
+        and the exact digest -- it had before ``parents`` existed, and a client that has no notion of
+        reconciliation stops being able to read a brain only at the point where that brain genuinely
+        reconciled something, which is the one document it could not have interpreted anyway.
+
         Returns:
             bytes: The canonically serialized snapshot.
         """
-        return canonicalize(self.model_dump(mode="json", exclude_none=True))
+        document = self.model_dump(mode="json", exclude_none=True)
+        parents = document.pop("parents", [])
+        if len(parents) == 1:
+            document["parent"] = parents[0]
+        elif parents:
+            document["parents"] = parents
+        return canonicalize(document)
 
     @property
     def digest(self) -> OciDigest:
@@ -166,7 +239,7 @@ class Snapshot(BaseModel):
             boltzmann=self.boltzmann,
             modules=advanced,
             created_at=utc_timestamp(),
-            parent=self.digest,
+            parents=[self.digest],
             labels=self.labels,
         )
 
@@ -181,6 +254,49 @@ class Snapshot(BaseModel):
             Snapshot: The successor snapshot, chained to this one.
         """
         return self.with_modules([reference])
+
+    def reconciled(self, references: Iterable[ModuleRef], merged: Iterable[OciDigest]) -> Snapshot:
+        """
+        Derive a snapshot that joins this history with one or more others.
+
+        This is the whole structural change reconciliation needed (paper Section 12.1): no new document,
+        a field that holds more than one entry. ``self`` becomes the **first** parent, which is what
+        records that the reconciliation was performed onto this history, and the histories in ``merged``
+        become merged-in parents that grant nothing.
+
+        Args:
+            references (Iterable[ModuleRef]): The reconciled modules' versions. Unlike
+                :meth:`with_modules`, this replaces the module set outright rather than advancing part
+                of it: a reconciliation states the composition of every module it names, including the
+                ones whose root it took from the other side unchanged.
+            merged (Iterable[OciDigest]): The other histories being joined, in the order they should be
+                recorded.
+
+        Returns:
+            Snapshot: The reconciliation.
+
+        Raises:
+            SnapshotError: If no other history was given, or if one of them is this snapshot. A
+                reconciliation with nothing is a commit, and a history merged with itself is not a
+                second history -- both are almost certainly a caller bug, and both would otherwise
+                produce a snapshot that misrepresents what happened.
+        """
+        others = list(merged)
+        if not others:
+            raise SnapshotError(
+                "a reconciliation names at least one other history; to advance this one, use with_modules"
+            )
+        if self.digest in others:
+            raise SnapshotError(
+                f"snapshot {self.digest.short} cannot be merged with itself: it is already the first parent"
+            )
+        return Snapshot(
+            boltzmann=self.boltzmann,
+            modules={reference.memory_type: reference for reference in references},
+            created_at=utc_timestamp(),
+            parents=[self.digest, *others],
+            labels=self.labels,
+        )
 
     def without_module(self, memory_type: MemoryType) -> Snapshot:
         """
@@ -197,7 +313,7 @@ class Snapshot(BaseModel):
             boltzmann=self.boltzmann,
             modules=remaining,
             created_at=utc_timestamp(),
-            parent=self.digest,
+            parents=[self.digest],
             labels=self.labels,
         )
 

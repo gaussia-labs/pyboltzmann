@@ -492,7 +492,7 @@ class TestAncestry:
         """The empty snapshot a fresh handle starts from is a placeholder, not a published version."""
         brain = Brain.open(tmp_path / "a", actor=CURATOR)
         brain.register(b"%PDF-1.7 Lecture 07", request_)
-        assert brain.snapshot().parent is None
+        assert brain.snapshot().parents == []
         assert brain.ancestry() == [brain.snapshot().digest]
 
     def test_an_empty_brain_has_no_ancestry(self, tmp_path: Path) -> None:

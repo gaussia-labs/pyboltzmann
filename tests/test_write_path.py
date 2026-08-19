@@ -466,7 +466,7 @@ class TestPersistence:
 
         history = brain.history()
         assert len(history) == 2
-        assert history[0].parent == history[1].digest
+        assert history[0].first_parent == history[1].digest
 
     def test_retention_is_capped_by_policy(self, request_: RegistrationRequest) -> None:
         from boltzmann.retention.policy import RetentionPolicy
