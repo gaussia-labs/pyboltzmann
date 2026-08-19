@@ -5,6 +5,8 @@ structural -- that violating one is an error rather than a matter of remembering
 """
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from pydantic import ValidationError
 
 from boltzmann.blocks.base import Block
@@ -33,6 +35,7 @@ from boltzmann.protocol.operations import (
 )
 from boltzmann.query.evidence import EvidenceBundle, Match
 from boltzmann.query.request import Query, QueryFilters, QueryHints
+from boltzmann.reconcile.merge import merge_module
 from boltzmann.retention.policy import PERMISSIVE_POLICY, RetentionPolicy
 from boltzmann.store.memory import MemoryBlockStore
 
@@ -341,6 +344,11 @@ class TestProtocolSurface:
             "pack",
             "push",
             "pull",
+            "fetch",
+            "reconcile",
+            "merge",
+            "rebase",
+            "squash",
         } <= declared
 
 
@@ -353,3 +361,81 @@ class TestPayloadDomainIsClosed:
         for value in ({"x": 1.0}, {"x": [1.0]}, {"x": {"y": 1.0}}, [1.0]):
             with pytest.raises(NonDeterministicValueError):
                 canonicalize(value)
+
+
+class TestReconciliationIsSetArithmetic:
+    """Reconciling one module converges regardless of the order the sides are combined in (Section 12.2).
+
+    Not a coincidence but the consequence of what is being merged. Git merges lines of text; here the unit
+    is an immutable, content-addressed block, so nothing is ever "the same block, slightly modified" and a
+    textual conflict is not representable. What is left is set arithmetic over identifiers, which is the
+    property a CRDT is built to have and this gets for free.
+    """
+
+    @staticmethod
+    def composition(*numbers: int) -> Composition:
+        return Composition(MemoryType.SEMANTIC, [BlockId.of(str(number).encode()) for number in numbers])
+
+    @given(
+        base=st.sets(st.integers(0, 12), max_size=8),
+        ours=st.sets(st.integers(0, 12), max_size=8),
+        theirs=st.sets(st.integers(0, 12), max_size=8),
+    )
+    def test_it_commutes(self, base: set[int], ours: set[int], theirs: set[int]) -> None:
+        """Whose history is called "ours" cannot change the knowledge that results."""
+        left = merge_module(
+            MemoryType.SEMANTIC, self.composition(*base), self.composition(*ours), self.composition(*theirs)
+        )
+        right = merge_module(
+            MemoryType.SEMANTIC, self.composition(*base), self.composition(*theirs), self.composition(*ours)
+        )
+        assert left is not None
+        assert right is not None
+        assert left.root == right.root
+
+    @given(
+        base=st.sets(st.integers(0, 12), min_size=1, max_size=8),
+        ours=st.sets(st.integers(0, 12), max_size=8),
+        theirs=st.sets(st.integers(0, 12), max_size=8),
+    )
+    def test_exclusion_wins(self, base: set[int], ours: set[int], theirs: set[int]) -> None:
+        """A block one side dropped does not return because the other side still held it."""
+        merged = merge_module(
+            MemoryType.SEMANTIC, self.composition(*base), self.composition(*ours), self.composition(*theirs)
+        )
+        assert merged is not None
+        for dropped in (base - ours) | (base - theirs):
+            assert BlockId.of(str(dropped).encode()) not in merged.block_ids
+
+    @given(
+        base=st.sets(st.integers(0, 12), max_size=8),
+        ours=st.sets(st.integers(0, 12), max_size=8),
+        theirs=st.sets(st.integers(0, 12), max_size=8),
+    )
+    def test_additions_survive(self, base: set[int], ours: set[int], theirs: set[int]) -> None:
+        """Everything either side added is kept, unless the other side had dropped it."""
+        merged = merge_module(
+            MemoryType.SEMANTIC, self.composition(*base), self.composition(*ours), self.composition(*theirs)
+        )
+        assert merged is not None
+        for added in (ours - base) | (theirs - base):
+            assert BlockId.of(str(added).encode()) in merged.block_ids
+
+    def test_absence_of_a_module_is_not_a_removal(self) -> None:
+        """A selective install does not hold every module, and not holding one is not having emptied it --
+        otherwise reconciling from a partial install would delete what it never fetched."""
+        theirs = self.composition(1, 2, 3)
+        merged = merge_module(MemoryType.SEMANTIC, self.composition(1), None, theirs)
+
+        assert merged is not None
+        assert merged.adopted
+        assert merged.root == theirs.root
+
+    def test_an_append_only_module_cannot_be_narrowed_by_a_merge(self) -> None:
+        """No conforming history can have dropped from the episodic module, so one that apparently did is
+        malformed -- and merging it would write the violation into a new root."""
+        base = Composition(MemoryType.EPISODIC, [BlockId.of(b"1"), BlockId.of(b"2")])
+        narrowed = Composition(MemoryType.EPISODIC, [BlockId.of(b"1")])
+
+        with pytest.raises(AppendOnlyViolationError, match="append-only"):
+            merge_module(MemoryType.EPISODIC, base, base, narrowed)

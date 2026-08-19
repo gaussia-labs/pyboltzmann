@@ -41,6 +41,11 @@ class Ledger:
     Attributes:
         locators (dict[BlockId, str]): Where in its source each derived block came from.
         superseded_by (dict[BlockId, BlockId]): Blocks a newer one replaced, and by which.
+        competing (dict[BlockId, set[BlockId]]): Blocks that more than one successor claims to supersede.
+            Two histories can each supersede the same block with a different successor, and both edges are
+            legitimately recorded -- the conflict is a precedence question, not an admissibility one. It
+            lives here rather than being flattened into ``superseded_by``, whose last writer would otherwise
+            win in silence (paper Section 12.4).
         demoted (set[BlockId]): Blocks whose retrieval priority was lowered. Still members, still
             verifiable -- only less accessible (paper Section 10.4).
         evidence (dict[BlockId, list[BlockId]]): What each derived block cites, as recorded.
@@ -55,6 +60,7 @@ class Ledger:
 
     locators: dict[BlockId, str] = field(default_factory=dict)
     superseded_by: dict[BlockId, BlockId] = field(default_factory=dict)
+    competing: dict[BlockId, set[BlockId]] = field(default_factory=dict)
     demoted: set[BlockId] = field(default_factory=set)
     evidence: dict[BlockId, list[BlockId]] = field(default_factory=dict)
     dependents: dict[BlockId, set[BlockId]] = field(default_factory=dict)
@@ -101,6 +107,12 @@ class Ledger:
                 self.dependents.setdefault(cited, set()).add(record.block)
 
         elif isinstance(record, SupersessionRecord):
+            # Recorded before the assignment, so the first successor is compared against rather than
+            # overwritten: whichever arrives second is what makes the precedence ambiguous, and the answer
+            # must not depend on which one that was.
+            held = self.superseded_by.get(record.supersedes)
+            if held is not None and held != record.block:
+                self.competing.setdefault(record.supersedes, {held}).add(record.block)
             self.superseded_by[record.supersedes] = record.block
 
         elif isinstance(record, DemotionRecord):
@@ -135,6 +147,47 @@ class Ledger:
             found |= discovered
             frontier = discovered
         return found
+
+    def successors_of(self, block_id: BlockId) -> set[BlockId]:
+        """
+        Every block recorded as superseding one block.
+
+        Ordinarily one, or none. More than one means two histories each replaced it with something
+        different, which is a precedence question a reconciliation has to settle rather than absorb.
+
+        Args:
+            block_id (BlockId): The block being superseded.
+
+        Returns:
+            set[BlockId]: Its recorded successors.
+        """
+        contested = self.competing.get(block_id)
+        if contested is not None:
+            return set(contested)
+        held = self.superseded_by.get(block_id)
+        return {held} if held is not None else set()
+
+    def contested(self, block_id: BlockId) -> set[BlockId]:
+        """The successors of a block whose precedence is still open.
+
+        Two histories replacing the same block with different successors leaves two edges, and both stay
+        recorded -- the record of what happened is not what gets resolved. What resolves is the precedence,
+        and the only way this architecture states precedence is a supersession edge, so a tie broken in favour
+        of one successor appears here as the other one being superseded in turn.
+
+        A settled question therefore returns nothing, which is what makes it possible to ask twice.
+
+        Args:
+            block_id (BlockId): The block being superseded.
+
+        Returns:
+            set[BlockId]: The successors still competing, or empty when there is one answer or none.
+        """
+        successors = self.successors_of(block_id)
+        if len(successors) < 2:
+            return set()
+        standing = {block for block in successors if self.superseded_by.get(block) not in successors}
+        return standing if len(standing) > 1 else set()
 
     def made_by(self, producer: Producer) -> set[BlockId]:
         """

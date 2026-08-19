@@ -15,8 +15,9 @@ The surface is split because *read* and *extend* are separable, and most consume
 * :class:`BrainReader` -- discovery, resolution, verification, query.
 * :class:`BrainWriter` -- ingestion: register, delegate, validate, commit.
 * :class:`BrainRetention` -- drop, supersede, prune, redact.
-* :class:`BrainDistribution` -- pack, push, pull.
-* :class:`BoltzmannProtocol` -- all four, for an implementation that offers everything.
+* :class:`BrainDistribution` -- pack, push, pull, fetch.
+* :class:`BrainReconciliation` -- merge, rebase, squash, and resolving what did not apply.
+* :class:`BoltzmannProtocol` -- all five, for an implementation that offers everything.
 
 A read-only client that satisfies :class:`BrainReader` is conforming. It does not have to pretend to
 support writes it will refuse.
@@ -36,7 +37,7 @@ if TYPE_CHECKING:
     from boltzmann.blocks.base import Block
     from boltzmann.blocks.memory_type import MemoryType
     from boltzmann.distribution.manifest import BrainManifest
-    from boltzmann.distribution.registry import RegistryClient
+    from boltzmann.distribution.registry import FetchResult, RegistryClient
     from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
     from boltzmann.indices.base import Index, IndexKind
     from boltzmann.ingest.commit import CommitResult
@@ -49,6 +50,8 @@ if TYPE_CHECKING:
     from boltzmann.module.snapshot import Snapshot
     from boltzmann.query.evidence import EvidenceBundle
     from boltzmann.query.request import Query
+    from boltzmann.reconcile.requests import ReconcilePlan, ReconcileRequest, ReconcileResult
+    from boltzmann.reconcile.resolution import ReconcileStatus, ResolutionKind
     from boltzmann.retention.requests import (
         DropRequest,
         DropResult,
@@ -424,8 +427,9 @@ class BrainDistribution(Protocol):
         Publish the current snapshot, refusing to overwrite work it does not contain.
 
         A conforming implementation must not silently drop a remote snapshot that is absent from the
-        local history. The paper does not define a merge for divergent brains, so the safe behavior is
-        to refuse and say where the two parted.
+        local history: it must refuse and say where the two parted. Detecting divergence is where this
+        operation's obligation ends, not where the protocol stops -- deciding what to do next is
+        :class:`BrainReconciliation`.
 
         Args:
             client (RegistryClient): The transport.
@@ -462,9 +466,204 @@ class BrainDistribution(Protocol):
         """
         ...
 
+    async def fetch(
+        self,
+        client: RegistryClient,
+        reference: str,
+        tag: str,
+        modules: Iterable[MemoryType] | None = None,
+    ) -> FetchResult:
+        """
+        Retrieve a remote history without moving the local pointer.
+
+        Separate from ``pull`` because incorporating a contribution has a step at which nothing has
+        changed yet: the maintainer holds two histories locally while the published brain is untouched,
+        and only then judges the incoming blocks (paper Section 12.6). An operation that had to adopt a
+        history in order to inspect it could not express that step.
+
+        Args:
+            client (RegistryClient): The transport.
+            reference (str): Repository reference.
+            tag (str): Which version to retrieve.
+            modules (Iterable[MemoryType] | None): Which modules are wanted.
+
+        Returns:
+            FetchResult: The remote head, its digest, and what it holds that the local brain does not.
+        """
+        ...
+
 
 @runtime_checkable
-class BoltzmannProtocol(BrainReader, BrainWriter, BrainRetention, BrainDistribution, Protocol):
+class BrainReconciliation(Protocol):
+    """Joining two histories that advanced from a common ancestor (paper Section 12).
+
+    Optional, and separable for the same reason reading and writing are: a consumer that installs and
+    queries never reconciles anything. An implementation that offers ``push`` must still *detect*
+    divergence and refuse -- that duty belongs to :class:`BrainDistribution` -- and offering these
+    operations is what turns the refusal into something a maintainer can act on.
+
+    The three strategies are one computation and three ways of recording it. They produce the same set of
+    blocks, so an implementation must not choose between them on the caller's behalf, and must report the
+    attribution consequence of the choice rather than let it happen silently.
+
+    A conflict here is a validation failure rather than a differencing failure, so what an implementation owes
+    an operator is the verdicts and a way to answer them -- not a merged state with markers in it. There is
+    nothing to hand-edit: the unit is an immutable block, and the only questions are whether it enters and,
+    where two histories disagree about precedence, which one wins.
+    """
+
+    def plan_reconcile(
+        self,
+        theirs: OciDigest,
+        ancestor: OciDigest | None = None,
+    ) -> ReconcilePlan:
+        """
+        Report what joining another history would produce, without writing anything.
+
+        Must identify a common ancestor and must refuse with a distinguishable failure when the two
+        histories share none: without one, a block present on one side and absent on the other is
+        ambiguous between "they added it" and "I dropped it", and those demand opposite outcomes.
+
+        Must judge every incoming block, so which parts of a contribution fit is known before anything is
+        decided rather than inferred by reading a diff.
+
+        Args:
+            theirs (OciDigest): The other history's head, already held locally.
+            ancestor (OciDigest | None): The snapshot to reconcile against, if known.
+
+        Returns:
+            ReconcilePlan: What would happen, and what each strategy would cost.
+        """
+        ...
+
+    def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+        """
+        Join another history into this one, recording it the way the request asks.
+
+        The structural reconciliation is set arithmetic over immutable blocks and is automatic; its result
+        must then be validated as if it were an ingestion, and must not be committed while any candidate is
+        still ``PENDING_REVIEW``. Only validated blocks enter the reconciled composition.
+
+        Args:
+            request (ReconcileRequest): Which history to join, how to record it, by whom, and why.
+
+        Returns:
+            ReconcileResult: What was committed.
+        """
+        ...
+
+    def reconcile_status(self) -> ReconcileStatus | None:
+        """
+        Report the reconciliation being resolved, if there is one.
+
+        Returns:
+            ReconcileStatus | None: What is open and what has been decided, or ``None`` if nothing is in
+            progress.
+        """
+        ...
+
+    def reconcile_resolve(
+        self,
+        block: BlockId,
+        kind: ResolutionKind,
+        prefer: BlockId | None = None,
+    ) -> ReconcileStatus:
+        """
+        Decide one of the questions a halted reconciliation is holding.
+
+        An implementation **must not** admit a block whose cited evidence is absent from the reconciled
+        composition, by this route or any other. Rejection there is not a policy preference: a derived block
+        that cannot be audited against its source breaks R1, and no later check recovers it, because verifying
+        a brain recomputes hashes and compositions rather than citations across modules. What an
+        implementation offers instead is the operation that fixes the cause.
+
+        Admitting a contradiction is a different matter and must be available: Section 12.4 treats a
+        contradiction as information rather than a defect, so holding two claims that disagree is a state the
+        protocol permits and a decision it does not make.
+
+        Args:
+            block (BlockId): Which incoming block to decide.
+            kind (ResolutionKind): What to do with it.
+            prefer (BlockId | None): The winning successor, for a precedence question.
+
+        Returns:
+            ReconcileStatus: The state after recording it.
+        """
+        ...
+
+    def reconcile_continue(self) -> ReconcileResult:
+        """
+        Conclude the reconciliation now that its questions are answered.
+
+        Must refuse while any candidate is undecided, for the reason Section 12.4 gives: the protocol declined
+        to decide, and committing would decide for it.
+
+        Returns:
+            ReconcileResult: What was committed.
+        """
+        ...
+
+    def reconcile_abort(self) -> None:
+        """
+        Abandon the reconciliation being resolved.
+
+        Nothing is undone, because a halted reconciliation never wrote a composition or moved the pointer.
+        """
+        ...
+
+    def merge(self, theirs: OciDigest, reason: str) -> ReconcileResult:
+        """
+        Reconcile into a snapshot naming both histories as parents.
+
+        The only strategy that keeps the other side's snapshots in the history, and therefore the only one
+        under which a signature they made still covers something.
+
+        Args:
+            theirs (OciDigest): The other history's head.
+            reason (str): Why.
+
+        Returns:
+            ReconcileResult: What was committed.
+        """
+        ...
+
+    def rebase(self, theirs: OciDigest, reason: str) -> ReconcileResult:
+        """
+        Reconcile by replaying the other history onto this one, minting new snapshot identities.
+
+        Deterministic, because a snapshot is a complete statement of composition rather than a patch. It
+        invalidates signatures over the originals and any root already published, so it is legitimate only
+        before publication -- the same rule as any lineage rewrite.
+
+        Args:
+            theirs (OciDigest): The other history's head.
+            reason (str): Why.
+
+        Returns:
+            ReconcileResult: What was committed.
+        """
+        ...
+
+    def squash(self, theirs: OciDigest, reason: str) -> ReconcileResult:
+        """
+        Reconcile by collapsing the other history's snapshots into one.
+
+        Must preserve every provenance record the collapsed snapshots produced: an implementation that
+        discarded provenance while collapsing snapshots would be destroying the audit ledger to tidy a
+        chain.
+
+        Args:
+            theirs (OciDigest): The other history's head.
+            reason (str): Why.
+
+        Returns:
+            ReconcileResult: What was committed.
+        """
+        ...
+
+
+@runtime_checkable
+class BoltzmannProtocol(BrainReader, BrainWriter, BrainRetention, BrainDistribution, BrainReconciliation, Protocol):
     """An implementation that offers the whole protocol.
 
     Conforming to this is not required. A read-only client satisfies :class:`BrainReader` and is
