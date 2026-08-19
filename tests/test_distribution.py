@@ -14,7 +14,12 @@ from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind
 from boltzmann.brain import Brain, Origin
 from boltzmann.distribution.layers import pack_module, required_blobs, unpack_layer
 from boltzmann.distribution.local import LocalLayoutRegistry
-from boltzmann.distribution.media_types import ARTIFACT_TYPE, REF_NAME_ANNOTATION, memory_type_of
+from boltzmann.distribution.media_types import (
+    ANNOTATION_SNAPSHOT_COUNT,
+    ARTIFACT_TYPE,
+    REF_NAME_ANNOTATION,
+    memory_type_of,
+)
 from boltzmann.exceptions import DistributionError, ReferenceNotFoundError
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
@@ -131,11 +136,22 @@ class TestPack:
 
     def test_one_layer_per_installed_module(self, tmp_path: Path, request_: RegistrationRequest) -> None:
         manifest = seeded(tmp_path / "brain", request_).pack(tag="v1")
-        assert {memory_type_of(layer.media_type) for layer in manifest.layers} == {
+        assert {memory_type_of(layer.media_type) for layer in manifest.layers if not layer.is_history} == {
             MemoryType.CANONICAL,
             MemoryType.SEMANTIC,
             MemoryType.PROVENANCE,
         }
+
+    def test_the_history_travels_as_its_own_layer(self, tmp_path: Path, request_: RegistrationRequest) -> None:
+        """A snapshot names its parents, so an artifact that published only its head would name documents
+        the consumer cannot resolve."""
+        brain = seeded(tmp_path / "brain", request_)
+        manifest = brain.pack(tag="v1")
+
+        history = manifest.history
+        assert history is not None
+        assert history.annotations[ANNOTATION_SNAPSHOT_COUNT] == str(len(brain.reachable_history()))
+        assert manifest.modules == brain.snapshot().installed  # the history layer is not a module
 
     def test_each_layer_carries_its_modules_root(self, tmp_path: Path, request_: RegistrationRequest) -> None:
         """The descriptor's digest names the file; the annotation names the composition inside it."""
@@ -392,7 +408,7 @@ class TestDivergence:
 
         assert target.origin is not None
         assert target.origin.partial
-        with pytest.raises(DistributionError, match="installed partially"):
+        with pytest.raises(DistributionError, match="which this snapshot does not name"):
             await target.push(registry, tag="v1")
 
     async def test_a_partial_install_may_be_published_elsewhere(

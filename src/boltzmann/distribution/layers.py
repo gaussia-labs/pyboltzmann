@@ -30,12 +30,18 @@ from typing import TYPE_CHECKING
 from boltzmann.exceptions import DistributionError
 from boltzmann.identity.digest import BlockId, Digest, OciDigest
 from boltzmann.module.composition import Composition
+from boltzmann.module.snapshot import Snapshot
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from boltzmann.module.module import Module
     from boltzmann.store.base import BlockStore
 
 COMPOSITION_ENTRY = "composition.json"
+
+SNAPSHOT_PREFIX = "snapshots/"
+"""Prefix of a history layer entry, one per snapshot document."""
 """Name of the composition document inside a layer."""
 
 BLOB_PREFIX = "blobs/"
@@ -129,6 +135,72 @@ def pack_module(module: Module) -> bytes:
     with gzip.GzipFile(fileobj=compressed, mode="wb", compresslevel=GZIP_LEVEL, mtime=0) as stream:
         stream.write(raw.getvalue())
     return compressed.getvalue()
+
+
+def pack_history(documents: Iterable[bytes]) -> bytes:
+    """
+    Pack a set of snapshot documents into the history layer.
+
+    Order is by digest rather than by chain position, so two clients publishing the same history produce
+    byte-identical layers and the registry deduplicates them -- the same reason a composition's leaves are
+    sorted. The chain is not lost by sorting it: each document names its own parents.
+
+    Args:
+        documents (Iterable[bytes]): The snapshot documents, as stored.
+
+    Returns:
+        bytes: The gzipped tar.
+    """
+    payloads = {OciDigest.of(document): document for document in documents}
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        for digest in sorted(payloads, key=lambda value: value.hex):
+            _add(archive, f"{SNAPSHOT_PREFIX}{digest.hex}", payloads[digest])
+
+    compressed = io.BytesIO()
+    with gzip.GzipFile(fileobj=compressed, mode="wb", compresslevel=GZIP_LEVEL, mtime=0) as stream:
+        stream.write(raw.getvalue())
+    return compressed.getvalue()
+
+
+def unpack_history(data: bytes, store: BlockStore, max_size: int | None = None) -> list[OciDigest]:
+    """
+    Unpack a history layer into a store.
+
+    Every document is written through the store's content-addressed put and parsed as a snapshot, so a
+    layer whose bytes were tampered with cannot land under the digest a lineage names, and one carrying
+    something that is not a snapshot is refused rather than filed away to fail later.
+
+    Args:
+        data (bytes): The layer blob.
+        store (BlockStore): Where to write the documents.
+        max_size (int | None): Most bytes the layer may decompress to. Defaults to the ratio bound.
+
+    Returns:
+        list[OciDigest]: The snapshots now resolvable, in the order the layer carried them.
+
+    Raises:
+        DistributionError: If the layer is malformed, expands past the bound, or carries an entry that is
+            not a snapshot document.
+    """
+    limit = max_size if max_size is not None else len(data) * MAX_EXPANSION_RATIO
+    written = []
+    with tarfile.open(fileobj=io.BytesIO(_inflate(data, limit)), mode="r:") as archive:
+        for info in archive.getmembers():
+            if not info.isfile() or not info.name.startswith(SNAPSHOT_PREFIX):
+                continue
+            handle = archive.extractfile(info)
+            if handle is None:
+                continue
+            payload = handle.read()
+            try:
+                Snapshot.model_validate_json(payload)
+            except ValueError as error:
+                raise DistributionError(
+                    f"history layer entry {info.name} is not a snapshot document: {error}"
+                ) from error
+            written.append(store.put_bytes(payload))
+    return written
 
 
 def _add(archive: tarfile.TarFile, name: str, payload: bytes) -> None:

@@ -43,7 +43,7 @@ from boltzmann.blocks.provenance import (
     SupersessionRecord,
 )
 from boltzmann.constants import PROTOCOL_VERSION
-from boltzmann.distribution.layers import pack_module, unpack_layer
+from boltzmann.distribution.layers import pack_history, pack_module, unpack_history, unpack_layer
 from boltzmann.distribution.manifest import (
     BrainManifest,
     Descriptor,
@@ -64,7 +64,7 @@ from boltzmann.distribution.media_types import (
     REF_NAME_ANNOTATION,
     VECTOR_INDEX_MEDIA_TYPE,
 )
-from boltzmann.distribution.registry import InstallPlan
+from boltzmann.distribution.registry import FetchResult, InstallPlan
 from boltzmann.exceptions import (
     BlockNotFoundError,
     DistributionError,
@@ -1648,6 +1648,10 @@ class Brain:
             if index_layer is not None:
                 layers.append(index_layer)
 
+        history = self._pack_history()
+        if history is not None:
+            layers.append(history)
+
         projected = self._projection(published)
         config_bytes = projected.canonical_bytes()
         config = Descriptor(
@@ -1708,6 +1712,29 @@ class Brain:
             created_at=self._snapshot.created_at,
             labels=self._snapshot.labels,
         )
+
+    def _pack_history(self) -> Descriptor | None:
+        """A layer carrying this brain's snapshot documents, or ``None`` for a brain with no history yet.
+
+        Published for the same reason a composition document is: the identity commits to something a
+        consumer would otherwise be unable to reopen. A snapshot names its parents, and if only the head
+        travels, those names resolve to nothing on the receiving side -- so the chain an audit walks stops
+        at one link, and reconciliation is impossible for anyone but the publisher, because finding the
+        ancestor two histories share means reading parents.
+
+        The whole reachable history goes, not a recent window. A cutoff would decide, on the publisher's
+        behalf, how far back a consumer is allowed to reconcile from -- and the thing being bounded is a
+        few hundred bytes per version, against module layers that carry the knowledge itself.
+        """
+        documents = [
+            self.store.get_bytes(digest)
+            for digest in sorted(self.reachable_history(), key=lambda value: value.hex)
+            if self.store.is_resolvable(digest)
+        ]
+        if not documents:
+            return None
+        payload = pack_history(documents)
+        return Descriptor.for_history(self.store.put_bytes(payload), len(payload), len(documents))
 
     def _pack_index(self, memory_type: MemoryType, reference: ModuleRef) -> Descriptor | None:
         """A layer for the one index kind a consumer cannot rebuild, or ``None`` if there is none.
@@ -1901,21 +1928,102 @@ class Brain:
             DistributionError: If a wanted module is not in the artifact, a wanted module uses a block
                 schema this client does not implement, or a layer does not verify.
         """
+        manifest, remote, references, _ = await self._retrieve(client, reference, tag, modules)
+        wanted = [reference_.memory_type for reference_ in references]
+
+        for memory_type in wanted:
+            # The one derived structure a model-agnostic client cannot rebuild, so it travels.
+            index_layer = manifest.vector_index_for(memory_type)
+            if index_layer is not None and not ignore_vector_indices:
+                if not self.store.is_resolvable(index_layer.digest):
+                    await client.pull_blob(reference, index_layer.digest, self.store)
+                self._load_index(memory_type, index_layer)
+
+        complete = set(wanted) == set(manifest.modules)
+        if complete:
+            # Adopt the remote document verbatim. Rebuilding an equivalent one would give it a fresh
+            # ``created_at`` and therefore a different digest, and the fast-forward check compares
+            # digests -- so a push back to the same tag would look like a divergence when nothing
+            # diverged at all.
+            installed = remote
+        else:
+            # Chained to the version it was taken from, not parentless. A partial install *succeeds* that
+            # version -- same roots, fewer modules -- and a snapshot that recorded no parent would leave a
+            # consumer holding knowledge with no recorded origin, unable to say what it was installed from
+            # and unable to be reconciled with the history it came from (paper Section 12.8).
+            source = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
+            published = OciDigest.parse(source) if source else manifest.config.digest
+            installed = Snapshot(
+                boltzmann=remote.boltzmann,
+                modules={reference_.memory_type: reference_ for reference_ in references},
+                parents=[published] if self.store.is_resolvable(published) else [],
+                labels=remote.labels,
+            )
+
+        origin = Origin(
+            reference=reference,
+            tag=tag,
+            snapshot=manifest.config.digest,
+            partial=not complete,
+        )
+        advanced = self._advance(installed, origin=origin)
+
+        # Record the artifact in the layout, the way ``pack`` does. Without it, everything the manifest
+        # knows is lost when this process ends -- and the one thing only the manifest knows is where the
+        # travelling index lives, which is exactly the thing no client can rebuild.
+        document = manifest.to_bytes()
+        self._write_index(self.store.put_bytes(document), len(document), tag)
+
+        # What ``plan_pull`` reported under ``rebuild_indices``, actually done. The travelling index was
+        # loaded above because no client can regenerate it; the structural ones are regenerated here,
+        # because a consumer that installed a version and then searched it would otherwise query indices
+        # that hold the version it had before the pull -- or nothing at all.
+        self.rebuild_indices(wanted)
+        return advanced
+
+    async def _retrieve(
+        self,
+        client: RegistryClient,
+        reference: str,
+        tag: str,
+        modules: Iterable[MemoryType] | None = None,
+    ) -> tuple[BrainManifest, Snapshot, list[ModuleRef], dict[MemoryType, list[BlockId]]]:
+        """Download a published history's modules into the store, verifying each against the snapshot
+        that names it.
+
+        Writes content-addressed blobs and nothing else: no pointer move, no index work, no state. That
+        is what lets ``pull`` and ``fetch`` share it -- the difference between them is entirely what
+        happens *after* the bytes land.
+
+        Returns:
+            tuple: The manifest, the remote snapshot, the module references retrieved in the order they
+            were asked for, and the blocks each module's layer actually contributed to this store.
+        """
         manifest = await client.resolve(reference, tag)
         wanted = list(modules) if modules is not None else manifest.modules
         self._require_carried(manifest, wanted)
         # Before the config blob, which is the first thing this method would otherwise download. A
         # brain whose blocks this client has no schema for is not installable, and finding that out
         # from a decode failure means finding it out after the transfer -- or later still, since
-        # ``rebuild_indices`` below only decodes for a module with a rebuildable index registered, so
-        # a client with none installs the artifact cleanly and fails at the first query instead.
+        # ``rebuild_indices`` only decodes for a module with a rebuildable index registered, so a
+        # client with none installs the artifact cleanly and fails at the first query instead.
         require_supported_schemas(manifest, wanted)
 
         if not self.store.is_resolvable(manifest.config.digest):
             await client.pull_blob(reference, manifest.config.digest, self.store)
         remote = Snapshot.model_validate_json(self.store.get_bytes(manifest.config.digest))
 
-        references = []
+        # Before the modules, because it is what makes the retrieved snapshot's parents resolvable, and a
+        # caller that fetched a history in order to reconcile against it needs that whether or not the
+        # module layers turn out to verify.
+        history = manifest.history
+        if history is not None:
+            if not self.store.is_resolvable(history.digest):
+                await client.pull_blob(reference, history.digest, self.store)
+            unpack_history(self.store.get_bytes(history.digest), self.store)
+
+        references: list[ModuleRef] = []
+        incoming: dict[MemoryType, list[BlockId]] = {}
         for memory_type in wanted:
             layer = manifest.layer_for(memory_type)
             assert layer is not None  # checked above
@@ -1945,47 +2053,65 @@ class Brain:
                 )
             references.append(expected)
 
-            # The one derived structure a model-agnostic client cannot rebuild, so it travels.
-            index_layer = manifest.vector_index_for(memory_type)
-            if index_layer is not None and not ignore_vector_indices:
-                if not self.store.is_resolvable(index_layer.digest):
-                    await client.pull_blob(reference, index_layer.digest, self.store)
-                self._load_index(memory_type, index_layer)
+            # Against the installed composition rather than against the store, because that is the
+            # question a caller has: what does this history hold that mine does not. A block the store
+            # happens to keep from a version that dropped it is not something this history contributed.
+            held = self._module_or_empty(memory_type)
+            incoming[memory_type] = [block_id for block_id in composition.block_ids if block_id not in held]
 
-        complete = set(wanted) == set(manifest.modules)
-        if complete:
-            # Adopt the remote document verbatim. Rebuilding an equivalent one would give it a fresh
-            # ``created_at`` and therefore a different digest, and the fast-forward check compares
-            # digests -- so a push back to the same tag would look like a divergence when nothing
-            # diverged at all.
-            installed = remote
-        else:
-            installed = Snapshot(
-                boltzmann=remote.boltzmann,
-                modules={reference_.memory_type: reference_ for reference_ in references},
-                labels=remote.labels,
-            )
+        return manifest, remote, references, incoming
 
-        origin = Origin(
+    async def fetch(
+        self,
+        client: RegistryClient,
+        reference: str,
+        tag: str,
+        modules: Iterable[MemoryType] | None = None,
+    ) -> FetchResult:
+        """
+        Retrieve a remote history without moving the local pointer.
+
+        This is the step at which *nothing has changed yet* (paper Section 12.6). The blocks and the
+        remote snapshot document land in the store, so both histories are readable locally, while the
+        current snapshot -- and a published brain -- stay exactly as they were. It is the operation
+        incorporating a contribution needs, and the reason it is separate from ``pull``: judging an
+        incoming history should not require adopting it first.
+
+        Because everything is content-addressed, the transfer is only the delta. A contributor's brain
+        shares every block reachable from the snapshot they started at with this one, byte for byte, so
+        only genuinely new blocks and the new snapshot move.
+
+        No index is touched. A travelling vector index is bound to the root it was built over, and
+        loading one for a history that is not installed would leave this brain holding an index bound to
+        a root its snapshot does not name -- the stale-index failure. Indices are rebuilt if and when a
+        reconciliation is committed.
+
+        Args:
+            client (RegistryClient): The transport.
+            reference (str): Repository reference.
+            tag (str): Which version to retrieve.
+            modules (Iterable[MemoryType] | None): Which modules are wanted. Defaults to everything the
+                artifact carries.
+
+        Returns:
+            FetchResult: The remote head, its digest, and what actually moved.
+
+        Raises:
+            DistributionError: If a wanted module is not in the artifact, a wanted module uses a block
+                schema this client does not implement, or a layer does not verify against the snapshot
+                that names it.
+        """
+        manifest, remote, references, incoming = await self._retrieve(client, reference, tag, modules)
+        # The remote snapshot document has to stay resolvable for a common-ancestor search to walk its
+        # parents, and ``_retrieve`` already wrote it: it is the config blob.
+        return FetchResult(
             reference=reference,
             tag=tag,
-            snapshot=manifest.config.digest,
-            partial=not complete,
+            snapshot=remote,
+            digest=manifest.config.digest,
+            modules=[reference_.memory_type for reference_ in references],
+            incoming=incoming,
         )
-        advanced = self._advance(installed, origin=origin)
-
-        # Record the artifact in the layout, the way ``pack`` does. Without it, everything the manifest
-        # knows is lost when this process ends -- and the one thing only the manifest knows is where the
-        # travelling index lives, which is exactly the thing no client can rebuild.
-        document = manifest.to_bytes()
-        self._write_index(self.store.put_bytes(document), len(document), tag)
-
-        # What ``plan_pull`` reported under ``rebuild_indices``, actually done. The travelling index was
-        # loaded above because no client can regenerate it; the structural ones are regenerated here,
-        # because a consumer that installed a version and then searched it would otherwise query indices
-        # that hold the version it had before the pull -- or nothing at all.
-        self.rebuild_indices(wanted)
-        return advanced
 
     async def push(
         self,
@@ -2025,7 +2151,7 @@ class Brain:
             raise DistributionError("this brain has no snapshot to publish")
 
         if not force:
-            self._require_not_narrowing(target, target_tag)
+            await self._require_not_narrowing(client, target, target_tag)
             await self._require_fast_forward(client, target, target_tag)
 
         manifest = self.pack(tag=target_tag, modules=modules)
@@ -2057,22 +2183,33 @@ class Brain:
             )
         return target, target_tag
 
-    def _require_not_narrowing(self, reference: str, tag: str) -> None:
-        """Refuse to republish a partial install over the tag it came from.
+    async def _require_not_narrowing(self, client: RegistryClient, reference: str, tag: str) -> None:
+        """Refuse to publish over a tag naming modules this snapshot omits.
 
-        The modules that were never fetched would silently disappear from the artifact. Publishing the
-        same partial brain somewhere *else* is legitimate -- a semantic-only brain is a valid artifact --
-        so only the same reference and tag are refused.
+        Those modules would silently disappear from the artifact. Stated over the snapshot rather than over
+        the install: what makes a publish dangerous is that it names less than what is there, and whether
+        the local brain happens to have been installed partially is a different question with a different
+        answer (paper Section 12.8).
+
+        The distinction matters because reconciliation resolves this case instead of working around it. A
+        partial install that reconciles with the remote head takes the roots of the modules it does not hold
+        from the remote unchanged, so the snapshot it then publishes names every module the remote named --
+        and refusing that push, as a check keyed on ``origin.partial`` would, would forbid the very
+        operation the protocol defines for it.
         """
-        origin = self.origin
-        if origin is None or not origin.partial:
-            return
-        if (reference, tag) == (origin.reference, origin.tag):
-            installed = ", ".join(kind.value for kind in self._snapshot.installed)
+        try:
+            manifest = await client.resolve(reference, tag)
+        except ReferenceNotFoundError:
+            return  # Nothing is published here, so nothing can be narrowed.
+
+        omitted = [kind.value for kind in manifest.modules if not self._snapshot.has_module(kind)]
+        if omitted:
+            installed = ", ".join(kind.value for kind in self._snapshot.installed) or "none"
             raise DistributionError(
-                f"this brain was installed partially ({installed}) from {reference}:{tag}; republishing it "
-                f"there would drop the modules that were never fetched. Push to a different tag, pull the "
-                f"rest first, or pass force=True."
+                f"{reference}:{tag} carries {', '.join(omitted)}, which this snapshot does not name (it names "
+                f"{installed}); publishing it there would drop them. Reconcile with the remote head first -- "
+                f"the modules this brain does not hold then take their roots from it unchanged -- or push to "
+                f"a different tag, or pass force=True."
             )
 
     async def _require_fast_forward(self, client: RegistryClient, reference: str, tag: str) -> None:
