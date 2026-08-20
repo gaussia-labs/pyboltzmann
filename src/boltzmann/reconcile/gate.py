@@ -27,11 +27,13 @@ written by the protocol, so neither is anyone's proposal to accept or refuse on 
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import SupersessionRecord
 from boltzmann.exceptions import BlockError, BlockSchemaError
@@ -41,15 +43,10 @@ from boltzmann.ingest.task import PROPOSABLE_MEMORY_TYPES
 from boltzmann.ingest.validation import ValidationIssue, ValidationStatus, Validator
 from boltzmann.ingest.validators import CONTRADICTION_CODES, DEFAULT_VALIDATORS, REVIEW_CODES, DuplicateValidator
 from boltzmann.merkle.tree import sorted_leaves
+from boltzmann.module.composition import Composition
+from boltzmann.module.ledger import Ledger
 from boltzmann.module.module import Module
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from boltzmann.blocks.base import Block
-    from boltzmann.module.composition import Composition
-    from boltzmann.module.ledger import Ledger
-    from boltzmann.store.base import BlockStore
+from boltzmann.store.base import BlockStore
 
 INTEGRITY_CODE = "block-unreadable"
 """Issue code for an incoming block that does not decode, resolve, or hash to its identity."""

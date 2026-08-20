@@ -22,7 +22,6 @@ which is an ordinary commit and belongs outside the reconciliation.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -31,10 +30,8 @@ from boltzmann.blocks.provenance import Actor
 from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.identity.digest import BlockId, OciDigest
 from boltzmann.identity.time import Timestamp, utc_timestamp
+from boltzmann.ingest.validation import ValidationStatus
 from boltzmann.reconcile.requests import ReconcilePlan, ReconcileStrategy
-
-if TYPE_CHECKING:
-    from boltzmann.ingest.validation import ValidationStatus
 
 
 class ResolutionKind(StrEnum):

@@ -26,16 +26,14 @@ are views that can be rebuilt, not content that a root commits to.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from boltzmann.exceptions import BlockNotFoundError, BlockTombstonedError, ModuleError
 from boltzmann.identity.digest import Digest, OciDigest
 from boltzmann.identity.hashing import ALGORITHM
 from boltzmann.store.base import AbstractBlockStore
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 IMAGE_LAYOUT_VERSION = "1.0.0"
 """Version of the OCI Image Layout specification this store writes."""

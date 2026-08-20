@@ -20,16 +20,12 @@ because ``Block.registry()`` deliberately hands out a copy.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Iterator
 
 import pytest
 
 from boltzmann.blocks import base
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
-
-    from boltzmann.blocks.memory_type import MemoryType
+from boltzmann.blocks.memory_type import MemoryType
 
 
 @pytest.fixture(autouse=True)

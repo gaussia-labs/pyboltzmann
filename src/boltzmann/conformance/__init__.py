@@ -11,24 +11,14 @@ callers it exists for -- and a plain ``pip install pyboltzmann`` is what those c
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from boltzmann.conformance import golden
 
-if TYPE_CHECKING:
-    from boltzmann.conformance.suite import (
-        BlockStoreConformance,
-        BrainReaderConformance,
-        CompositionConformance,
-        IdentityConformance,
-        MerkleConformance,
-        ReconciliationConformance,
-        sample_blocks,
-        sample_canonical,
-        sample_semantic,
-        sample_semantic_v2,
-    )
-
+# Every name below is resolved by ``__getattr__``, never imported here. Importing them at module level
+# would pull in ``suite``, which imports pytest -- and pytest is an optional extra, so the cross-language
+# half of this kit would stop being importable on a plain install. That is what the tests in
+# ``test_golden_vectors.py`` pin.
 _PYTEST_BACKED = frozenset(
     {
         "BlockStoreConformance",

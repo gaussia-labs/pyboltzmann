@@ -14,17 +14,15 @@ immediately usable.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from boltzmann.blocks.memory_type import MemoryType
+from boltzmann.distribution.manifest import BrainManifest
 from boltzmann.identity.digest import BlockId, OciDigest
 from boltzmann.module.snapshot import Snapshot
-
-if TYPE_CHECKING:
-    from boltzmann.distribution.manifest import BrainManifest
-    from boltzmann.store.base import BlockStore
+from boltzmann.store.base import BlockStore
 
 
 class InstallPlan(BaseModel):

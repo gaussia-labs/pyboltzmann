@@ -27,15 +27,12 @@ rather than a descent through stored nodes -- see :mod:`boltzmann.merkle.diff`.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
 
 from boltzmann.exceptions import MerkleError
 from boltzmann.identity.digest import BlockId, MerkleRoot
 from boltzmann.identity.hashing import hash_empty, hash_leaf, hash_node
 from boltzmann.merkle.proof import InclusionProof
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
 
 LAYOUT_NAME = "rfc6962-sorted/1"
 """Identifier of this layout, recorded alongside a snapshot.

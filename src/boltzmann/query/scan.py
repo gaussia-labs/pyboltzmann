@@ -36,23 +36,18 @@ rather than only in a derived index:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+from boltzmann.blocks.base import Block
 from boltzmann.blocks.canonical import CanonicalBlock
 from boltzmann.blocks.episodic import EpisodicBlock
+from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.procedural import ProceduralBlock
 from boltzmann.blocks.semantic import SemanticBlock
 from boltzmann.exceptions import DigestFormatError, DigestKindError
 from boltzmann.identity.digest import BlockId
 from boltzmann.module.ledger import Ledger
+from boltzmann.module.module import Module
 from boltzmann.query.evidence import EvidenceBundle, Match, SourceRef
-from boltzmann.query.request import RetrievalMode
-
-if TYPE_CHECKING:
-    from boltzmann.blocks.base import Block
-    from boltzmann.blocks.memory_type import MemoryType
-    from boltzmann.module.module import Module
-    from boltzmann.query.request import Query, QueryFilters
+from boltzmann.query.request import Query, QueryFilters, RetrievalMode
 
 SCORE_PRECISION = 2
 """Decimal places in the coverage score. A string, because a wire format should not carry a float."""

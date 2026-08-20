@@ -25,18 +25,14 @@ from __future__ import annotations
 import gzip
 import io
 import tarfile
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
 
 from boltzmann.exceptions import DistributionError
 from boltzmann.identity.digest import BlockId, Digest, OciDigest
 from boltzmann.module.composition import Composition
+from boltzmann.module.module import Module
 from boltzmann.module.snapshot import Snapshot
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
-
-    from boltzmann.module.module import Module
-    from boltzmann.store.base import BlockStore
+from boltzmann.store.base import BlockStore
 
 COMPOSITION_ENTRY = "composition.json"
 

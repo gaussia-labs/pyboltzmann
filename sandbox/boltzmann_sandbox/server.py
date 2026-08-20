@@ -22,11 +22,15 @@ import argparse
 import sys
 import threading
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import Annotated, Any
 
+from boltzmann.brain import Brain
+from boltzmann.distribution.oras_client import OrasRegistryClient
+from boltzmann.ingest.task import ProcessingTask
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
@@ -35,13 +39,6 @@ from pydantic import Field
 from boltzmann_sandbox import wire
 from boltzmann_sandbox.brain import open_brain, registry_client
 from boltzmann_sandbox.config import ConfigError, Settings, load
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
-
-    from boltzmann.brain import Brain
-    from boltzmann.distribution.oras_client import OrasRegistryClient
-    from boltzmann.ingest.task import ProcessingTask
 
 INSTRUCTIONS = """A Boltzmann brain: portable, verifiable, model-agnostic knowledge.
 

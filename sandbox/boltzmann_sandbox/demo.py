@@ -21,25 +21,22 @@ from __future__ import annotations
 import asyncio
 import shutil
 import sys
-from typing import TYPE_CHECKING, Any, Final
+from typing import Any, Final
 
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind
+from boltzmann.brain import Brain
 from boltzmann.exceptions import BoltzmannError, DistributionError, ReferenceNotFoundError
-from boltzmann.indices.base import IndexKind
+from boltzmann.indices.base import Index, IndexKind
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
+from boltzmann.ingest.task import ProcessingTask
 from boltzmann.query.request import Query, QueryFilters, QueryHints
 from boltzmann.retention.requests import DropRequest
 
 from boltzmann_sandbox.brain import open_brain, registry_client
 from boltzmann_sandbox.config import ConfigError, Settings, load
 from boltzmann_sandbox.indices import VectorIndex
-
-if TYPE_CHECKING:
-    from boltzmann.brain import Brain
-    from boltzmann.indices.base import Index
-    from boltzmann.ingest.task import ProcessingTask
 
 FACTS: Final = [
     ("formula", "Fourier series", "decomposes a periodic function into a sum of sines and cosines", "p.1"),

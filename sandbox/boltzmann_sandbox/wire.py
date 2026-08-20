@@ -13,28 +13,27 @@ sees what the protocol produced.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from boltzmann.blocks.base import Block
-    from boltzmann.blocks.memory_type import MemoryType
-    from boltzmann.distribution.manifest import BrainManifest
-    from boltzmann.identity.digest import MerkleRoot
-    from boltzmann.ingest.commit import CommitResult
-    from boltzmann.ingest.register import RegistrationResult
-    from boltzmann.ingest.validation import ValidationReport
-    from boltzmann.merkle.proof import InclusionProof
-    from boltzmann.module.snapshot import Snapshot
-    from boltzmann.query.evidence import EvidenceBundle
-    from boltzmann.retention.requests import (
-        CascadePlan,
-        DropResult,
-        PruneReport,
-        RedactionResult,
-        ResolvabilityReport,
-        SupersessionResult,
-    )
-    from pydantic import BaseModel
+from boltzmann.blocks.base import Block
+from boltzmann.blocks.memory_type import MemoryType
+from boltzmann.distribution.manifest import BrainManifest
+from boltzmann.identity.digest import MerkleRoot
+from boltzmann.ingest.commit import CommitResult
+from boltzmann.ingest.register import RegistrationResult
+from boltzmann.ingest.validation import ValidationReport
+from boltzmann.merkle.proof import InclusionProof
+from boltzmann.module.snapshot import Snapshot
+from boltzmann.query.evidence import EvidenceBundle
+from boltzmann.retention.requests import (
+    CascadePlan,
+    DropResult,
+    PruneReport,
+    RedactionResult,
+    ResolvabilityReport,
+    SupersessionResult,
+)
+from pydantic import BaseModel
 
 
 def snapshot(value: Snapshot) -> dict[str, Any]:

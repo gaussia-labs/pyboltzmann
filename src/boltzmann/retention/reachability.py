@@ -17,17 +17,13 @@ Pruning never decides *what* to forget. A drop already did. This only answers wh
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
 
 from boltzmann.exceptions import BlockNotFoundError, BlockTombstonedError
+from boltzmann.identity.digest import BlockId, OciDigest
 from boltzmann.module.composition import Composition
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
-
-    from boltzmann.identity.digest import BlockId, OciDigest
-    from boltzmann.module.snapshot import Snapshot
-    from boltzmann.store.base import BlockStore
+from boltzmann.module.snapshot import Snapshot
+from boltzmann.store.base import BlockStore
 
 
 def reachable_from(snapshot: Snapshot, store: BlockStore) -> set[str]:

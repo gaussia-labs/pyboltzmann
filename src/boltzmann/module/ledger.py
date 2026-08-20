@@ -16,21 +16,18 @@ supersession the same way.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import (
     DemotionRecord,
     DerivationRecord,
+    Producer,
     ProvenanceBlock,
     RemovalRecord,
     SupersessionRecord,
 )
-
-if TYPE_CHECKING:
-    from boltzmann.blocks.provenance import Producer
-    from boltzmann.identity.digest import BlockId
-    from boltzmann.module.module import Module
+from boltzmann.identity.digest import BlockId
+from boltzmann.module.module import Module
 
 
 @dataclass

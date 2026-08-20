@@ -28,8 +28,9 @@ for the interface an implementation provides.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -56,13 +57,8 @@ from boltzmann.distribution.media_types import (
 from boltzmann.exceptions import BlockNotFoundError, DistributionError, IdentityError
 from boltzmann.identity.digest import MerkleRoot, OciDigest
 from boltzmann.identity.serialization import canonicalize
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
-
-    from boltzmann.module.snapshot import ModuleRef, Snapshot
-    from boltzmann.store.base import BlockStore
-
+from boltzmann.module.snapshot import ModuleRef, Snapshot
+from boltzmann.store.base import BlockStore
 
 OCI_SCHEMA_VERSION = 2
 """What the OCI image-manifest specification fixes this at. Present in the document because the spec

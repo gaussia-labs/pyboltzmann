@@ -23,17 +23,13 @@ run *between* modules, and a set operation never crosses that boundary. See
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from pydantic import BaseModel, ConfigDict, Field
 
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.exceptions import AppendOnlyViolationError
 from boltzmann.identity.digest import BlockId, MerkleRoot
 from boltzmann.merkle.tree import merkle_root, sorted_leaves
-
-if TYPE_CHECKING:
-    from boltzmann.module.composition import Composition
+from boltzmann.module.composition import Composition
 
 
 class ModuleReconciliation(BaseModel):

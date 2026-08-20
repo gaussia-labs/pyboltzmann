@@ -17,8 +17,8 @@ between the three is attribution, and a default would be this SDK choosing whose
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from enum import StrEnum
-from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -28,9 +28,6 @@ from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
 from boltzmann.module.snapshot import ModuleRef, Snapshot
 from boltzmann.reconcile.gate import IncomingReport
 from boltzmann.reconcile.merge import ModuleReconciliation
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
 
 
 class ReconcileStrategy(StrEnum):

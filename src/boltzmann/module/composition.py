@@ -16,21 +16,17 @@ what a module layer carries when the brain is published.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from collections.abc import Iterable, Iterator
+from typing import Any
 
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.exceptions import AppendOnlyViolationError, ModuleError
-from boltzmann.identity.digest import BlockId
+from boltzmann.identity.digest import BlockId, MerkleRoot
 from boltzmann.identity.serialization import canonicalize
 from boltzmann.merkle.diff import CompositionDiff, diff
+from boltzmann.merkle.proof import InclusionProof
 from boltzmann.merkle.tree import MerkleTree, sorted_leaves
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
-
-    from boltzmann.identity.digest import MerkleRoot
-    from boltzmann.merkle.proof import InclusionProof
 
 
 class Composition:

@@ -7,13 +7,9 @@ and squash -- is the lineage written down (paper Section 12.3, Table 3).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+from boltzmann.identity.digest import OciDigest
+from boltzmann.module.snapshot import Snapshot
 from boltzmann.reconcile.requests import AttributionReport, ReconcileStrategy
-
-if TYPE_CHECKING:
-    from boltzmann.identity.digest import OciDigest
-    from boltzmann.module.snapshot import Snapshot
 
 
 def attribution_for(strategy: ReconcileStrategy, collapsed: int, replayable: int | None = None) -> AttributionReport:

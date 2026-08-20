@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Iterator
 
 from boltzmann.exceptions import BlockNotFoundError, BlockTombstonedError
 from boltzmann.identity.digest import Digest, OciDigest
 from boltzmann.store.base import AbstractBlockStore
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 
 class MemoryBlockStore(AbstractBlockStore):

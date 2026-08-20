@@ -21,7 +21,8 @@ index engine -- the suite says nothing.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -64,12 +65,8 @@ from boltzmann.reconcile.merge import merge_module
 from boltzmann.reconcile.requests import ReconcileStrategy
 from boltzmann.reconcile.strategies import attribution_table
 from boltzmann.retention.cascade import plan_many
+from boltzmann.store.base import BlockStore
 from boltzmann.store.memory import MemoryBlockStore
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    from boltzmann.store.base import BlockStore
 
 
 def _supersedes(block: BlockId, superseded: BlockId) -> ProvenanceBlock:

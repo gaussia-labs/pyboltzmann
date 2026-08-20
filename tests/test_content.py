@@ -20,7 +20,7 @@ more focused check: what these call sites owe is to consult ``content_digests``,
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -40,9 +40,6 @@ from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.retention.policy import RetentionPolicy
 from boltzmann.retention.reachability import reachable_from
 from boltzmann.store.memory import MemoryBlockStore
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
 DETECTOR = Producer(kind=ProducerKind.MODEL, id="detector", version="1")

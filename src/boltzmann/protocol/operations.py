@@ -29,38 +29,36 @@ through :class:`~boltzmann.ingest.proposer.CandidateProposer`.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from collections.abc import Iterable
+from typing import Protocol, runtime_checkable
 
-if TYPE_CHECKING:
-    from collections.abc import Iterable
-
-    from boltzmann.blocks.base import Block
-    from boltzmann.blocks.memory_type import MemoryType
-    from boltzmann.distribution.manifest import BrainManifest
-    from boltzmann.distribution.registry import FetchResult, RegistryClient
-    from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
-    from boltzmann.indices.base import Index, IndexKind
-    from boltzmann.ingest.commit import CommitResult
-    from boltzmann.ingest.proposer import CandidateSet
-    from boltzmann.ingest.register import RegistrationRequest, RegistrationResult
-    from boltzmann.ingest.task import ProcessingTask
-    from boltzmann.ingest.validation import ValidationReport
-    from boltzmann.merkle.proof import InclusionProof
-    from boltzmann.module.module import Module
-    from boltzmann.module.snapshot import Snapshot
-    from boltzmann.query.evidence import EvidenceBundle
-    from boltzmann.query.request import Query
-    from boltzmann.reconcile.requests import ReconcilePlan, ReconcileRequest, ReconcileResult
-    from boltzmann.reconcile.resolution import ReconcileStatus, ResolutionKind
-    from boltzmann.retention.requests import (
-        DropRequest,
-        DropResult,
-        ProducerDropRequest,
-        PruneReport,
-        RedactionResult,
-        ResolvabilityReport,
-        SupersessionResult,
-    )
+from boltzmann.blocks.base import Block
+from boltzmann.blocks.memory_type import MemoryType
+from boltzmann.distribution.manifest import BrainManifest
+from boltzmann.distribution.registry import FetchResult, RegistryClient
+from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
+from boltzmann.indices.base import Index, IndexKind
+from boltzmann.ingest.commit import CommitResult
+from boltzmann.ingest.proposer import CandidateSet
+from boltzmann.ingest.register import RegistrationRequest, RegistrationResult
+from boltzmann.ingest.task import ProcessingTask
+from boltzmann.ingest.validation import ValidationReport
+from boltzmann.merkle.proof import InclusionProof
+from boltzmann.module.module import Module
+from boltzmann.module.snapshot import Snapshot
+from boltzmann.query.evidence import EvidenceBundle
+from boltzmann.query.request import Query
+from boltzmann.reconcile.requests import ReconcilePlan, ReconcileRequest, ReconcileResult
+from boltzmann.reconcile.resolution import ReconcileStatus, ResolutionKind
+from boltzmann.retention.requests import (
+    DropRequest,
+    DropResult,
+    ProducerDropRequest,
+    PruneReport,
+    RedactionResult,
+    ResolvabilityReport,
+    SupersessionResult,
+)
 
 
 @runtime_checkable

@@ -21,11 +21,13 @@ still current. There is no state in which a root names a block the store does no
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from boltzmann.blocks.base import Block
 from boltzmann.blocks.canonical import CanonicalBlock, NormalizedView
 from boltzmann.blocks.content import ContentRef, require_media_type
 from boltzmann.blocks.memory_type import MemoryType
@@ -64,7 +66,7 @@ from boltzmann.distribution.media_types import (
     REF_NAME_ANNOTATION,
     VECTOR_INDEX_MEDIA_TYPE,
 )
-from boltzmann.distribution.registry import FetchResult, InstallPlan
+from boltzmann.distribution.registry import FetchResult, InstallPlan, RegistryClient
 from boltzmann.exceptions import (
     BlockNotFoundError,
     DistributionError,
@@ -82,18 +84,23 @@ from boltzmann.exceptions import (
 from boltzmann.identity.digest import BlockId, Digest, MerkleRoot, OciDigest
 from boltzmann.identity.serialization import canonicalize
 from boltzmann.identity.time import utc_timestamp
-from boltzmann.indices.base import TravellingIndex
+from boltzmann.indices.base import Index, IndexKind, TravellingIndex
 from boltzmann.ingest.commit import CommitResult
 from boltzmann.ingest.pipelines import get_pipeline
+from boltzmann.ingest.proposer import CandidateProposer, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest, RegistrationResult
 from boltzmann.ingest.schema import candidates_schema as _candidates_schema
 from boltzmann.ingest.task import PROPOSABLE_MEMORY_TYPES, ProcessingTask, TaskOperation
-from boltzmann.ingest.validation import ValidationReport, ValidationStatus, validate
+from boltzmann.ingest.validation import ValidationReport, ValidationStatus, Validator, validate
+from boltzmann.merkle.proof import InclusionProof
 from boltzmann.merkle.tree import sorted_leaves
 from boltzmann.module.composition import Composition
 from boltzmann.module.ledger import Ledger
 from boltzmann.module.module import Module
 from boltzmann.module.snapshot import ModuleRef, Snapshot
+from boltzmann.query.evidence import EvidenceBundle
+from boltzmann.query.planner import QueryPlanner
+from boltzmann.query.request import Query
 from boltzmann.query.scan import scan
 from boltzmann.reconcile.ancestry import (
     common_ancestor,
@@ -131,21 +138,8 @@ from boltzmann.retention.requests import (
     ResolvabilityReport,
     SupersessionResult,
 )
+from boltzmann.store.base import BlockStore
 from boltzmann.store.oci_layout import OciLayoutStore
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
-
-    from boltzmann.blocks.base import Block
-    from boltzmann.distribution.registry import RegistryClient
-    from boltzmann.indices.base import Index, IndexKind
-    from boltzmann.ingest.proposer import CandidateProposer, CandidateSet
-    from boltzmann.ingest.validation import Validator
-    from boltzmann.merkle.proof import InclusionProof
-    from boltzmann.query.evidence import EvidenceBundle
-    from boltzmann.query.planner import QueryPlanner
-    from boltzmann.query.request import Query
-    from boltzmann.store.base import BlockStore
 
 HEAD_POINTER = "head"
 """Name of the mutable pointer that says which snapshot is current."""

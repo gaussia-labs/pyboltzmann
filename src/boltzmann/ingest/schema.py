@@ -21,24 +21,19 @@ disagree.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Iterable
+from typing import Any
 
-from pydantic.json_schema import models_json_schema
+from pydantic import BaseModel
+from pydantic.json_schema import JsonSchemaMode, models_json_schema
 
 from boltzmann.blocks.base import Block
+from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.constants import CANDIDATES_SCHEMA, EVIDENCE_BUNDLE_SCHEMA, PROCESSING_TASK_SCHEMA
 from boltzmann.exceptions import BlockSchemaError
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.task import PROPOSABLE_MEMORY_TYPES, ProcessingTask
 from boltzmann.query.evidence import EvidenceBundle
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
-
-    from pydantic import BaseModel
-    from pydantic.json_schema import JsonSchemaMode
-
-    from boltzmann.blocks.memory_type import MemoryType
 
 JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 """The dialect every schema here declares."""

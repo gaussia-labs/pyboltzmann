@@ -16,13 +16,11 @@ Any conforming layout must satisfy two properties:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from collections.abc import Iterable
+from typing import Protocol, runtime_checkable
 
-if TYPE_CHECKING:
-    from collections.abc import Iterable
-
-    from boltzmann.identity.digest import BlockId, MerkleRoot
-    from boltzmann.merkle.proof import InclusionProof
+from boltzmann.identity.digest import BlockId, MerkleRoot
+from boltzmann.merkle.proof import InclusionProof
 
 
 @runtime_checkable

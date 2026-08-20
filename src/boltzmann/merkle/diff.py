@@ -12,15 +12,12 @@ to fetch and which to forget -- not the shape of the path taken to compute it.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
 
 from pydantic import BaseModel, ConfigDict
 
 from boltzmann.identity.digest import BlockId, MerkleRoot
 from boltzmann.merkle.tree import merkle_root, sorted_leaves
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
 
 
 class CompositionDiff(BaseModel):

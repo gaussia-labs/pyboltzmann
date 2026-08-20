@@ -11,7 +11,8 @@ two straight is the point of Section 6.4 of the paper.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Self
+from collections.abc import Iterable
+from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -22,9 +23,6 @@ from boltzmann.identity.digest import MerkleRoot, OciDigest
 from boltzmann.identity.serialization import canonicalize
 from boltzmann.identity.time import Timestamp, utc_timestamp
 from boltzmann.merkle.tree import LAYOUT_NAME
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
 
 
 class ModuleRef(BaseModel):

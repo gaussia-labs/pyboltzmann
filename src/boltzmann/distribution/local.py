@@ -12,16 +12,14 @@ transport, so nothing above it can tell the difference.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from boltzmann.distribution.manifest import BrainManifest, parse_manifest
 from boltzmann.distribution.media_types import ARTIFACT_TYPE, MANIFEST_MEDIA_TYPE, REF_NAME_ANNOTATION
 from boltzmann.exceptions import DistributionError, ReferenceNotFoundError
 from boltzmann.identity.digest import OciDigest
+from boltzmann.store.base import BlockStore
 from boltzmann.store.oci_layout import OciLayoutStore
-
-if TYPE_CHECKING:
-    from boltzmann.store.base import BlockStore
 
 
 class LocalLayoutRegistry:
