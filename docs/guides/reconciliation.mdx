@@ -375,6 +375,12 @@ one, because nobody proposed the block — it was already here.
 The consequence gets its own removal record, attributed to whoever accepted the removals: the other history
 recorded withdrawing the evidence, and nothing yet recorded what that cost here.
 
+The record lands in the same version as the exclusion it explains. That matters most for a rebase, which
+writes one version per version it replays: the step that withdrew the evidence is the step the dependent
+leaves on, and the steps before it keep both. Applying the whole contribution's cascade to every step would
+publish versions excluding a block whose evidence they still hold, with nothing on record saying why — an
+unexplained removal, which is the one thing an auditable history cannot contain.
+
 ### Abandoning
 
 `reconcile_abort()` discards the decisions. Nothing is undone, because nothing was written: a halted

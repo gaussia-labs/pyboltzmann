@@ -31,7 +31,9 @@ from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.ingest.validation import ValidationStatus
 from boltzmann.ingest.validators import UndecidedValidator
 from boltzmann.module.ledger import Ledger
+from boltzmann.module.module import Module
 from boltzmann.reconcile import MissingEvidence, ReconcileRequest, ReconcileStrategy
+from boltzmann.reconcile.ancestry import composition_at, snapshot_at
 from boltzmann.reconcile.gate import RECONCILE_VALIDATORS
 from boltzmann.reconcile.resolution import ResolutionKind
 from boltzmann.retention.policy import PERMISSIVE_POLICY
@@ -943,6 +945,78 @@ class TestCascade:
         assert derived not in semantic
         assert not [block for block in semantic for cited in ledger.evidence.get(block, []) if cited not in canonical]
         assert upstream.verify()
+
+    def test_a_replay_removes_them_at_the_step_that_withdrew_the_evidence(self, tmp_path: Path) -> None:
+        """A rebase replays their history one version at a time, so the consequence belongs to the version
+        that caused it.
+
+        Applying the whole contribution's cascade to every step would publish versions excluding a block
+        whose evidence they still hold, with nothing recording why -- an unexplained removal, which is the
+        one thing an auditable history cannot contain. Two handles on one layout, because only a store that
+        holds the intermediate compositions can replay them at all.
+        """
+        layout = tmp_path / "brain"
+        ours = Brain.open(layout, actor=MAINTAINER, policy=PERMISSIVE_POLICY)
+        ours.ingest(b"%PDF-1.7 Lecture 07", paper(), llm("Fourier"))
+        source = next(iter(ours.module(MemoryType.CANONICAL).block_ids))
+
+        theirs = Brain.open(layout, actor=CONTRIBUTOR, policy=PERMISSIVE_POLICY)
+        theirs.ingest(b"%PDF-1.7 Lecture 08", paper(CONTRIBUTOR), llm("Laplace"))
+        theirs.drop(
+            DropRequest(
+                blocks=[source],
+                memory_type=MemoryType.CANONICAL,
+                actor=CONTRIBUTOR,
+                reason="the lecture was withdrawn",
+            )
+        )
+        contributed = theirs.snapshot().digest
+
+        # Derived here, from the evidence they went on to withdraw.
+        task = ours.define_task(source, allowed=[MemoryType.SEMANTIC])
+        ours.commit(
+            ours.validate(
+                CandidateSet(
+                    producer=MODEL,
+                    candidates=[
+                        Candidate(
+                            memory_type=MemoryType.SEMANTIC,
+                            evidence=[source],
+                            payload={
+                                "kind": "fact",
+                                "label": "a later reading",
+                                "statement": "derived from the source",
+                                "subject": "signals",
+                            },
+                        )
+                    ],
+                ),
+                task,
+            )
+        )
+        semantic = ours.module(MemoryType.SEMANTIC)
+        derived = next(block for block in semantic.block_ids if semantic.get(block).label == "a later reading")
+        assert ours.plan_reconcile(contributed).replayable > 1
+
+        with pytest.raises(ReconciliationHaltedError):
+            ours.rebase(contributed, reason="replay their versions onto mine")
+        ours.reconcile_accept_removals(reason="the source is gone, so what rests on it goes too")
+        result = ours.reconcile_continue()
+
+        for digest in result.snapshots:
+            version = snapshot_at(ours.store, digest)
+            held = set(composition_at(ours.store, version, MemoryType.CANONICAL) or [])
+            kept = set(composition_at(ours.store, version, MemoryType.SEMANTIC) or [])
+            provenance = composition_at(ours.store, version, MemoryType.PROVENANCE)
+            recorded = Ledger.of({MemoryType.PROVENANCE: Module(MemoryType.PROVENANCE, ours.store, provenance)}).removed
+
+            # Either the evidence is still there and so is what cites it, or both are gone and the record
+            # that took them is in this same version.
+            assert (source in held) == (derived in kept)
+            assert (derived in recorded) == (derived not in kept)
+
+        assert derived not in set(ours.module(MemoryType.SEMANTIC).block_ids)
+        assert ours.verify()
 
     async def test_the_cascade_records_why_it_removed_them(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
         """The other history recorded withdrawing the evidence; nothing yet recorded the consequence here,

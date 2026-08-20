@@ -173,6 +173,19 @@ def _contenders(verdict: BlockVerdict) -> set[BlockId]:
     return set(verdict.conflicts_with)
 
 
+def _is_supported(record: ProvenanceBlock, members: Mapping[MemoryType, list[BlockId]]) -> bool:
+    """Whether a version holds both blocks a precedence edge names.
+
+    A tie-break is a supersession edge, and an edge whose winner or loser is not a member of the version it
+    is written into points at nothing. During a replay the losing successor may not have arrived yet, so the
+    edge waits for the step that holds both rather than being written early or held back to the end.
+    """
+    if not isinstance(record.record, SupersessionRecord):
+        return True
+    held = {block for blocks in members.values() for block in blocks}
+    return {record.record.block, record.record.supersedes} <= held
+
+
 class Origin(BaseModel):
     """
     Where a local brain was pulled from, and the point it started at.
@@ -1805,7 +1818,7 @@ class Brain:
         # semantic one, citing evidence the composition no longer holds. The gate catches that for blocks
         # arriving from the other history; it cannot catch it for blocks that were already here, because
         # nobody proposed them. The cascade a drop runs is what does, and it is the same cascade.
-        cascaded = self._cascade_from(merged, modules, Ledger.of(modules))
+        cascaded = self._cascade_for(merged)
         withdrawn = self._withdrawn(merged, ours, cascaded)
 
         chain = snapshots_between(self.store, head, theirs, base_digest)
@@ -1823,6 +1836,49 @@ class Brain:
             untransferred=untransferred,
             carried=self._carried_verbatim(merged, head),
         )
+
+    def _cascade_for(self, merged: Mapping[MemoryType, ModuleReconciliation]) -> dict[MemoryType, list[BlockId]]:
+        """The cascade a reconciled set of modules implies, read off that set alone.
+
+        Built over the compositions Equation 1 produced rather than the installed ones, so the same question
+        can be asked of the whole contribution when planning and of one replayed version when writing.
+
+        Args:
+            merged (Mapping[MemoryType, ModuleReconciliation]): What Equation 1 produced per module.
+
+        Returns:
+            dict[MemoryType, list[BlockId]]: The surviving blocks whose evidence the result excludes.
+        """
+        compositions = {kind: Composition(kind, result.block_ids) for kind, result in merged.items()}
+        modules = {kind: Module(kind, self.store, composition) for kind, composition in compositions.items()}
+        return self._cascade_from(merged, modules, Ledger.of(modules))
+
+    @staticmethod
+    def _within(
+        cascaded: Mapping[MemoryType, list[BlockId]],
+        accepted: Mapping[MemoryType, list[BlockId]],
+    ) -> dict[MemoryType, list[BlockId]]:
+        """A step's cascade, narrowed to what the operator was shown and accepted.
+
+        Their removals accumulate along their chain, so a step's cascade is always contained in the whole
+        contribution's and this is a no-op. It is written down anyway because the direction it fails in
+        matters: a block outside the accepted set stays, and the last step -- where it is inside the set --
+        is what removes it. Nothing leaves on a step that nobody reviewed.
+
+        Args:
+            cascaded (Mapping[MemoryType, list[BlockId]]): This step's cascade.
+            accepted (Mapping[MemoryType, list[BlockId]]): The cascade the plan reported.
+
+        Returns:
+            dict[MemoryType, list[BlockId]]: The intersection, in canonical leaf order.
+        """
+        narrowed = {}
+        for memory_type, blocks in cascaded.items():
+            allowed = set(accepted.get(memory_type, []))
+            kept = [block for block in blocks if block in allowed]
+            if kept:
+                narrowed[memory_type] = kept
+        return narrowed
 
     def _cascade_from(
         self,
@@ -2002,33 +2058,56 @@ class Brain:
         ours, _ = self._sides(self._snapshot)
         ancestors, _ = self._sides(base)
         refused = self._refused_after(plan, resolutions)
-        precedence = self._precedence_records(plan, resolutions)
-        cascade = self._cascade_records(plan, accepted)
+        pending = self._precedence_records(plan, resolutions)
 
         steps = replay_steps(strategy, replayable) or [head]
         written: list[OciDigest] = []
         roots: dict[MemoryType, MerkleRoot] = {}
+        # Records this reconciliation authored at an earlier step. Equation 1 is stated against the version
+        # this brain was at, which is fixed for the whole replay, so a record written at one step is not in
+        # any later step's arithmetic and would drop straight back out. Carrying the identifiers forward is
+        # what keeps a replayed history additive.
+        authored: dict[MemoryType, list[BlockId]] = {}
+        cascaded_so_far: set[BlockId] = set()
         for position, step in enumerate(steps):
             last = position == len(steps) - 1
             # Every step is Equation 1 against the version that step of the other history was at, which is
             # what makes a replay deterministic here: there is no patch to apply, only a composition to
             # state. The last step reconciles against their head, so all three strategies end identically.
             partial = reconciled_modules(ancestors, ours, self._sides(step)[0])
+            # The cascade follows *this step's* exclusions rather than the whole contribution's. A rebase
+            # replays their history one version at a time, and the version that withdrew the evidence may be
+            # the third of five: applying the consequence from the first would publish versions that exclude
+            # a block whose evidence is still present, with nothing on record saying why.
+            cascaded = self._within(self._cascade_for(partial), plan.cascaded)
+            excluded = {kind: {*refused.get(kind, []), *cascaded.get(kind, [])} for kind in partial}
             members = {
                 kind: [
-                    block_id
-                    for block_id in result.block_ids
-                    if block_id not in {*refused.get(kind, []), *plan.cascaded.get(kind, [])}
+                    *[block_id for block_id in result.block_ids if block_id not in excluded.get(kind, set())],
+                    *authored.get(kind, []),
                 ]
                 for kind, result in partial.items()
             }
+            fresh = self._cascade_records(
+                {
+                    kind: [block for block in blocks if block not in cascaded_so_far]
+                    for kind, blocks in cascaded.items()
+                },
+                plan.theirs,
+                accepted,
+            )
+            settled = [record for record in pending if last or _is_supported(record, members)]
+            pending = [record for record in pending if record not in settled]
             snapshot, roots = self._write_reconciliation(
                 members,
                 plan.carried,
                 [] if contained else (merged_parents(strategy, theirs) if last else []),
                 retain=[theirs] if last and strategy is ReconcileStrategy.MERGE else [],
-                extra=[*precedence, *cascade] if last else (),
+                extra=[*settled, *fresh],
             )
+            for record in (*settled, *fresh):
+                authored.setdefault(record.MEMORY_TYPE, []).append(record.block_id)
+            cascaded_so_far.update(block for blocks in cascaded.values() for block in blocks)
             written.append(self._state.snapshot if self._state else snapshot.digest)
 
         return ReconcileResult(
@@ -2332,7 +2411,8 @@ class Brain:
 
     def _cascade_records(
         self,
-        plan: ReconcilePlan,
+        cascaded: Mapping[MemoryType, Sequence[BlockId]],
+        theirs: OciDigest,
         accepted: RemovalAcceptance | None,
     ) -> list[ProvenanceBlock]:
         """Removal records for the blocks the cascade takes with the evidence they cited.
@@ -2341,18 +2421,26 @@ class Brain:
         blocks wrote one, and it arrives as a provenance block like any other. What has no record yet is the
         consequence -- a block of this brain's that followed its evidence out -- so this writes it, in the
         same version as the composition it describes, and attributes it to whoever accepted the removals.
+
+        Args:
+            cascaded (Mapping[MemoryType, Sequence[BlockId]]): The blocks leaving in the version being
+                written -- which for a rebase is that step's cascade and not the contribution's, so the
+                record lands with the exclusion it explains rather than at the end of the replay.
+            theirs (OciDigest): The history being reconciled from, named in the reason.
+            accepted (RemovalAcceptance | None): Who accepted the removals, and why.
+
+        Returns:
+            list[ProvenanceBlock]: One record per module losing blocks, empty when nothing is.
         """
-        if not plan.cascaded:
-            return []
         actor = accepted.actor if accepted is not None else self.actor
         at = accepted.at if accepted is not None else utc_timestamp()
-        reason = f"the evidence these blocks cite was withdrawn by the history reconciled from {plan.theirs.short}"
+        reason = f"the evidence these blocks cite was withdrawn by the history reconciled from {theirs.short}"
         if accepted is not None and accepted.reason:
             reason = f"{reason}; accepted: {accepted.reason}"
         return [
             ProvenanceBlock(
                 record=RemovalRecord(
-                    blocks=blocks,
+                    blocks=list(blocks),
                     mechanism=RemovalMechanism.DROP,
                     memory_type=memory_type,
                     actor=actor,
@@ -2360,7 +2448,8 @@ class Brain:
                     reason=reason,
                 )
             )
-            for memory_type, blocks in plan.cascaded.items()
+            for memory_type, blocks in cascaded.items()
+            if blocks
         ]
 
     def _precedence_records(
