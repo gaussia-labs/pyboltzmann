@@ -5,6 +5,9 @@ transport target and it exercises the same code path a network registry would. T
 tested against a fake registry, since a real one is not available offline.
 """
 
+import gzip
+import io
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -12,7 +15,14 @@ import pytest
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind
 from boltzmann.brain import Brain, Origin
-from boltzmann.distribution.layers import pack_module, required_blobs, unpack_layer
+from boltzmann.distribution.layers import (
+    SNAPSHOT_PREFIX,
+    pack_history,
+    pack_module,
+    required_blobs,
+    unpack_history,
+    unpack_layer,
+)
 from boltzmann.distribution.local import LocalLayoutRegistry
 from boltzmann.distribution.media_types import (
     ANNOTATION_SNAPSHOT_COUNT,
@@ -152,6 +162,42 @@ class TestPack:
         assert history is not None
         assert history.annotations[ANNOTATION_SNAPSHOT_COUNT] == str(len(brain.reachable_history()))
         assert manifest.modules == brain.snapshot().installed  # the history layer is not a module
+
+    def test_a_history_layer_that_misnames_its_entries_is_refused(
+        self, tmp_path: Path, request_: RegistrationRequest
+    ) -> None:
+        """Content addressing means the name cannot make a substituted document land under the digest a
+        lineage asks for -- it lands under its own, and the parent simply fails to resolve much later. A
+        producer whose naming and payloads disagree is malformed, and one refusal here beats an unexplained
+        "no common ancestor" at reconcile time.
+        """
+        brain = seeded(tmp_path / "brain", request_)
+        documents = [brain.store.get_bytes(digest) for digest in brain.reachable_history()]
+        layer = pack_history(documents)
+
+        raw = gzip.decompress(layer)
+        renamed = io.BytesIO()
+        with (
+            tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as source,
+            tarfile.open(fileobj=renamed, mode="w", format=tarfile.PAX_FORMAT) as target,
+        ):
+            for info in source.getmembers():
+                handle = source.extractfile(info)
+                assert handle is not None
+                payload = handle.read()
+                info.name = f"{SNAPSHOT_PREFIX}{'0' * 64}"
+                target.addfile(info, io.BytesIO(payload))
+        tampered = gzip.compress(renamed.getvalue())
+
+        with pytest.raises(DistributionError, match="naming and its payloads disagree"):
+            unpack_history(tampered, MemoryBlockStore())
+
+    def test_a_history_layer_round_trips(self, tmp_path: Path, request_: RegistrationRequest) -> None:
+        brain = seeded(tmp_path / "brain", request_)
+        expected = set(brain.reachable_history())
+        store = MemoryBlockStore()
+
+        assert set(unpack_history(pack_history([brain.store.get_bytes(d) for d in expected]), store)) == expected
 
     def test_each_layer_carries_its_modules_root(self, tmp_path: Path, request_: RegistrationRequest) -> None:
         """The descriptor's digest names the file; the annotation names the composition inside it."""

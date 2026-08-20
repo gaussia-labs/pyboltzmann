@@ -171,6 +171,11 @@ def unpack_history(data: bytes, store: BlockStore, max_size: int | None = None) 
     layer whose bytes were tampered with cannot land under the digest a lineage names, and one carrying
     something that is not a snapshot is refused rather than filed away to fail later.
 
+    The entry name is checked against the content it holds even though content addressing makes it
+    redundant -- the same reason a stored composition is checked against the root it is filed under. A
+    producer whose naming and payloads disagree is malformed, and catching that at the boundary is the
+    difference between one clear refusal here and an unexplained "no common ancestor" much later.
+
     Args:
         data (bytes): The layer blob.
         store (BlockStore): Where to write the documents.
@@ -180,8 +185,8 @@ def unpack_history(data: bytes, store: BlockStore, max_size: int | None = None) 
         list[OciDigest]: The snapshots now resolvable, in the order the layer carried them.
 
     Raises:
-        DistributionError: If the layer is malformed, expands past the bound, or carries an entry that is
-            not a snapshot document.
+        DistributionError: If the layer is malformed, expands past the bound, carries an entry that is not
+            a snapshot document, or names an entry something other than the digest of its own content.
     """
     limit = max_size if max_size is not None else len(data) * MAX_EXPANSION_RATIO
     written = []
@@ -199,6 +204,12 @@ def unpack_history(data: bytes, store: BlockStore, max_size: int | None = None) 
                 raise DistributionError(
                     f"history layer entry {info.name} is not a snapshot document: {error}"
                 ) from error
+            digest = OciDigest.of(payload)
+            if info.name.removeprefix(SNAPSHOT_PREFIX) != digest.hex:
+                raise DistributionError(
+                    f"history layer entry {info.name} holds the document for {digest.short} instead; the "
+                    f"layer's naming and its payloads disagree, so it was not produced by a conforming push"
+                )
             written.append(store.put_bytes(payload))
     return written
 
