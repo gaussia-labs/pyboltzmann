@@ -21,15 +21,13 @@ holds the bytes.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from collections.abc import Iterator
+from typing import Protocol, runtime_checkable
 
 from boltzmann.blocks.base import Block
 from boltzmann.exceptions import BlockIntegrityError
 from boltzmann.identity.digest import BlockId, Digest, OciDigest
 from boltzmann.identity.hashing import sha256_hex
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 
 @runtime_checkable

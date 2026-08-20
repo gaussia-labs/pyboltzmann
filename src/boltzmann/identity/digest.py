@@ -18,15 +18,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Self
+from typing import Any, ClassVar, Self
 
+from pydantic import GetCoreSchemaHandler
 from pydantic_core import core_schema
 
 from boltzmann.exceptions import DigestFormatError, DigestKindError
 from boltzmann.identity.hashing import ALGORITHM, HEX_DIGEST_LENGTH, sha256_hex
-
-if TYPE_CHECKING:
-    from pydantic import GetCoreSchemaHandler
 
 DIGEST_PATTERN = re.compile(rf"^{ALGORITHM}:[0-9a-f]{{{HEX_DIGEST_LENGTH}}}$")
 """A digest is ``sha256:`` followed by 64 lowercase hex characters."""

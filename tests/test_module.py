@@ -222,7 +222,7 @@ class TestSnapshot:
                 block_count=2,
             )
         )
-        assert advanced.parent == snapshot.digest
+        assert advanced.parents == [snapshot.digest]
 
     def test_uninstalling_a_module(self) -> None:
         snapshot = self.build(MemoryType.CANONICAL, MemoryType.SEMANTIC)

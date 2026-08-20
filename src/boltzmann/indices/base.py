@@ -18,14 +18,12 @@ what it must download versus what it can regenerate.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
-if TYPE_CHECKING:
-    from collections.abc import Iterable
-
-    from boltzmann.blocks.base import Block
-    from boltzmann.identity.digest import BlockId, Digest
+from boltzmann.blocks.base import Block
+from boltzmann.identity.digest import BlockId, Digest
 
 
 @runtime_checkable

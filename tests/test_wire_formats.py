@@ -21,6 +21,7 @@ from boltzmann.distribution.media_types import (
 from boltzmann.identity.digest import BlockId, MerkleRoot
 from boltzmann.ingest.proposer import Candidate, CandidateProposer, CandidateSet
 from boltzmann.ingest.task import ProcessingTask, TaskOperation
+from boltzmann.module.snapshot import Snapshot
 from boltzmann.query.evidence import EvidenceBundle, Match, SourceRef
 from boltzmann.query.request import Query, RetrievalMode
 
@@ -211,3 +212,54 @@ class TestMediaTypes:
         """The digest identifies the file; the root identifies the composition inside it."""
         assert ANNOTATION_MERKLE_ROOT != ANNOTATION_MEMORY_TYPE
         assert ANNOTATION_MERKLE_ROOT.startswith("ai.gaussia.boltzmann.")
+
+
+class TestSnapshotLineage:
+    """A snapshot is the config blob of a published artifact, so how it names its parents is wire format.
+
+    One parent is written as the scalar ``parent`` and two or more as the list ``parents``. That is the rule
+    Section 6.6 states for block schemas -- a version is a statement, not a preference, so a document is
+    written under the oldest form that can express it -- applied to the snapshot document. The consequence
+    is the point: a linear history keeps the exact bytes it had before reconciliation existed, and a client
+    that has no notion of a second parent stops being able to read a brain only at the point where that
+    brain genuinely reconciled something.
+    """
+
+    def test_a_root_snapshot_names_no_parent(self) -> None:
+        assert b"parent" not in Snapshot().canonical_bytes()
+
+    def test_one_parent_is_written_as_a_scalar(self) -> None:
+        linear = Snapshot().with_modules([])
+        document = json.loads(linear.canonical_bytes())
+
+        assert isinstance(document["parent"], str)
+        assert "parents" not in document
+
+    def test_two_parents_are_written_as_a_list(self) -> None:
+        ours = Snapshot().with_modules([])
+        merged = ours.reconciled([], [Snapshot(labels={"side": "theirs"}).digest])
+        document = json.loads(merged.canonical_bytes())
+
+        assert isinstance(document["parents"], list)
+        assert len(document["parents"]) == 2
+        assert "parent" not in document
+
+    def test_a_scalar_parent_is_still_readable(self) -> None:
+        """Every snapshot published under the scalar form is immutable and still a valid statement of
+        composition; refusing it would make existing histories unreadable to gain nothing."""
+        linear = Snapshot().with_modules([])
+        reread = Snapshot.model_validate_json(linear.canonical_bytes())
+
+        assert reread.parents == linear.parents
+        assert reread.digest == linear.digest
+
+    def test_a_document_naming_both_is_refused(self) -> None:
+        """It says two things about the same lineage, and there is no reading of it that is not a guess."""
+        parent = str(Snapshot().digest)
+        with pytest.raises(ValidationError, match="both 'parent' and 'parents'"):
+            Snapshot.model_validate({"parent": parent, "parents": [parent]})
+
+    def test_the_same_parent_cannot_be_named_twice(self) -> None:
+        parent = str(Snapshot().digest)
+        with pytest.raises(ValidationError, match="same parent more than once"):
+            Snapshot.model_validate({"parents": [parent, parent]})

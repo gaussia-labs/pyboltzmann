@@ -21,13 +21,12 @@ search is approximate and ranking is tunable. So there is no reference planner h
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
-if TYPE_CHECKING:
-    from boltzmann.blocks.memory_type import MemoryType
-    from boltzmann.module.module import Module
-    from boltzmann.query.evidence import EvidenceBundle
-    from boltzmann.query.request import Query
+from boltzmann.blocks.memory_type import MemoryType
+from boltzmann.module.module import Module
+from boltzmann.query.evidence import EvidenceBundle
+from boltzmann.query.request import Query
 
 
 @runtime_checkable

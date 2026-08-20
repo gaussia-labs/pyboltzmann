@@ -18,6 +18,7 @@ from boltzmann.conformance import (
     CompositionConformance,
     IdentityConformance,
     MerkleConformance,
+    ReconciliationConformance,
 )
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
@@ -92,3 +93,7 @@ class TestBrainAsReader(BrainReaderConformance):
             )
         )
         return brain
+
+
+class TestReconciliation(ReconciliationConformance):
+    """Set arithmetic over immutable blocks, and the lineage that records it."""

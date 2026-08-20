@@ -197,6 +197,14 @@ report.content_missing      # the block verifies, the datum it names is gone
   `content_missing` the brain looks intact until `pack` refuses to publish it.
 </Note>
 
+<Note>
+  A drop travels. When two brains are reconciled, exclusion takes precedence — a block one side dropped does
+  not come back because the other still held it — and the removal record you wrote is what explains it on the
+  other side. The same holds in reverse: reconciling with a history that dropped evidence you derived from
+  takes your dependents with it, through this same cascade. See
+  [Reconciliation](/sdks/boltzmann/guides/reconciliation#when-the-reconciliation-removes-your-work).
+</Note>
+
 Redaction requires explicit policy, or it raises `RetentionPolicyError`.
 
 ## The policy

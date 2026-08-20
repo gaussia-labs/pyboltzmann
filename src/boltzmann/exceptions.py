@@ -145,3 +145,56 @@ class ReferenceNotFoundError(DistributionError):
     credential or a failing registry looks the same to a caller that cannot tell them apart, and a
     fast-forward check that treats every failure as absence stops protecting anything.
     """
+
+
+class DivergenceError(DistributionError):
+    """Exception raised when a remote is not an ancestor of the local snapshot.
+
+    Distinct from its parent because it is the one distribution failure with a defined remedy: the two
+    histories advanced from a common ancestor, and Section 12 says what to do about it. A caller that
+    can tell this apart from "the registry refused me" can offer to reconcile; one that cannot has to
+    treat a resolvable situation as a transport problem.
+    """
+
+
+class ReconciliationError(ProtocolError):
+    """Base exception for reconciling two histories (paper Section 12)."""
+
+
+class NoCommonAncestorError(ReconciliationError):
+    """Exception raised when two histories share no ancestor.
+
+    A three-way reconciliation is only defined against a common ancestor: without it, a block present in
+    one composition and absent from the other is ambiguous between "they added it" and "I dropped it",
+    and those demand opposite outcomes. Section 12.2 requires this to be a distinguishable failure
+    rather than a merge computed on a guess.
+    """
+
+
+class ReconciliationHaltedError(ReconciliationError):
+    """Exception raised when a reconciliation stopped because something did not apply cleanly.
+
+    Nothing was written and the operation is not lost: what did not apply is recorded, and the reconciliation
+    waits to be resolved, concluded, or abandoned. Distinct from its siblings because it is not a failure at
+    all -- it is the operation asking a question, and a caller that treats it as an error has nowhere to put
+    the answer.
+    """
+
+
+class ReconciliationBlockedError(ReconciliationError):
+    """Exception raised when a reconciliation is concluded while a question is still open.
+
+    A conflict here is a validation failure, not a differencing failure, so the verdicts are the report a
+    maintainer acts on. Section 12.4 forbids committing while any candidate is still ``PENDING_REVIEW``: the
+    protocol declined to decide, and a commit would decide for it.
+    """
+
+
+class ResolutionRefusedError(ReconciliationError):
+    """Exception raised when a decision would break an invariant rather than settle a conflict.
+
+    Version control lets an operator force anything into a commit, because what it merges is text and the
+    consequences are a human's to judge. Some invariants here are structural: a derived block whose evidence
+    is absent from the composition cannot be audited against its source, and nothing downstream would notice
+    -- so admitting one is refused, and the refusal names the operation that fixes the cause instead.
+    """

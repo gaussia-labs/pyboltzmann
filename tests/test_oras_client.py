@@ -24,7 +24,12 @@ from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind
 from boltzmann.brain import Brain
 from boltzmann.distribution.manifest import BrainManifest
-from boltzmann.distribution.media_types import ARTIFACT_TYPE, MANIFEST_MEDIA_TYPE, REF_NAME_ANNOTATION
+from boltzmann.distribution.media_types import (
+    ARTIFACT_TYPE,
+    HISTORY_MEDIA_TYPE,
+    MANIFEST_MEDIA_TYPE,
+    REF_NAME_ANNOTATION,
+)
 from boltzmann.distribution.oras_client import OrasRegistryClient
 from boltzmann.distribution.registry import RegistryClient
 from boltzmann.exceptions import DistributionError, ReferenceNotFoundError
@@ -282,7 +287,12 @@ class TestWireShape:
         for layer in json.loads(fake.manifests[f"{REFERENCE}:v1"])["layers"]:
             assert set(layer) >= {"mediaType", "digest", "size", "annotations"}
             assert layer["digest"].startswith("sha256:")
-            assert "ai.gaussia.boltzmann.merkle-root" in layer["annotations"]
+            # A module layer names the composition inside it; the history layer names no composition,
+            # because what it carries is snapshot documents rather than blocks.
+            if layer["mediaType"] == HISTORY_MEDIA_TYPE:
+                assert "ai.gaussia.boltzmann.snapshot-count" in layer["annotations"]
+            else:
+                assert "ai.gaussia.boltzmann.merkle-root" in layer["annotations"]
 
     async def test_a_pushed_manifest_resolves_back(self, brain: Brain, client: OrasRegistryClient) -> None:
         """What was written on push must parse back into the same manifest on resolve."""

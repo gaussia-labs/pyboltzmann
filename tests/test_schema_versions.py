@@ -30,7 +30,9 @@ before the first blob moves is the difference between a diagnosable failure and 
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError as PydanticValidationError
@@ -52,10 +54,6 @@ from boltzmann.identity.time import utc_timestamp
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.query.scan import searchable_text
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-    from pathlib import Path
 
 CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
 SAM = Actor(id="sam", kind=ActorKind.AGENT)

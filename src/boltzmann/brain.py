@@ -21,11 +21,13 @@ still current. There is no state in which a root names a block the store does no
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from boltzmann.blocks.base import Block
 from boltzmann.blocks.canonical import CanonicalBlock, NormalizedView
 from boltzmann.blocks.content import ContentRef, require_media_type
 from boltzmann.blocks.memory_type import MemoryType
@@ -43,7 +45,7 @@ from boltzmann.blocks.provenance import (
     SupersessionRecord,
 )
 from boltzmann.constants import PROTOCOL_VERSION
-from boltzmann.distribution.layers import pack_module, unpack_layer
+from boltzmann.distribution.layers import pack_history, pack_module, unpack_history, unpack_layer
 from boltzmann.distribution.manifest import (
     BrainManifest,
     Descriptor,
@@ -64,30 +66,65 @@ from boltzmann.distribution.media_types import (
     REF_NAME_ANNOTATION,
     VECTOR_INDEX_MEDIA_TYPE,
 )
-from boltzmann.distribution.registry import InstallPlan
+from boltzmann.distribution.registry import FetchResult, InstallPlan, RegistryClient
 from boltzmann.exceptions import (
     BlockNotFoundError,
     DistributionError,
+    DivergenceError,
+    NoCommonAncestorError,
     ProtocolError,
     QueryError,
+    ReconciliationBlockedError,
+    ReconciliationError,
+    ReconciliationHaltedError,
     ReferenceNotFoundError,
+    ResolutionRefusedError,
     SnapshotError,
 )
 from boltzmann.identity.digest import BlockId, Digest, MerkleRoot, OciDigest
 from boltzmann.identity.serialization import canonicalize
 from boltzmann.identity.time import utc_timestamp
-from boltzmann.indices.base import TravellingIndex
+from boltzmann.indices.base import Index, IndexKind, TravellingIndex
 from boltzmann.ingest.commit import CommitResult
 from boltzmann.ingest.pipelines import get_pipeline
+from boltzmann.ingest.proposer import CandidateProposer, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest, RegistrationResult
 from boltzmann.ingest.schema import candidates_schema as _candidates_schema
 from boltzmann.ingest.task import PROPOSABLE_MEMORY_TYPES, ProcessingTask, TaskOperation
-from boltzmann.ingest.validation import ValidationReport, validate
+from boltzmann.ingest.validation import ValidationReport, ValidationStatus, Validator, validate
+from boltzmann.merkle.proof import InclusionProof
+from boltzmann.merkle.tree import sorted_leaves
 from boltzmann.module.composition import Composition
 from boltzmann.module.ledger import Ledger
 from boltzmann.module.module import Module
 from boltzmann.module.snapshot import ModuleRef, Snapshot
+from boltzmann.query.evidence import EvidenceBundle
+from boltzmann.query.planner import QueryPlanner
+from boltzmann.query.request import Query
 from boltzmann.query.scan import scan
+from boltzmann.reconcile.ancestry import (
+    common_ancestor,
+    composition_at,
+    is_reopenable,
+    snapshot_at,
+    snapshots_between,
+)
+from boltzmann.reconcile.gate import BlockVerdict, judge_incoming
+from boltzmann.reconcile.merge import ModuleReconciliation, reconciled_modules
+from boltzmann.reconcile.requests import (
+    ReconcilePlan,
+    ReconcileRequest,
+    ReconcileResult,
+    ReconcileStrategy,
+)
+from boltzmann.reconcile.resolution import (
+    ReconcileState,
+    ReconcileStatus,
+    RemovalAcceptance,
+    Resolution,
+    ResolutionKind,
+)
+from boltzmann.reconcile.strategies import attribution_for, attribution_table, merged_parents, replay_steps
 from boltzmann.retention.cascade import plan_many
 from boltzmann.retention.policy import RetentionPolicy
 from boltzmann.retention.reachability import mark, reachable_from_tags, sweep
@@ -101,24 +138,46 @@ from boltzmann.retention.requests import (
     ResolvabilityReport,
     SupersessionResult,
 )
+from boltzmann.store.base import BlockStore
 from boltzmann.store.oci_layout import OciLayoutStore
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
-
-    from boltzmann.blocks.base import Block
-    from boltzmann.distribution.registry import RegistryClient
-    from boltzmann.indices.base import Index, IndexKind
-    from boltzmann.ingest.proposer import CandidateProposer, CandidateSet
-    from boltzmann.ingest.validation import Validator
-    from boltzmann.merkle.proof import InclusionProof
-    from boltzmann.query.evidence import EvidenceBundle
-    from boltzmann.query.planner import QueryPlanner
-    from boltzmann.query.request import Query
-    from boltzmann.store.base import BlockStore
 
 HEAD_POINTER = "head"
 """Name of the mutable pointer that says which snapshot is current."""
+
+RECONCILE_POINTER = "reconcile"
+"""Name of the pointer holding a reconciliation someone is still resolving.
+
+The second and only other piece of mutable state a brain has, and the same device version control uses for a
+merge it could not finish on its own. It is not part of any snapshot and never published: it describes an
+operation in progress, not a version. Stores already keep pointers by name, so this needs nothing of them
+that ``head`` did not already need.
+"""
+
+
+def _contenders(verdict: BlockVerdict) -> set[BlockId]:
+    """The competing successors of a precedence question, as the gate named them.
+
+    Read off the verdict rather than recomputed, so the decision is made against exactly the contenders the
+    operator was shown.
+    """
+    from boltzmann.reconcile.gate import PRECEDENCE_CODE
+
+    if not any(issue.code == PRECEDENCE_CODE for issue in verdict.issues):
+        return set()
+    return set(verdict.conflicts_with)
+
+
+def _is_supported(record: ProvenanceBlock, members: Mapping[MemoryType, list[BlockId]]) -> bool:
+    """Whether a version holds both blocks a precedence edge names.
+
+    A tie-break is a supersession edge, and an edge whose winner or loser is not a member of the version it
+    is written into points at nothing. During a replay the losing successor may not have arrived yet, so the
+    edge waits for the step that holds both rather than being written early or held back to the end.
+    """
+    if not isinstance(record.record, SupersessionRecord):
+        return True
+    held = {block for blocks in members.values() for block in blocks}
+    return {record.record.block, record.record.supersedes} <= held
 
 
 class Origin(BaseModel):
@@ -283,10 +342,21 @@ class Brain:
             return Snapshot()
         return Snapshot.model_validate_json(self.store.get_bytes(self._state.snapshot))
 
-    def _advance(self, snapshot: Snapshot, origin: Origin | None = None) -> Snapshot:
-        """Write the snapshot document, then move the pointer. Order matters for atomicity."""
+    def _advance(
+        self,
+        snapshot: Snapshot,
+        origin: Origin | None = None,
+        retain: Iterable[OciDigest] = (),
+    ) -> Snapshot:
+        """Write the snapshot document, then move the pointer. Order matters for atomicity.
+
+        ``retain`` names snapshots that must stay reachable alongside the new one. A merge uses it to keep
+        the history it merged in: reachability for pruning is computed from the retained set, and a
+        contribution whose snapshots were reclaimed would leave a lineage pointing at documents no audit
+        can resolve -- which is the guarantee that only merge keeps the other side's snapshots.
+        """
         digest = self.store.put_bytes(snapshot.canonical_bytes())
-        retained = [digest, *(self._state.retained if self._state else [])]
+        retained = [digest, *retain, *(self._state.retained if self._state else [])]
         deduplicated: list[OciDigest] = []
         for candidate in retained:
             if candidate not in deduplicated:
@@ -302,6 +372,38 @@ class Brain:
         self._modules.clear()
         return snapshot
 
+    # --- Reconciliation in progress -------------------------------------------
+
+    def _reconcile_state(self) -> ReconcileState | None:
+        """The reconciliation being resolved, if there is one."""
+        raw = self.store.read_pointer(RECONCILE_POINTER)
+        # Cleared by writing nothing rather than by deleting, because ``BlockStore`` has no delete for a
+        # pointer and adding one would change an interface third-party stores already implement.
+        if not raw:
+            return None
+        return ReconcileState.model_validate_json(raw)
+
+    def _put_reconcile_state(self, state: ReconcileState | None) -> None:
+        """Record or clear the reconciliation in progress."""
+        payload = b"" if state is None else canonicalize(state.model_dump(mode="json", exclude_none=True))
+        self.store.write_pointer(RECONCILE_POINTER, payload)
+
+    def _require_no_reconciliation(self, doing: str) -> None:
+        """Refuse an operation that would write while a reconciliation is unresolved.
+
+        The same rule version control applies mid-merge, and for the same reason: the state records decisions
+        taken against a particular head, so a commit underneath it would leave those decisions describing a
+        reconciliation that no longer exists. Every ordinary mutation funnels through one write path, so one
+        guard covers all of them and none can be forgotten.
+        """
+        state = self._reconcile_state()
+        if state is None:
+            return
+        raise ReconciliationHaltedError(
+            f"cannot {doing}: the reconciliation of {state.theirs.short} is still unresolved. Resolve what is "
+            f"open and continue it, or abandon it with reconcile_abort()."
+        )
+
     @property
     def origin(self) -> Origin | None:
         """Where this brain was pulled from, if it was."""
@@ -309,25 +411,61 @@ class Brain:
 
     def ancestry(self) -> list[OciDigest]:
         """
-        The snapshot digests reachable from the current one by walking ``parent``.
+        The first-parent chain from the current snapshot back.
 
-        This is what a fast-forward check compares against: a push is safe when the remote's snapshot
-        appears here, because that means the local history contains the remote's.
+        This is the line the protocol reads as *what this brain is*: the first parent is the history a
+        reconciliation was performed onto, and every rule that speaks of "the parent" means that one
+        (paper Section 12.1). It is therefore the chain an audit follows to see how the brain got here,
+        and -- once authenticity lands -- the positions a signature's scope is judged against.
+
+        It is **not** what a containment check asks. A merged-in history is genuinely contained in this
+        brain without appearing on this chain, so use :meth:`reachable_history` for that.
 
         Returns:
-            list[OciDigest]: The current snapshot first, then each ancestor still resolvable.
+            list[OciDigest]: The current snapshot first, then each first parent still resolvable.
         """
         if self._state is None:
             return []
         chain = [self._state.snapshot]
         snapshot: Snapshot | None = self._snapshot
-        while snapshot is not None and snapshot.parent is not None:
-            parent = snapshot.parent
+        while snapshot is not None and snapshot.first_parent is not None:
+            parent = snapshot.first_parent
             chain.append(parent)
             if not self.store.is_resolvable(parent):
                 break
             snapshot = Snapshot.model_validate_json(self.store.get_bytes(parent))
         return chain
+
+    def reachable_history(self) -> set[OciDigest]:
+        """
+        Every snapshot this brain's history contains, following all parents.
+
+        A reconciliation names more than one parent, so history is a DAG rather than a chain, and
+        "does this brain already contain that snapshot?" is a reachability question over the whole
+        thing. That is what a fast-forward check asks: a push is safe when the remote's snapshot is in
+        here, because then publishing drops nothing. Walking only :meth:`ancestry` would answer it
+        wrongly in exactly the case reconciliation exists for -- after merging a contribution, the
+        contributor's head is a parent of the local snapshot, and a push back to their repository would
+        still be reported as divergence.
+
+        Returns:
+            set[OciDigest]: The current snapshot and every ancestor reachable through any parent.
+            Traversal stops at snapshots the store cannot resolve, which are still reported: an
+            ancestor that was pruned is part of the history even when its document is gone.
+        """
+        if self._state is None:
+            return set()
+        seen = {self._state.snapshot}
+        frontier = [self._snapshot]
+        while frontier:
+            snapshot = frontier.pop()
+            for parent in snapshot.parents:
+                if parent in seen:
+                    continue
+                seen.add(parent)
+                if self.store.is_resolvable(parent):
+                    frontier.append(Snapshot.model_validate_json(self.store.get_bytes(parent)))
+        return seen
 
     # --- Discovery ------------------------------------------------------------
 
@@ -985,6 +1123,8 @@ class Brain:
         Returns:
             CommitResult: The new snapshot and the new roots.
         """
+        self._require_no_reconciliation("write to this brain")
+
         by_module: dict[MemoryType, list[Block]] = {kind: list(items) for kind, items in blocks.items()}
         if provenance:
             by_module.setdefault(MemoryType.PROVENANCE, []).extend(provenance)
@@ -1552,6 +1692,968 @@ class Brain:
 
     # --- Distribution ----------------------------------------------------------
 
+    # --- Reconciliation --------------------------------------------------------
+
+    def _sides(self, snapshot: Snapshot) -> tuple[dict[MemoryType, Composition | None], list[MemoryType]]:
+        """One snapshot's compositions, and which of its modules could not be read here.
+
+        A module a snapshot does not name and a module whose composition never travelled are different
+        facts and reconciliation treats them differently, so they are returned separately. The first is
+        ordinary -- selective installation produces it. The second means the transfer was incomplete, which
+        is a diagnosis rather than a failure: Section 12.5 requires a contribution that shipped derived
+        blocks without their canonical source to come back as a verdict and a piece of advice, not as a
+        refusal to look.
+        """
+        compositions: dict[MemoryType, Composition | None] = {}
+        untransferred: list[MemoryType] = []
+        for memory_type in MemoryType:
+            reference = snapshot.modules.get(memory_type)
+            if reference is None:
+                compositions[memory_type] = None
+            elif not self.store.is_resolvable(reference.composition):
+                compositions[memory_type] = None
+                untransferred.append(memory_type)
+            else:
+                compositions[memory_type] = composition_at(self.store, snapshot, memory_type)
+        return compositions, untransferred
+
+    def _carried_verbatim(
+        self,
+        reconciled: Mapping[MemoryType, ModuleReconciliation],
+        theirs: Snapshot,
+    ) -> dict[MemoryType, ModuleRef]:
+        """Modules named by a history but reconcilable on neither side, taken at their recorded root.
+
+        This is Section 12.8 read literally: the modules the publisher does not hold take their roots from
+        the remote unchanged. Rebuilding is neither possible nor needed -- a root is a complete statement of
+        a version, and adopting one does not require holding what it commits to. Without this, reconciling
+        from a partial install would quietly uninstall the modules it never fetched, which is the outcome
+        the refusal it replaces existed to prevent.
+        """
+        carried = {}
+        for memory_type in MemoryType:
+            if memory_type in reconciled:
+                continue
+            reference = theirs.modules.get(memory_type) or self._snapshot.modules.get(memory_type)
+            if reference is not None:
+                carried[memory_type] = reference
+        return carried
+
+    def plan_reconcile(
+        self,
+        theirs: OciDigest,
+        ancestor: OciDigest | None = None,
+        validators: Sequence[Validator] | None = None,
+    ) -> ReconcilePlan:
+        """
+        Work out what joining another history would produce, without writing anything.
+
+        The plan is the same whichever strategy is chosen, because all three land the same blocks. That is
+        why it does not take one: its job is to inform the choice. It reports what Equation 1 produced per
+        module, a verdict on every incoming block, and what each of the three strategies would cost in
+        attribution.
+
+        It is also the review. Reviewing a pull request means reading a diff; here the incoming blocks are
+        candidates, the ingestion gate applies unchanged, and every one of them emerges with a verdict --
+        so which parts of a contribution fit is known before anything is decided.
+
+        Args:
+            theirs (OciDigest): The other history's head, already held locally. Use :meth:`fetch` to
+                retrieve one without disturbing this brain.
+            ancestor (OciDigest | None): The snapshot to reconcile against. Defaults to the nearest one the
+                two histories share.
+            validators (Sequence[Validator] | None): Checks to apply to incoming derived blocks. Defaults
+                to the protocol's own set.
+
+        Returns:
+            ReconcilePlan: What would happen.
+
+        Raises:
+            SnapshotError: If ``theirs`` or the ancestor is not held here.
+            NoCommonAncestorError: If the two histories share no ancestor, or if the ``ancestor`` given is
+                not in both of them.
+        """
+        head = snapshot_at(self.store, theirs)
+        origin = self.origin
+        base_digest = common_ancestor(
+            self.store,
+            self.reachable_history(),
+            head,
+            theirs,
+            hint=ancestor if ancestor is not None else (origin.snapshot if origin else None),
+        )
+        if ancestor is not None and base_digest != ancestor:
+            raise NoCommonAncestorError(
+                f"snapshot {ancestor.short} was given as the ancestor of {theirs.short} and this brain's "
+                f"history, but it is not in both; the nearest shared snapshot is {base_digest.short}"
+            )
+
+        base = snapshot_at(self.store, base_digest)
+        ancestors, _ = self._sides(base)
+        ours, _ = self._sides(self._snapshot)
+        their_sides, untransferred = self._sides(head)
+        merged = reconciled_modules(ancestors, ours, their_sides)
+
+        # The gate judges against the state the reconciliation would produce, including a provenance module
+        # that already holds the records the contribution brought: the citations of an incoming v1 block
+        # live in its derivation record, and the diagnosis of an absent one lives in a removal record.
+        compositions = {kind: Composition(kind, result.block_ids) for kind, result in merged.items()}
+        modules = {kind: Module(kind, self.store, composition) for kind, composition in compositions.items()}
+        report = judge_incoming(
+            {kind: result.incoming for kind, result in merged.items()},
+            compositions,
+            self.store,
+            Ledger.of(modules),
+            validators,
+        )
+
+        # Equation 1 is applied per module and is individually correct in each, which is exactly why it is
+        # not sufficient: a block excluded in the canonical module leaves its dependents behind in the
+        # semantic one, citing evidence the composition no longer holds. The gate catches that for blocks
+        # arriving from the other history; it cannot catch it for blocks that were already here, because
+        # nobody proposed them. The cascade a drop runs is what does, and it is the same cascade.
+        cascaded = self._cascade_for(merged)
+        withdrawn = self._withdrawn(merged, ours, cascaded)
+
+        chain = snapshots_between(self.store, head, theirs, base_digest)
+        replayable = [step for step in chain if is_reopenable(self.store, step)]
+        return ReconcilePlan(
+            ancestor=base_digest,
+            theirs=theirs,
+            modules=merged,
+            incoming=report,
+            cascaded=cascaded,
+            withdrawn=withdrawn,
+            attribution=attribution_table(len(chain), len(replayable)),
+            collapsed=len(chain),
+            replayable=len(replayable),
+            untransferred=untransferred,
+            carried=self._carried_verbatim(merged, head),
+        )
+
+    def _cascade_for(self, merged: Mapping[MemoryType, ModuleReconciliation]) -> dict[MemoryType, list[BlockId]]:
+        """The cascade a reconciled set of modules implies, read off that set alone.
+
+        Built over the compositions Equation 1 produced rather than the installed ones, so the same question
+        can be asked of the whole contribution when planning and of one replayed version when writing.
+
+        Args:
+            merged (Mapping[MemoryType, ModuleReconciliation]): What Equation 1 produced per module.
+
+        Returns:
+            dict[MemoryType, list[BlockId]]: The surviving blocks whose evidence the result excludes.
+        """
+        compositions = {kind: Composition(kind, result.block_ids) for kind, result in merged.items()}
+        modules = {kind: Module(kind, self.store, composition) for kind, composition in compositions.items()}
+        return self._cascade_from(merged, modules, Ledger.of(modules))
+
+    @staticmethod
+    def _within(
+        cascaded: Mapping[MemoryType, list[BlockId]],
+        accepted: Mapping[MemoryType, list[BlockId]],
+    ) -> dict[MemoryType, list[BlockId]]:
+        """A step's cascade, narrowed to what the operator was shown and accepted.
+
+        Their removals accumulate along their chain, so a step's cascade is always contained in the whole
+        contribution's and this is a no-op. It is written down anyway because the direction it fails in
+        matters: a block outside the accepted set stays, and the last step -- where it is inside the set --
+        is what removes it. Nothing leaves on a step that nobody reviewed.
+
+        Args:
+            cascaded (Mapping[MemoryType, list[BlockId]]): This step's cascade.
+            accepted (Mapping[MemoryType, list[BlockId]]): The cascade the plan reported.
+
+        Returns:
+            dict[MemoryType, list[BlockId]]: The intersection, in canonical leaf order.
+        """
+        narrowed = {}
+        for memory_type, blocks in cascaded.items():
+            allowed = set(accepted.get(memory_type, []))
+            kept = [block for block in blocks if block in allowed]
+            if kept:
+                narrowed[memory_type] = kept
+        return narrowed
+
+    def _cascade_from(
+        self,
+        merged: Mapping[MemoryType, ModuleReconciliation],
+        modules: dict[MemoryType, Module],
+        ledger: Ledger,
+    ) -> dict[MemoryType, list[BlockId]]:
+        """Which surviving blocks cite evidence the reconciliation excluded.
+
+        The cascade of Section 10.3, run over the compositions Equation 1 produced rather than over the
+        installed ones. Reusing it rather than writing an evidence check for this case is the point: a
+        reconciliation that removes evidence has the same consequence as a drop that removes it, and two
+        implementations of one consequence would eventually disagree.
+
+        It is not policy-gated, unlike :meth:`drop`. The removal already happened in the other history and
+        Equation 1 is a statement about sets, not a request to remove something -- a policy that refused it
+        here would not prevent the removal, only leave this brain unable to represent a history that
+        contains it.
+        """
+        reached: dict[MemoryType, set[BlockId]] = {}
+        for memory_type, result in merged.items():
+            if not result.removed:
+                continue
+            plan = plan_many(result.removed, memory_type, modules, ledger)
+            for kind, dependents in plan.dependents.items():
+                reached.setdefault(kind, set()).update(dependents)
+
+        surviving = {kind: set(result.block_ids) for kind, result in merged.items()}
+        return {
+            kind: sorted_leaves(blocks & surviving.get(kind, set()))
+            for kind, blocks in reached.items()
+            if blocks & surviving.get(kind, set())
+        }
+
+    @staticmethod
+    def _withdrawn(
+        merged: Mapping[MemoryType, ModuleReconciliation],
+        ours: Mapping[MemoryType, Composition | None],
+        cascaded: Mapping[MemoryType, list[BlockId]],
+    ) -> dict[MemoryType, list[BlockId]]:
+        """What this brain currently holds that the reconciliation would not name.
+
+        Both causes at once, because to the operator they are one thing: a block the other history dropped,
+        which exclusion's precedence in Equation 1 keeps out, and a block of theirs or ours that followed
+        the evidence it cited.
+        """
+        leaving = {}
+        for memory_type, result in merged.items():
+            mine = ours.get(memory_type)
+            if mine is None:
+                continue
+            final = set(result.block_ids) - set(cascaded.get(memory_type, []))
+            gone = set(mine) - final
+            if gone:
+                leaving[memory_type] = sorted_leaves(gone)
+        return leaving
+
+    def reconcile(
+        self,
+        request: ReconcileRequest,
+        validators: Sequence[Validator] | None = None,
+    ) -> ReconcileResult:
+        """
+        Join another history into this one, recording it the chosen way.
+
+        The strategy is the caller's decision and there is no default. All three produce the same blocks,
+        so choosing between them is choosing who stays on record as the author: a merge keeps the other
+        side's snapshots and therefore their signature; a rebase and a squash mint new identities, and
+        their work ends up signed by whoever reconciled. That may be exactly right for a small reviewed
+        contribution, and it is not something this SDK will decide.
+
+        Args:
+            request (ReconcileRequest): Which history to join, how to record it, by whom, and why.
+            validators (Sequence[Validator] | None): Checks to apply to incoming derived blocks.
+
+        Returns:
+            ReconcileResult: What was committed, with the plan and the attribution that produced it.
+
+        **It stops rather than proceeding without everything.** If any incoming block did not apply cleanly,
+        nothing is written: what is open is recorded and the reconciliation waits. Committing the part that
+        fits would be a decision about the rest -- the contributor loses those blocks and nobody was asked --
+        and that is not what version control does with a conflict either.
+
+        Args:
+            request (ReconcileRequest): Which history to join, how to record it, by whom, and why.
+            validators (Sequence[Validator] | None): Checks to apply to incoming derived blocks.
+
+        Returns:
+            ReconcileResult: What was committed, with the plan and the attribution that produced it.
+
+        Raises:
+            ReconciliationHaltedError: If anything did not apply cleanly, or if another reconciliation is
+                already unresolved. Nothing was written; see :meth:`reconcile_status`.
+            NoCommonAncestorError: If the two histories share no ancestor.
+            SnapshotError: If a block the result would name is not held here.
+        """
+        self._require_no_reconciliation(f"reconcile {request.theirs.short}")
+        plan = self.plan_reconcile(request.theirs, request.ancestor, validators)
+
+        if not plan.is_clean:
+            self._put_reconcile_state(
+                ReconcileState(
+                    theirs=request.theirs,
+                    ancestor=plan.ancestor,
+                    strategy=request.strategy,
+                    actor=request.actor,
+                    reason=request.reason,
+                    head=self._state.snapshot if self._state else self._snapshot.digest,
+                )
+            )
+            open_questions = [verdict for verdict in plan.incoming.verdicts if not verdict.is_admissible]
+            leaving = sum(len(blocks) for blocks in plan.withdrawn.values())
+            said = []
+            if open_questions:
+                named = ", ".join(f"{verdict.block.short} ({verdict.status.value})" for verdict in open_questions[:5])
+                said.append(
+                    f"{len(open_questions)} of {len(plan.incoming.verdicts)} incoming blocks need a decision ({named})"
+                )
+            if leaving:
+                said.append(
+                    f"{leaving} block(s) this brain holds would be removed, so it needs reconcile_accept_removals()"
+                )
+            raise ReconciliationHaltedError(
+                f"the reconciliation of {request.theirs.short} stopped: {'; and '.join(said)}. Nothing was "
+                f"written. Inspect it with reconcile_status(), answer what is open, then "
+                f"reconcile_continue() -- or reconcile_abort()."
+            )
+
+        return self._conclude(plan, request.theirs, request.strategy, {})
+
+    def _conclude(
+        self,
+        plan: ReconcilePlan,
+        theirs: OciDigest,
+        strategy: ReconcileStrategy,
+        resolutions: dict[BlockId, Resolution],
+        accepted: RemovalAcceptance | None = None,
+    ) -> ReconcileResult:
+        """
+        Write the reconciliation: compositions first, the head pointer last.
+
+        The in-progress state is cleared *before* the write rather than after. An interruption then loses the
+        decisions and leaves the brain exactly where it was, which is recoverable by redoing the work; the
+        other order would leave a pointer describing a reconciliation that had already landed, and no reliable
+        way to tell -- a rebase and a squash do not record the other history as a parent, so there is nothing
+        to detect it by.
+
+        A rebase writes one snapshot per replayed version, and those moves cannot be one transaction. Each is
+        a valid version of the brain, so an interruption leaves a consistent brain partway along; it does not
+        leave a resumable rebase.
+        """
+        self._put_reconcile_state(None)
+        head = snapshot_at(self.store, theirs)
+        chain = snapshots_between(self.store, head, theirs, plan.ancestor)
+        # A version whose compositions never travelled cannot be restated, only passed through. Filtering
+        # here rather than failing keeps a rebase possible over a fetched contribution, and
+        # ``replayable`` on the plan is what says how much granularity was available to preserve.
+        replayable = [step for step in chain if is_reopenable(self.store, step)]
+        attribution = attribution_for(strategy, len(chain), len(replayable))
+
+        # Their head may already be in this history, in which case there is no lineage to record. That is
+        # not the same as nothing to do: a partial install reconciling with the tag it came from has no
+        # divergence to settle and still has modules to adopt at the remote's roots, which is exactly what
+        # Section 12.8 asks a publish-back to be. So containment silences the lineage, not the work.
+        contained = not chain
+        if contained and self._matches(plan, resolutions):
+            return ReconcileResult(
+                snapshot=self._snapshot,
+                strategy=strategy,
+                attribution=attribution,
+                parents=list(self._snapshot.parents),
+                roots={kind: reference.root for kind, reference in self._snapshot.modules.items()},
+                plan=plan,
+            )
+
+        base = snapshot_at(self.store, plan.ancestor)
+        ours, _ = self._sides(self._snapshot)
+        ancestors, _ = self._sides(base)
+        refused = self._refused_after(plan, resolutions)
+        pending = self._precedence_records(plan, resolutions)
+
+        steps = replay_steps(strategy, replayable) or [head]
+        written: list[OciDigest] = []
+        roots: dict[MemoryType, MerkleRoot] = {}
+        # Records this reconciliation authored at an earlier step. Equation 1 is stated against the version
+        # this brain was at, which is fixed for the whole replay, so a record written at one step is not in
+        # any later step's arithmetic and would drop straight back out. Carrying the identifiers forward is
+        # what keeps a replayed history additive.
+        authored: dict[MemoryType, list[BlockId]] = {}
+        cascaded_so_far: set[BlockId] = set()
+        for position, step in enumerate(steps):
+            last = position == len(steps) - 1
+            # Every step is Equation 1 against the version that step of the other history was at, which is
+            # what makes a replay deterministic here: there is no patch to apply, only a composition to
+            # state. The last step reconciles against their head, so all three strategies end identically.
+            partial = reconciled_modules(ancestors, ours, self._sides(step)[0])
+            # The cascade follows *this step's* exclusions rather than the whole contribution's. A rebase
+            # replays their history one version at a time, and the version that withdrew the evidence may be
+            # the third of five: applying the consequence from the first would publish versions that exclude
+            # a block whose evidence is still present, with nothing on record saying why.
+            cascaded = self._within(self._cascade_for(partial), plan.cascaded)
+            excluded = {kind: {*refused.get(kind, []), *cascaded.get(kind, [])} for kind in partial}
+            members = {
+                kind: [
+                    *[block_id for block_id in result.block_ids if block_id not in excluded.get(kind, set())],
+                    *authored.get(kind, []),
+                ]
+                for kind, result in partial.items()
+            }
+            fresh = self._cascade_records(
+                {
+                    kind: [block for block in blocks if block not in cascaded_so_far]
+                    for kind, blocks in cascaded.items()
+                },
+                plan.theirs,
+                accepted,
+            )
+            settled = [record for record in pending if last or _is_supported(record, members)]
+            pending = [record for record in pending if record not in settled]
+            snapshot, roots = self._write_reconciliation(
+                members,
+                plan.carried,
+                [] if contained else (merged_parents(strategy, theirs) if last else []),
+                retain=[theirs] if last and strategy is ReconcileStrategy.MERGE else [],
+                extra=[*settled, *fresh],
+            )
+            for record in (*settled, *fresh):
+                authored.setdefault(record.MEMORY_TYPE, []).append(record.block_id)
+            cascaded_so_far.update(block for blocks in cascaded.values() for block in blocks)
+            written.append(self._state.snapshot if self._state else snapshot.digest)
+
+        return ReconcileResult(
+            snapshot=self._snapshot,
+            strategy=strategy,
+            attribution=attribution,
+            parents=list(self._snapshot.parents),
+            snapshots=written,
+            roots=roots,
+            admitted={
+                kind: sorted_leaves(set(plan.admitted(kind)) - set(refused.get(kind, []))) for kind in plan.modules
+            },
+            excluded=plan.excluded,
+            plan=plan,
+        )
+
+    def _matches(self, plan: ReconcilePlan, resolutions: dict[BlockId, Resolution]) -> bool:
+        """Whether carrying out a plan would leave this brain exactly where it is.
+
+        Compared by root rather than by block list, because the root is what a version *is*: two
+        compositions with the same root are the same version, and one with a different root is a new one
+        however small the difference.
+        """
+        refused = self._refused_after(plan, resolutions)
+        expected = {
+            **{
+                kind: Composition(kind, set(plan.admitted(kind)) - set(refused.get(kind, []))).root
+                for kind in plan.modules
+            },
+            **{kind: reference.root for kind, reference in plan.carried.items()},
+        }
+        current = {kind: reference.root for kind, reference in self._snapshot.modules.items()}
+        return expected == current
+
+    def reconcile_status(self, validators: Sequence[Validator] | None = None) -> ReconcileStatus | None:
+        """
+        Where the reconciliation being resolved stands, if there is one.
+
+        The plan is recomputed rather than remembered. A plan is a deterministic function of this brain's
+        head, the other history, the ancestor and the blocks in the store, so recomputing it costs little and
+        cannot report a judgment that has since stopped holding.
+
+        Args:
+            validators (Sequence[Validator] | None): Checks to apply to incoming derived blocks. Pass the same
+                set the reconciliation started with, or the verdicts will not be the ones it stopped on.
+
+        Returns:
+            ReconcileStatus | None: What is open and what has been decided, or ``None`` if nothing is in
+            progress.
+        """
+        state = self._reconcile_state()
+        if state is None:
+            return None
+
+        # The head cannot move while this is open -- every ordinary write is refused, and concluding clears
+        # this pointer before it writes -- so a mismatch is not a race. It means the layout was changed by
+        # something other than this API, and the decisions on record describe a reconciliation of a state
+        # that is no longer here.
+        current = self._state.snapshot if self._state else self._snapshot.digest
+        if current != state.head:
+            raise ReconciliationError(
+                f"the reconciliation of {state.theirs.short} was started against snapshot {state.head.short} "
+                f"but this brain is at {current.short}. Nothing moved it through this API, so the layout was "
+                f"changed from outside; the decisions on record describe a state that is gone. Abandon it "
+                f"with reconcile_abort()."
+            )
+
+        plan = self.plan_reconcile(state.theirs, state.ancestor, validators)
+        open_questions = [verdict.block for verdict in plan.incoming.verdicts if not verdict.is_admissible]
+        accepted = state.accepted_removals
+        return ReconcileStatus(
+            state=state,
+            plan=plan,
+            unresolved=[block for block in open_questions if block not in state.resolutions],
+            resolved=[block for block in open_questions if block in state.resolutions],
+            withdrawn=plan.withdrawn,
+            # Compared against what was accepted, not merely present: an acceptance that covered a different
+            # set of blocks answered a different question.
+            removals_accepted=not plan.withdrawn or (accepted is not None and accepted.blocks == plan.withdrawn),
+        )
+
+    def reconcile_resolve(
+        self,
+        block: BlockId,
+        kind: ResolutionKind,
+        prefer: BlockId | None = None,
+        reason: str | None = None,
+        actor: Actor | None = None,
+        validators: Sequence[Validator] | None = None,
+    ) -> ReconcileStatus:
+        """
+        Decide one of the questions a halted reconciliation is holding.
+
+        Checked when it is recorded rather than when the reconciliation is concluded, so an impossible
+        decision fails while you are still making it instead of after you have made all the others.
+
+        Args:
+            block (BlockId): Which incoming block to decide. Must be one the reconciliation is actually
+                holding: deciding a block that applied cleanly would suggest the decision changed something.
+            kind (ResolutionKind): What to do with it.
+            prefer (BlockId | None): The winning successor, required for :attr:`ResolutionKind.PREFER` and
+                meaningless otherwise.
+            reason (str | None): Why.
+            actor (Actor | None): Who decided. Defaults to this handle's actor.
+            validators (Sequence[Validator] | None): Checks to apply, as in :meth:`reconcile_status`.
+
+        Returns:
+            ReconcileStatus: The state after recording it, so a caller can see what is left.
+
+        Raises:
+            ReconciliationError: If nothing is in progress, or the block is not one of the open questions.
+            ResolutionRefusedError: If the decision would break an invariant rather than settle a conflict.
+        """
+        status = self.reconcile_status(validators)
+        if status is None:
+            raise ReconciliationError("no reconciliation is in progress, so there is nothing to resolve")
+        verdict = next((entry for entry in status.plan.incoming.verdicts if entry.block == block), None)
+        if verdict is None or verdict.is_admissible:
+            raise ReconciliationError(
+                f"{block.short} is not one of the questions this reconciliation is holding; the open ones are: "
+                f"{', '.join(candidate.short for candidate in [*status.unresolved, *status.resolved]) or 'none'}"
+            )
+
+        self._require_resolvable(verdict, kind, prefer)
+        state = status.state.with_resolution(
+            block,
+            Resolution(
+                kind=kind,
+                prefer=prefer,
+                actor=actor if actor is not None else self.actor,
+                reason=reason,
+            ),
+        )
+        self._put_reconcile_state(state)
+        resolved = self.reconcile_status(validators)
+        assert resolved is not None  # just written
+        return resolved
+
+    def reconcile_accept_removals(
+        self,
+        reason: str | None = None,
+        actor: Actor | None = None,
+        validators: Sequence[Validator] | None = None,
+    ) -> ReconcileStatus:
+        """
+        State that the work this reconciliation removes may go.
+
+        One answer rather than one per block, because the granularity would be false. Exclusion has
+        precedence in Equation 1 -- a block the other history dropped does not come back because this one
+        still held it -- so there is no per-block choice to offer. What is genuinely open is whether this
+        reconciliation happens, and the alternative to accepting is :meth:`reconcile_abort`.
+
+        Re-admitting a removed block afterwards remains possible and remains an ordinary commit, which is
+        where a decision of that kind belongs: doing it inside a reconciliation would make the arithmetic
+        depend on who was resolving it.
+
+        Args:
+            reason (str | None): Why the removals are accepted.
+            actor (Actor | None): Who accepts them. Defaults to this handle's actor.
+            validators (Sequence[Validator] | None): Checks to apply, as in :meth:`reconcile_status`.
+
+        Returns:
+            ReconcileStatus: The state after recording it.
+
+        Raises:
+            ReconciliationError: If nothing is in progress, or the reconciliation removes nothing.
+        """
+        status = self.reconcile_status(validators)
+        if status is None:
+            raise ReconciliationError("no reconciliation is in progress, so there is nothing to accept")
+        if not status.withdrawn:
+            raise ReconciliationError(
+                f"the reconciliation of {status.state.theirs.short} removes nothing this brain holds, so "
+                f"there is nothing to accept"
+            )
+
+        state = status.state.with_acceptance(
+            RemovalAcceptance(
+                blocks=status.withdrawn,
+                actor=actor if actor is not None else self.actor,
+                reason=reason,
+            )
+        )
+        self._put_reconcile_state(state)
+        accepted = self.reconcile_status(validators)
+        assert accepted is not None  # just written
+        return accepted
+
+    def reconcile_continue(self, validators: Sequence[Validator] | None = None) -> ReconcileResult:
+        """
+        Conclude the reconciliation now that its questions are answered.
+
+        Args:
+            validators (Sequence[Validator] | None): Checks to apply, as in :meth:`reconcile_status`.
+
+        Returns:
+            ReconcileResult: What was committed.
+
+        Raises:
+            ReconciliationError: If nothing is in progress.
+            ReconciliationBlockedError: If a question is still open. Section 12.4 forbids committing while a
+                candidate is undecided: the protocol declined to decide, and committing would decide for it.
+        """
+        status = self.reconcile_status(validators)
+        if status is None:
+            raise ReconciliationError("no reconciliation is in progress, so there is nothing to continue")
+        if status.unresolved:
+            named = ", ".join(block.short for block in status.unresolved[:5])
+            raise ReconciliationBlockedError(
+                f"{len(status.unresolved)} question(s) are still open ({named}); decide them with "
+                f"reconcile_resolve() before continuing"
+            )
+        if not status.removals_accepted:
+            leaving = sum(len(blocks) for blocks in status.withdrawn.values())
+            raise ReconciliationBlockedError(
+                f"this reconciliation removes {leaving} block(s) this brain holds and nothing has said that "
+                f"is acceptable; call reconcile_accept_removals() or reconcile_abort()"
+            )
+
+        return self._conclude(
+            status.plan,
+            status.state.theirs,
+            status.state.strategy,
+            status.state.resolutions,
+            status.state.accepted_removals,
+        )
+
+    def reconcile_abort(self) -> None:
+        """
+        Abandon the reconciliation being resolved, discarding its decisions.
+
+        Nothing is undone because nothing was written: a halted reconciliation never touched a composition or
+        the head pointer. The blocks it fetched stay in the store, unreachable from any root, for a prune to
+        reclaim -- the ordinary fate of anything no version names.
+
+        Raises:
+            ReconciliationError: If nothing is in progress.
+        """
+        if self._reconcile_state() is None:
+            raise ReconciliationError("no reconciliation is in progress, so there is nothing to abandon")
+        self._put_reconcile_state(None)
+
+    @staticmethod
+    def _require_resolvable(verdict: BlockVerdict, kind: ResolutionKind, prefer: BlockId | None) -> None:
+        """Refuse a decision that would break an invariant rather than settle a conflict.
+
+        Rejecting is always available: declining a contribution needs no justification a protocol can check.
+        Admitting is not. A ``REJECTED`` block is malformed, unreadable, or cites evidence the composition does
+        not hold, and the last of those breaks R1 in a way nothing downstream would catch -- ``verify``
+        recomputes hashes and compositions, not citations across modules. So the refusal names the operation
+        that fixes the cause instead, and that operation is an ordinary commit, which is where a decision to
+        re-admit removed evidence belongs.
+        """
+        if kind is ResolutionKind.REJECT:
+            return
+
+        if kind is ResolutionKind.PREFER:
+            contenders = _contenders(verdict)
+            if not contenders:
+                raise ResolutionRefusedError(
+                    f"{verdict.block.short} is not a precedence question, so there is nothing to prefer; it is "
+                    f"{verdict.status.value}"
+                )
+            if prefer is None or prefer not in contenders:
+                named = ", ".join(sorted(block.short for block in contenders))
+                raise ResolutionRefusedError(
+                    f"prefer must name one of the competing successors of {verdict.block.short} ({named}); "
+                    f"got {prefer.short if prefer else 'nothing'}"
+                )
+            return
+
+        if verdict.status is ValidationStatus.REJECTED:
+            causes = "; ".join(f"{issue.code}: {issue.detail}" for issue in verdict.issues)
+            raise ResolutionRefusedError(
+                f"{verdict.block.short} cannot be admitted by decision -- {causes}. A block whose evidence the "
+                f"composition does not hold cannot be audited against its source, and no later check would "
+                f"notice. Fix the cause instead: re-admit the evidence that was removed, or register a "
+                f"replacement and re-derive against it. Both are ordinary commits, so abandon this "
+                f"reconciliation first with reconcile_abort()."
+            )
+
+    def _refused_after(
+        self,
+        plan: ReconcilePlan,
+        resolutions: dict[BlockId, Resolution],
+    ) -> dict[MemoryType, list[BlockId]]:
+        """Which blocks the result excludes, once the decisions are applied.
+
+        The gate's refusals are the starting point; an ``ADMIT`` withdraws one and a ``REJECT`` confirms it.
+        Nothing else can move a block into the result, because nothing else was offered.
+        """
+        refused: dict[MemoryType, list[BlockId]] = {}
+        for verdict in plan.incoming.verdicts:
+            if verdict.is_admissible:
+                continue
+            decision = resolutions.get(verdict.block)
+            if decision is not None and decision.kind is not ResolutionKind.REJECT:
+                continue
+            refused.setdefault(verdict.memory_type, []).append(verdict.block)
+        return refused
+
+    def _cascade_records(
+        self,
+        cascaded: Mapping[MemoryType, Sequence[BlockId]],
+        theirs: OciDigest,
+        accepted: RemovalAcceptance | None,
+    ) -> list[ProvenanceBlock]:
+        """Removal records for the blocks the cascade takes with the evidence they cited.
+
+        The exclusions Equation 1 itself performs need no record from here: the history that dropped those
+        blocks wrote one, and it arrives as a provenance block like any other. What has no record yet is the
+        consequence -- a block of this brain's that followed its evidence out -- so this writes it, in the
+        same version as the composition it describes, and attributes it to whoever accepted the removals.
+
+        Args:
+            cascaded (Mapping[MemoryType, Sequence[BlockId]]): The blocks leaving in the version being
+                written -- which for a rebase is that step's cascade and not the contribution's, so the
+                record lands with the exclusion it explains rather than at the end of the replay.
+            theirs (OciDigest): The history being reconciled from, named in the reason.
+            accepted (RemovalAcceptance | None): Who accepted the removals, and why.
+
+        Returns:
+            list[ProvenanceBlock]: One record per module losing blocks, empty when nothing is.
+        """
+        actor = accepted.actor if accepted is not None else self.actor
+        at = accepted.at if accepted is not None else utc_timestamp()
+        reason = f"the evidence these blocks cite was withdrawn by the history reconciled from {theirs.short}"
+        if accepted is not None and accepted.reason:
+            reason = f"{reason}; accepted: {accepted.reason}"
+        return [
+            ProvenanceBlock(
+                record=RemovalRecord(
+                    blocks=list(blocks),
+                    mechanism=RemovalMechanism.DROP,
+                    memory_type=memory_type,
+                    actor=actor,
+                    at=at,
+                    reason=reason,
+                )
+            )
+            for memory_type, blocks in cascaded.items()
+            if blocks
+        ]
+
+    def _precedence_records(
+        self,
+        plan: ReconcilePlan,
+        resolutions: dict[BlockId, Resolution],
+    ) -> list[ProvenanceBlock]:
+        """The supersession edges that settle the precedence questions someone answered.
+
+        Recorded as supersession rather than as a new kind of record, because that is what precedence already
+        means here: naming a winner over a loser is exactly one more edge, and the ledger then resolves the
+        chain without ambiguity. A record type invented for this would have added a second way to say the same
+        thing.
+        """
+        records = []
+        for verdict in plan.incoming.verdicts:
+            decision = resolutions.get(verdict.block)
+            if decision is None or decision.kind is not ResolutionKind.PREFER or decision.prefer is None:
+                continue
+            for loser in _contenders(verdict) - {decision.prefer}:
+                records.append(
+                    ProvenanceBlock(
+                        record=SupersessionRecord(
+                            block=decision.prefer,
+                            supersedes=loser,
+                            actor=decision.actor,
+                            at=decision.at,
+                            reason=decision.reason or f"precedence settled while reconciling {plan.theirs.short}",
+                        )
+                    )
+                )
+        return records
+
+    def merge(
+        self,
+        theirs: OciDigest,
+        reason: str,
+        actor: Actor | None = None,
+        ancestor: OciDigest | None = None,
+        validators: Sequence[Validator] | None = None,
+    ) -> ReconcileResult:
+        """
+        Reconcile by recording both histories as parents.
+
+        The only strategy that keeps the other side's snapshots in the history, and therefore the only one
+        under which what they signed still covers something.
+
+        Args:
+            theirs (OciDigest): The other history's head.
+            reason (str): Why this reconciliation is being made.
+            actor (Actor | None): Who is reconciling. Defaults to this handle's actor.
+            ancestor (OciDigest | None): The snapshot to reconcile against.
+            validators (Sequence[Validator] | None): Checks to apply to incoming derived blocks.
+
+        Returns:
+            ReconcileResult: What was committed.
+        """
+        return self._reconcile_as(ReconcileStrategy.MERGE, theirs, reason, actor, ancestor, validators)
+
+    def rebase(
+        self,
+        theirs: OciDigest,
+        reason: str,
+        actor: Actor | None = None,
+        ancestor: OciDigest | None = None,
+        validators: Sequence[Validator] | None = None,
+    ) -> ReconcileResult:
+        """
+        Reconcile by replaying the other history onto this one, one snapshot at a time.
+
+        Deterministic, and it mints new snapshot identities -- which invalidates any signature over the
+        originals and any root already published. Legitimate before publication, under version control's
+        own rule about rewriting public history.
+
+        Args:
+            theirs (OciDigest): The other history's head.
+            reason (str): Why this reconciliation is being made.
+            actor (Actor | None): Who is reconciling. Defaults to this handle's actor.
+            ancestor (OciDigest | None): The snapshot to reconcile against.
+            validators (Sequence[Validator] | None): Checks to apply to incoming derived blocks.
+
+        Returns:
+            ReconcileResult: What was committed.
+        """
+        return self._reconcile_as(ReconcileStrategy.REBASE, theirs, reason, actor, ancestor, validators)
+
+    def squash(
+        self,
+        theirs: OciDigest,
+        reason: str,
+        actor: Actor | None = None,
+        ancestor: OciDigest | None = None,
+        validators: Sequence[Validator] | None = None,
+    ) -> ReconcileResult:
+        """
+        Reconcile by collapsing the other history's snapshots into one.
+
+        More useful here than in version control, because an ingestion session mints many intermediate
+        snapshots nobody cares about individually. It compacts snapshot history only: every provenance
+        record those snapshots produced is a block in the provenance module, and Equation 1 keeps it.
+
+        Args:
+            theirs (OciDigest): The other history's head.
+            reason (str): Why this reconciliation is being made.
+            actor (Actor | None): Who is reconciling. Defaults to this handle's actor.
+            ancestor (OciDigest | None): The snapshot to reconcile against.
+            validators (Sequence[Validator] | None): Checks to apply to incoming derived blocks.
+
+        Returns:
+            ReconcileResult: What was committed.
+        """
+        return self._reconcile_as(ReconcileStrategy.SQUASH, theirs, reason, actor, ancestor, validators)
+
+    def _reconcile_as(
+        self,
+        strategy: ReconcileStrategy,
+        theirs: OciDigest,
+        reason: str,
+        actor: Actor | None,
+        ancestor: OciDigest | None,
+        validators: Sequence[Validator] | None,
+    ) -> ReconcileResult:
+        """The three named operations differ in one argument, so they share everything else."""
+        return self.reconcile(
+            ReconcileRequest(
+                theirs=theirs,
+                strategy=strategy,
+                actor=actor if actor is not None else self.actor,
+                reason=reason,
+                ancestor=ancestor,
+            ),
+            validators,
+        )
+
+    def _write_reconciliation(
+        self,
+        members: dict[MemoryType, list[BlockId]],
+        carried: dict[MemoryType, ModuleRef],
+        merged: list[OciDigest],
+        retain: Iterable[OciDigest] = (),
+        extra: Sequence[ProvenanceBlock] = (),
+    ) -> tuple[Snapshot, dict[MemoryType, MerkleRoot]]:
+        """
+        Publish one reconciled version: compositions first, pointer last.
+
+        The write discipline is the one every other mutation follows -- blobs and composition documents are
+        written before the pointer moves, so an interrupted reconciliation leaves the previous snapshot
+        current and some unreachable documents a prune reclaims.
+
+        Unlike a commit, membership is stated absolutely rather than as an addition: Equation 1 computes
+        the whole composition, and expressing that as a delta against the current one would reintroduce
+        the ordering question the set arithmetic exists to avoid.
+
+        Args:
+            members (dict[MemoryType, list[BlockId]]): The reconciled composition of every module the
+                result names and this brain can rebuild.
+            carried (dict[MemoryType, ModuleRef]): Modules taken at their recorded root instead, because
+                neither side's composition is readable here. Their blocks are not required to be held:
+                that is what publishing back from a partial install means.
+            merged (list[OciDigest]): Additional parents to record, which is the other history for a merge
+                and nothing for a rebase or a squash.
+            extra (Sequence[ProvenanceBlock]): Records this reconciliation writes of its own -- the supersession
+                edges that settle a precedence question someone answered. They land in the same version as the
+                composition they describe, because a decision recorded in a later commit would leave one
+                published version in which the ambiguity was unresolved.
+            retain (Iterable[OciDigest]): Snapshots to keep reachable alongside this one.
+
+        Returns:
+            tuple[Snapshot, dict[MemoryType, MerkleRoot]]: The new snapshot and each module's new root.
+
+        Raises:
+            SnapshotError: If the result would name a block this brain does not hold. Writing it would
+                produce a root that cannot be resolved, which is the one state a commit must never reach.
+        """
+        additions: dict[MemoryType, list[BlockId]] = {}
+        for block in extra:
+            self.store.put_block(block)
+            additions.setdefault(block.MEMORY_TYPE, []).append(block.block_id)
+
+        references: list[ModuleRef] = []
+        roots: dict[MemoryType, MerkleRoot] = {}
+        for memory_type, block_ids in {kind: [*ids, *additions.get(kind, [])] for kind, ids in members.items()}.items():
+            absent = [block_id for block_id in block_ids if not self.store.has(block_id)]
+            if absent:
+                named = ", ".join(block.short for block in absent[:5])
+                raise SnapshotError(
+                    f"the reconciled {memory_type.value} composition names {len(absent)} block(s) this brain "
+                    f"does not hold ({named}); fetch the other history before reconciling it"
+                )
+            module = Module(
+                memory_type,
+                self.store,
+                Composition(memory_type, block_ids),
+                self._index_map(memory_type),
+            )
+            self._rebuild_indices(module)
+            references.append(module.persist(embedding_model=self._embedding_model(memory_type)))
+            roots[memory_type] = references[-1].root
+
+        for memory_type, reference in carried.items():
+            references.append(reference)
+            roots[memory_type] = reference.root
+
+        if merged:
+            snapshot = self._snapshot.reconciled(references, merged)
+        else:
+            snapshot = self._snapshot.with_modules(references)
+        self._advance(snapshot, retain=retain)
+        return snapshot, roots
+
     def pack(
         self,
         tag: str | None = None,
@@ -1610,6 +2712,10 @@ class Brain:
             index_layer = self._pack_index(memory_type, reference)
             if index_layer is not None:
                 layers.append(index_layer)
+
+        history = self._pack_history()
+        if history is not None:
+            layers.append(history)
 
         projected = self._projection(published)
         config_bytes = projected.canonical_bytes()
@@ -1671,6 +2777,29 @@ class Brain:
             created_at=self._snapshot.created_at,
             labels=self._snapshot.labels,
         )
+
+    def _pack_history(self) -> Descriptor | None:
+        """A layer carrying this brain's snapshot documents, or ``None`` for a brain with no history yet.
+
+        Published for the same reason a composition document is: the identity commits to something a
+        consumer would otherwise be unable to reopen. A snapshot names its parents, and if only the head
+        travels, those names resolve to nothing on the receiving side -- so the chain an audit walks stops
+        at one link, and reconciliation is impossible for anyone but the publisher, because finding the
+        ancestor two histories share means reading parents.
+
+        The whole reachable history goes, not a recent window. A cutoff would decide, on the publisher's
+        behalf, how far back a consumer is allowed to reconcile from -- and the thing being bounded is a
+        few hundred bytes per version, against module layers that carry the knowledge itself.
+        """
+        documents = [
+            self.store.get_bytes(digest)
+            for digest in sorted(self.reachable_history(), key=lambda value: value.hex)
+            if self.store.is_resolvable(digest)
+        ]
+        if not documents:
+            return None
+        payload = pack_history(documents)
+        return Descriptor.for_history(self.store.put_bytes(payload), len(payload), len(documents))
 
     def _pack_index(self, memory_type: MemoryType, reference: ModuleRef) -> Descriptor | None:
         """A layer for the one index kind a consumer cannot rebuild, or ``None`` if there is none.
@@ -1864,21 +2993,102 @@ class Brain:
             DistributionError: If a wanted module is not in the artifact, a wanted module uses a block
                 schema this client does not implement, or a layer does not verify.
         """
+        manifest, remote, references, _ = await self._retrieve(client, reference, tag, modules)
+        wanted = [reference_.memory_type for reference_ in references]
+
+        for memory_type in wanted:
+            # The one derived structure a model-agnostic client cannot rebuild, so it travels.
+            index_layer = manifest.vector_index_for(memory_type)
+            if index_layer is not None and not ignore_vector_indices:
+                if not self.store.is_resolvable(index_layer.digest):
+                    await client.pull_blob(reference, index_layer.digest, self.store)
+                self._load_index(memory_type, index_layer)
+
+        complete = set(wanted) == set(manifest.modules)
+        if complete:
+            # Adopt the remote document verbatim. Rebuilding an equivalent one would give it a fresh
+            # ``created_at`` and therefore a different digest, and the fast-forward check compares
+            # digests -- so a push back to the same tag would look like a divergence when nothing
+            # diverged at all.
+            installed = remote
+        else:
+            # Chained to the version it was taken from, not parentless. A partial install *succeeds* that
+            # version -- same roots, fewer modules -- and a snapshot that recorded no parent would leave a
+            # consumer holding knowledge with no recorded origin, unable to say what it was installed from
+            # and unable to be reconciled with the history it came from (paper Section 12.8).
+            source = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
+            published = OciDigest.parse(source) if source else manifest.config.digest
+            installed = Snapshot(
+                boltzmann=remote.boltzmann,
+                modules={reference_.memory_type: reference_ for reference_ in references},
+                parents=[published] if self.store.is_resolvable(published) else [],
+                labels=remote.labels,
+            )
+
+        origin = Origin(
+            reference=reference,
+            tag=tag,
+            snapshot=manifest.config.digest,
+            partial=not complete,
+        )
+        advanced = self._advance(installed, origin=origin)
+
+        # Record the artifact in the layout, the way ``pack`` does. Without it, everything the manifest
+        # knows is lost when this process ends -- and the one thing only the manifest knows is where the
+        # travelling index lives, which is exactly the thing no client can rebuild.
+        document = manifest.to_bytes()
+        self._write_index(self.store.put_bytes(document), len(document), tag)
+
+        # What ``plan_pull`` reported under ``rebuild_indices``, actually done. The travelling index was
+        # loaded above because no client can regenerate it; the structural ones are regenerated here,
+        # because a consumer that installed a version and then searched it would otherwise query indices
+        # that hold the version it had before the pull -- or nothing at all.
+        self.rebuild_indices(wanted)
+        return advanced
+
+    async def _retrieve(
+        self,
+        client: RegistryClient,
+        reference: str,
+        tag: str,
+        modules: Iterable[MemoryType] | None = None,
+    ) -> tuple[BrainManifest, Snapshot, list[ModuleRef], dict[MemoryType, list[BlockId]]]:
+        """Download a published history's modules into the store, verifying each against the snapshot
+        that names it.
+
+        Writes content-addressed blobs and nothing else: no pointer move, no index work, no state. That
+        is what lets ``pull`` and ``fetch`` share it -- the difference between them is entirely what
+        happens *after* the bytes land.
+
+        Returns:
+            tuple: The manifest, the remote snapshot, the module references retrieved in the order they
+            were asked for, and the blocks each module's layer actually contributed to this store.
+        """
         manifest = await client.resolve(reference, tag)
         wanted = list(modules) if modules is not None else manifest.modules
         self._require_carried(manifest, wanted)
         # Before the config blob, which is the first thing this method would otherwise download. A
         # brain whose blocks this client has no schema for is not installable, and finding that out
         # from a decode failure means finding it out after the transfer -- or later still, since
-        # ``rebuild_indices`` below only decodes for a module with a rebuildable index registered, so
-        # a client with none installs the artifact cleanly and fails at the first query instead.
+        # ``rebuild_indices`` only decodes for a module with a rebuildable index registered, so a
+        # client with none installs the artifact cleanly and fails at the first query instead.
         require_supported_schemas(manifest, wanted)
 
         if not self.store.is_resolvable(manifest.config.digest):
             await client.pull_blob(reference, manifest.config.digest, self.store)
         remote = Snapshot.model_validate_json(self.store.get_bytes(manifest.config.digest))
 
-        references = []
+        # Before the modules, because it is what makes the retrieved snapshot's parents resolvable, and a
+        # caller that fetched a history in order to reconcile against it needs that whether or not the
+        # module layers turn out to verify.
+        history = manifest.history
+        if history is not None:
+            if not self.store.is_resolvable(history.digest):
+                await client.pull_blob(reference, history.digest, self.store)
+            unpack_history(self.store.get_bytes(history.digest), self.store)
+
+        references: list[ModuleRef] = []
+        incoming: dict[MemoryType, list[BlockId]] = {}
         for memory_type in wanted:
             layer = manifest.layer_for(memory_type)
             assert layer is not None  # checked above
@@ -1908,47 +3118,65 @@ class Brain:
                 )
             references.append(expected)
 
-            # The one derived structure a model-agnostic client cannot rebuild, so it travels.
-            index_layer = manifest.vector_index_for(memory_type)
-            if index_layer is not None and not ignore_vector_indices:
-                if not self.store.is_resolvable(index_layer.digest):
-                    await client.pull_blob(reference, index_layer.digest, self.store)
-                self._load_index(memory_type, index_layer)
+            # Against the installed composition rather than against the store, because that is the
+            # question a caller has: what does this history hold that mine does not. A block the store
+            # happens to keep from a version that dropped it is not something this history contributed.
+            held = self._module_or_empty(memory_type)
+            incoming[memory_type] = [block_id for block_id in composition.block_ids if block_id not in held]
 
-        complete = set(wanted) == set(manifest.modules)
-        if complete:
-            # Adopt the remote document verbatim. Rebuilding an equivalent one would give it a fresh
-            # ``created_at`` and therefore a different digest, and the fast-forward check compares
-            # digests -- so a push back to the same tag would look like a divergence when nothing
-            # diverged at all.
-            installed = remote
-        else:
-            installed = Snapshot(
-                boltzmann=remote.boltzmann,
-                modules={reference_.memory_type: reference_ for reference_ in references},
-                labels=remote.labels,
-            )
+        return manifest, remote, references, incoming
 
-        origin = Origin(
+    async def fetch(
+        self,
+        client: RegistryClient,
+        reference: str,
+        tag: str,
+        modules: Iterable[MemoryType] | None = None,
+    ) -> FetchResult:
+        """
+        Retrieve a remote history without moving the local pointer.
+
+        This is the step at which *nothing has changed yet* (paper Section 12.6). The blocks and the
+        remote snapshot document land in the store, so both histories are readable locally, while the
+        current snapshot -- and a published brain -- stay exactly as they were. It is the operation
+        incorporating a contribution needs, and the reason it is separate from ``pull``: judging an
+        incoming history should not require adopting it first.
+
+        Because everything is content-addressed, the transfer is only the delta. A contributor's brain
+        shares every block reachable from the snapshot they started at with this one, byte for byte, so
+        only genuinely new blocks and the new snapshot move.
+
+        No index is touched. A travelling vector index is bound to the root it was built over, and
+        loading one for a history that is not installed would leave this brain holding an index bound to
+        a root its snapshot does not name -- the stale-index failure. Indices are rebuilt if and when a
+        reconciliation is committed.
+
+        Args:
+            client (RegistryClient): The transport.
+            reference (str): Repository reference.
+            tag (str): Which version to retrieve.
+            modules (Iterable[MemoryType] | None): Which modules are wanted. Defaults to everything the
+                artifact carries.
+
+        Returns:
+            FetchResult: The remote head, its digest, and what actually moved.
+
+        Raises:
+            DistributionError: If a wanted module is not in the artifact, a wanted module uses a block
+                schema this client does not implement, or a layer does not verify against the snapshot
+                that names it.
+        """
+        manifest, remote, references, incoming = await self._retrieve(client, reference, tag, modules)
+        # The remote snapshot document has to stay resolvable for a common-ancestor search to walk its
+        # parents, and ``_retrieve`` already wrote it: it is the config blob.
+        return FetchResult(
             reference=reference,
             tag=tag,
-            snapshot=manifest.config.digest,
-            partial=not complete,
+            snapshot=remote,
+            digest=manifest.config.digest,
+            modules=[reference_.memory_type for reference_ in references],
+            incoming=incoming,
         )
-        advanced = self._advance(installed, origin=origin)
-
-        # Record the artifact in the layout, the way ``pack`` does. Without it, everything the manifest
-        # knows is lost when this process ends -- and the one thing only the manifest knows is where the
-        # travelling index lives, which is exactly the thing no client can rebuild.
-        document = manifest.to_bytes()
-        self._write_index(self.store.put_bytes(document), len(document), tag)
-
-        # What ``plan_pull`` reported under ``rebuild_indices``, actually done. The travelling index was
-        # loaded above because no client can regenerate it; the structural ones are regenerated here,
-        # because a consumer that installed a version and then searched it would otherwise query indices
-        # that hold the version it had before the pull -- or nothing at all.
-        self.rebuild_indices(wanted)
-        return advanced
 
     async def push(
         self,
@@ -1988,7 +3216,7 @@ class Brain:
             raise DistributionError("this brain has no snapshot to publish")
 
         if not force:
-            self._require_not_narrowing(target, target_tag)
+            await self._require_not_narrowing(client, target, target_tag)
             await self._require_fast_forward(client, target, target_tag)
 
         manifest = self.pack(tag=target_tag, modules=modules)
@@ -2020,22 +3248,33 @@ class Brain:
             )
         return target, target_tag
 
-    def _require_not_narrowing(self, reference: str, tag: str) -> None:
-        """Refuse to republish a partial install over the tag it came from.
+    async def _require_not_narrowing(self, client: RegistryClient, reference: str, tag: str) -> None:
+        """Refuse to publish over a tag naming modules this snapshot omits.
 
-        The modules that were never fetched would silently disappear from the artifact. Publishing the
-        same partial brain somewhere *else* is legitimate -- a semantic-only brain is a valid artifact --
-        so only the same reference and tag are refused.
+        Those modules would silently disappear from the artifact. Stated over the snapshot rather than over
+        the install: what makes a publish dangerous is that it names less than what is there, and whether
+        the local brain happens to have been installed partially is a different question with a different
+        answer (paper Section 12.8).
+
+        The distinction matters because reconciliation resolves this case instead of working around it. A
+        partial install that reconciles with the remote head takes the roots of the modules it does not hold
+        from the remote unchanged, so the snapshot it then publishes names every module the remote named --
+        and refusing that push, as a check keyed on ``origin.partial`` would, would forbid the very
+        operation the protocol defines for it.
         """
-        origin = self.origin
-        if origin is None or not origin.partial:
-            return
-        if (reference, tag) == (origin.reference, origin.tag):
-            installed = ", ".join(kind.value for kind in self._snapshot.installed)
+        try:
+            manifest = await client.resolve(reference, tag)
+        except ReferenceNotFoundError:
+            return  # Nothing is published here, so nothing can be narrowed.
+
+        omitted = [kind.value for kind in manifest.modules if not self._snapshot.has_module(kind)]
+        if omitted:
+            installed = ", ".join(kind.value for kind in self._snapshot.installed) or "none"
             raise DistributionError(
-                f"this brain was installed partially ({installed}) from {reference}:{tag}; republishing it "
-                f"there would drop the modules that were never fetched. Push to a different tag, pull the "
-                f"rest first, or pass force=True."
+                f"{reference}:{tag} carries {', '.join(omitted)}, which this snapshot does not name (it names "
+                f"{installed}); publishing it there would drop them. Reconcile with the remote head first -- "
+                f"the modules this brain does not hold then take their roots from it unchanged -- or push to "
+                f"a different tag, or pass force=True."
             )
 
     async def _require_fast_forward(self, client: RegistryClient, reference: str, tag: str) -> None:
@@ -2052,13 +3291,15 @@ class Brain:
         # snapshot it came from and that is what the ancestry has to contain.
         source = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
         remote = OciDigest.parse(source) if source else manifest.config.digest
-        ancestry = self.ancestry()
-        if remote in ancestry:
+        # Reachability over every parent, not the first-parent chain: a history this brain merged is
+        # contained in it, and publishing over it drops nothing.
+        if remote in self.reachable_history():
             return
 
-        raise DistributionError(
+        raise DivergenceError(
             f"{reference}:{tag} is at snapshot {remote.short}, which is not in this brain's history; "
-            f"the two diverged. Pull and re-commit, or pass force=True to overwrite the remote."
+            f"the two diverged. Reconcile them -- fetch the remote and merge, rebase, or squash it -- "
+            f"or pass force=True to overwrite the remote."
         )
 
     # --- Introspection ---------------------------------------------------------

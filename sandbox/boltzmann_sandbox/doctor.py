@@ -13,14 +13,12 @@ from __future__ import annotations
 
 import importlib.metadata
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 from boltzmann_sandbox.config import ConfigError, Settings, load
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 OK: Final = "ok"
 WARN: Final = "warn"

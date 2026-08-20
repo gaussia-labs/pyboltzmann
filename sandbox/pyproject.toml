@@ -65,7 +65,7 @@ extend-exclude = [".venv", "__pycache__", "dist", "*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "DTZ", "T10", "EM", "ISC", "ICN",
-          "PIE", "PT", "RET", "SIM", "TID", "TCH", "ARG", "PTH", "PL", "TRY", "RUF"]
+          "PIE", "PT", "RET", "SIM", "TID", "ARG", "PTH", "PL", "TRY", "RUF"]
 ignore = [
     "E501",
     "PLR0913",

@@ -10,6 +10,7 @@ from boltzmann.protocol.operations import (
     BoltzmannProtocol,
     BrainDistribution,
     BrainReader,
+    BrainReconciliation,
     BrainRetention,
     BrainWriter,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "BoltzmannProtocol",
     "BrainDistribution",
     "BrainReader",
+    "BrainReconciliation",
     "BrainRetention",
     "BrainWriter",
 ]

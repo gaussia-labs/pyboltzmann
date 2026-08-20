@@ -26,19 +26,15 @@ those, using the module to resolve; the shape of the verification step would be 
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
-from boltzmann.query.evidence import EvidenceBundle
-from boltzmann.query.request import RetrievalMode
+from boltzmann.blocks.memory_type import MemoryType
+from boltzmann.identity.digest import BlockId
+from boltzmann.indices.base import Index
+from boltzmann.module.module import Module
+from boltzmann.query.evidence import EvidenceBundle, Match
+from boltzmann.query.request import Query, RetrievalMode
 from boltzmann.query.scan import scan
-
-if TYPE_CHECKING:
-    from boltzmann.blocks.memory_type import MemoryType
-    from boltzmann.identity.digest import BlockId
-    from boltzmann.indices.base import Index
-    from boltzmann.module.module import Module
-    from boltzmann.query.evidence import Match
-    from boltzmann.query.request import Query
 
 RRF_K: Final = 4
 """The rank offset in Reciprocal Rank Fusion. It damps the influence of the top of any single ranking,
