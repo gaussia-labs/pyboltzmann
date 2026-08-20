@@ -319,7 +319,7 @@ class TestSelectivePublish:
         manifest = brain.pack(tag="lite", modules=[MemoryType.CANONICAL, MemoryType.SEMANTIC])
         projected = Snapshot.model_validate_json(brain.store.get_bytes(manifest.config.digest))
         assert projected.installed == [MemoryType.CANONICAL, MemoryType.SEMANTIC]
-        assert projected.parent is None
+        assert projected.parents == []
 
     def test_a_projection_records_the_snapshot_it_came_from(self, tmp_path: Path) -> None:
         """A projection is in nobody's history, so the divergence check needs the real source."""

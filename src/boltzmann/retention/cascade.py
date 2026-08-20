@@ -19,20 +19,15 @@ review instead of discovering its size afterwards, and it is why :func:`plan_cas
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
 
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.procedural import ProceduralBlock
 from boltzmann.blocks.semantic import SemanticBlock
 from boltzmann.identity.digest import BlockId
+from boltzmann.module.ledger import Ledger
+from boltzmann.module.module import Module
 from boltzmann.retention.requests import CascadePlan
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
-
-    from boltzmann.module.ledger import Ledger
-    from boltzmann.module.module import Module
-
 
 ReferenceIndex = dict[BlockId, dict[MemoryType, set[BlockId]]]
 """Which blocks point at a given block structurally, by module: the inverse of ``_references``."""

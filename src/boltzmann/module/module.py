@@ -14,22 +14,18 @@ an external LLM holding a ``Module`` cannot mutate a Merkle DAG or an index with
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Iterable, Iterator
 
+from boltzmann.blocks.base import Block
+from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.exceptions import MembershipError, MemoryTypeError
+from boltzmann.identity.digest import BlockId, MerkleRoot
+from boltzmann.indices.base import Index
+from boltzmann.merkle.diff import CompositionDiff
+from boltzmann.merkle.proof import InclusionProof
 from boltzmann.module.composition import Composition
 from boltzmann.module.snapshot import ModuleRef
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
-
-    from boltzmann.blocks.base import Block
-    from boltzmann.blocks.memory_type import MemoryType
-    from boltzmann.identity.digest import BlockId, MerkleRoot
-    from boltzmann.indices.base import Index
-    from boltzmann.merkle.diff import CompositionDiff
-    from boltzmann.merkle.proof import InclusionProof
-    from boltzmann.store.base import BlockStore
+from boltzmann.store.base import BlockStore
 
 
 class Module:

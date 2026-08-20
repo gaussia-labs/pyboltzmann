@@ -1,6 +1,207 @@
 # CHANGELOG
 
 
+## v0.6.0-b.1 (2026-08-20)
+
+### Bug Fixes
+
+- **distribution**: Refuse a history layer that misnames its entries
+  ([`6752b39`](https://github.com/gaussia-labs/pyboltzmann/commit/6752b39b3590f0033a7d983f57ed2e6d49f8c266))
+
+The entry name is redundant under content addressing -- a substituted document lands under its own
+  digest, not the one the name claims, so it cannot impersonate a snapshot a lineage asks for. What
+  it can do is disagree with its payload, and that surfaces much later as an unexplained "no common
+  ancestor" when the parent fails to resolve.
+
+Checked at the boundary for the same reason a stored composition is checked against the root it is
+  filed under: the invariant is redundant, and one clear refusal beats a confusing failure three
+  operations away.
+
+- **reconcile**: Cascade at the step that withdrew the evidence
+  ([`8072ef2`](https://github.com/gaussia-labs/pyboltzmann/commit/8072ef291304240b11021029741ea62a15003f31))
+
+A rebase replays the other history one version at a time, but the cascade was computed once against
+  their head and then applied as an exclusion at every step, while the removal records explaining it
+  were written only at the last one. A contribution whose third version withdrew a source published
+  two earlier versions with the dependent already gone, its evidence still present, and nothing on
+  record saying why -- an unexplained removal, which is the one thing an auditable history cannot
+  contain.
+
+The cascade now follows each step's own exclusions and its record lands in the same version. Records
+  this reconciliation authors are carried forward explicitly, because Equation 1 is stated against
+  the version this brain was at: that side is fixed for the whole replay, so a record written at one
+  step is in no later step's arithmetic and would drop straight back out. Fixing it by advancing
+  that side instead would undo their removals -- a block they added and then dropped would be in the
+  previous result, absent from the ancestor, and so survive.
+
+A step's cascade is narrowed to the one the plan reported. Their removals accumulate along their
+  chain so this is a no-op, but the direction it fails in matters: nothing leaves on a step nobody
+  reviewed.
+
+Precedence edges now land at the first step holding both contenders rather than at the end, for the
+  same reason, and still fall through to the last step when no earlier one supports them.
+
+- **reconcile**: Cascade through provenance when evidence is withdrawn
+  ([`33e0aa8`](https://github.com/gaussia-labs/pyboltzmann/commit/33e0aa8d90f69beac8b22be0ed7dfec8da2a6b4f))
+
+Equation 1 is applied one module at a time and is individually correct in each, which is exactly why
+  it was not enough. If the other history withdrew a canonical source and this brain held a block
+  derived from it, the source left and the dependent stayed behind, citing evidence the composition
+  no longer holds. R1 was violated and `verify` did not catch it, because verifying recomputes
+  hashes and compositions rather than citations across modules -- the same reason admitting a
+  rejected block is refused.
+
+The validation gate caught the mirror case, where the derived block is the incoming one. It could
+  not catch this one: nobody proposed the block, it was already here. So the reconciliation now runs
+  the cascade a drop runs, over the compositions Equation 1 produced, and the dependent follows its
+  evidence out. Reusing that cascade rather than writing an evidence check for this case is the
+  point -- one consequence implemented twice would eventually disagree with itself. It is not
+  policy-gated, because the removal already happened in the other history and the equation is a
+  statement about sets rather than a request to remove anything.
+
+The halt covered incoming blocks only, so a reconciliation that merely removed work committed
+  without asking -- a decision taken on the operator's behalf, which is what the halt exists to
+  prevent. It now stops when anything this brain holds would leave, and continuing needs that
+  stated. One statement rather than one per block: exclusion wins by construction, so a per-block
+  choice would be false, and re-admitting a removed block stays an ordinary commit outside the
+  reconciliation. The acceptance records what it covered, so it cannot answer a question that has
+  since changed.
+
+The blocks the cascade removes get a removal record of their own. The other history recorded
+  withdrawing the evidence; nothing yet recorded what that cost here, and an unexplained removal is
+  not auditable.
+
+### Documentation
+
+- Establish immutability and enumerate every reconciliation case
+  ([`05574f8`](https://github.com/gaussia-labs/pyboltzmann/commit/05574f8f0e7c9747b85518e5488834a2ca312dff))
+
+The reconciliation guide asserted that a block is never modified and then built everything on it
+  without establishing it, which leaves the reader to ask the first question the design answers:
+  what happens when two people edit the same block. Nothing happens, because it cannot arise, and
+  the four things that prevent it are now spelled out along with what people do instead --
+  supersede, contradict, drop -- each of which is a case the reconciliation handles.
+
+The cases themselves were scattered across the page and incomplete. They are now one table,
+  including the ones that were missing: identical corrections converging for free, a module absent
+  on one side not being a removal, an append-only module that cannot be narrowed, and no common
+  ancestor. Each row says whether the protocol settles it or a person does.
+
+`redact` is called out where it belongs. It is the one operation that touches bytes already written,
+  it destroys rather than modifies, and it is refused by the default policy and by PERMISSIVE_POLICY
+  alike.
+
+The architecture page still documented `snapshot.parent`, which no longer exists -- reader code
+  copied from it would have raised. It now documents `parents`, `first_parent`, and why `ancestry`
+  and `reachable_history` answer different questions. Retention gained the pointer it was missing: a
+  drop travels, and reconciling with a history that dropped your evidence takes your dependents with
+  it.
+
+Replaced the two MDX components this page had introduced on its own with the ones the rest of the
+  docs use.
+
+### Features
+
+- **distribution**: Publish the snapshot history and add fetch
+  ([`cd12ed4`](https://github.com/gaussia-labs/pyboltzmann/commit/cd12ed498c00b5c6d5e6d1dbbc32d3c47a69c400))
+
+An artifact published its head and one layer per module, so the parents a snapshot names resolved to
+  nothing on the receiving side: the chain an audit walks stopped at one link, and nobody but the
+  publisher could find the ancestor two histories share. The documents now travel as their own layer
+  -- their own rather than loose blobs, because a blob no manifest references is unreferenced, and a
+  registry is entitled to reclaim it. A snapshot document is a few hundred bytes and compresses well
+  against its near-identical siblings, so the whole reachable history goes rather than a recent
+  window; a cutoff would decide on the publisher's behalf how far back a consumer may reconcile
+  from.
+
+`fetch` retrieves a remote history without moving the local pointer, which is the step at which
+  nothing has changed yet: two histories are held locally while the published brain is untouched.
+  Separate from `pull` because judging an incoming history should not require adopting it first. It
+  loads no index -- a travelling one is bound to the root it was built over, and loading it for a
+  history that is not installed would leave the brain holding a stale index.
+
+A partial install now chains to the version it was taken from instead of starting a fresh history,
+  and the narrowing guard asks whether the snapshot omits a module the remote tag names rather than
+  whether the install happened to be partial. That is the condition that makes a publish dangerous,
+  and stating it that way is what lets a partial install be published back at all.
+
+- **module**: Name a snapshot's predecessors in a parents list
+  ([`bba620e`](https://github.com/gaussia-labs/pyboltzmann/commit/bba620e4dad17f2c7ea0f58b7b5cce6949f47a10))
+
+A snapshot named one parent, so a history that joined two others could not be represented and
+  divergence could only ever be refused. The field becomes a list: a linear history carries one
+  entry, a root snapshot none, a reconciliation two or more.
+
+Order is significant in exactly one way. The first parent is the history a reconciliation was
+  performed onto, and it is the line an audit follows. Containment is a different question, so it
+  gets a different method that follows every parent, and the fast-forward check asks that one --
+  after merging a contribution the contributor's head is a parent of the local snapshot, and walking
+  only the first-parent chain would report that as divergence.
+
+On the wire one parent is written as the scalar `parent` and two or more as the list `parents`. A
+  linear history therefore keeps the bytes and the digest it had before, and an older client stops
+  being able to read a brain only at the point where that brain genuinely reconciled something,
+  which is the one document it could not have interpreted anyway.
+
+- **reconcile**: Reconcile diverged histories, resolvable by hand
+  ([`9d33cc8`](https://github.com/gaussia-labs/pyboltzmann/commit/9d33cc82044d0410d356046c91cd6eeca56caa57))
+
+Detecting divergence and refusing to overwrite was half the obligation. Refusing is safe and
+  incomplete: it left the resolution to hand-editing, and it meant a partial install could never be
+  published back over the tag it came from.
+
+The structural half is set arithmetic over immutable, content-addressed blocks, so a textual
+  conflict is not representable and the result converges whichever side is called ours. That is not
+  enough on its own: the arithmetic is correct per module and the invariants run between them, so
+  one side dropping evidence the other derived from leaves a composition that is individually right
+  everywhere and violates R1 overall. The result is therefore put through the ingestion gate
+  unchanged -- a conflict here is a validation failure, not a differencing failure -- and only what
+  emerges validated enters.
+
+Merge, rebase and squash compute the same blocks and differ only in the lineage recorded, which once
+  snapshots are signed is a question of attribution rather than tidiness. So the strategy is
+  required, has no default and no policy default, and the plan prices all three before the choice is
+  made.
+
+If anything did not apply cleanly, nothing is written. Committing the part that fits would be a
+  decision about the rest taken without asking, so the reconciliation stops and records what is open
+  in a pointer beside the head, and a person answers each question and continues or abandons it.
+  Admitting a contradiction is available, because a contradiction is information rather than a
+  defect. Admitting a rejection is not: a derived block whose evidence the composition does not hold
+  cannot be audited against its source and no later check would notice, so the refusal names the
+  operation that fixes the cause instead. This is where the model departs from version control on
+  purpose.
+
+Two histories that superseded the same block with different successors no longer let the ledger's
+  last reader pick a winner. Both edges stay recorded, the precedence surfaces as a candidate the
+  protocol will not decide, and settling it writes one more supersession edge from the winner over
+  the loser -- the only way this architecture states precedence, and so no new record type.
+
+Trust roots and the propose scope are out of reach until authenticity lands, so the two conflict
+  classes that need them are documented as such rather than approximated.
+
+### Refactoring
+
+- Inline every TYPE_CHECKING import
+  ([`1f7f8b9`](https://github.com/gaussia-labs/pyboltzmann/commit/1f7f8b98e7a2f65495a45b3e1f3eae16b7917fa7))
+
+The blocks are gone from all 47 files that had them, along with the two pieces of configuration that
+  produced them: ruff's TCH rule family in both projects, which flags a type-only import left at
+  module level, and the coverage exclusions that existed only to skip the blocks.
+
+Nothing needed to stay deferred. Every module already carries `from __future__ import annotations`,
+  so annotations were never evaluated at runtime anyway, and importing each module standalone
+  confirms the dependency graph has no cycle for an eager import to expose.
+
+One block was load-bearing rather than cosmetic. `conformance/__init__` re-exports the pytest-backed
+  suites through a lazy `__getattr__`, because pytest is an optional extra and a plain install must
+  still be able to read the golden vectors; the block gave those names static visibility without
+  importing them. Hoisting it pulled pytest into the package import and broke three tests that pin
+  exactly that. The import is now dropped rather than hoisted, so the names resolve only through
+  `__getattr__` -- the cost is that a type checker sees them as Any, which is what the block was
+  buying.
+
+
 ## v0.5.0 (2026-08-18)
 
 ### Features

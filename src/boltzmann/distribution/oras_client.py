@@ -17,18 +17,14 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from boltzmann.distribution.manifest import parse_manifest
+from boltzmann.distribution.manifest import BrainManifest, Descriptor, parse_manifest
 from boltzmann.distribution.media_types import MANIFEST_MEDIA_TYPE
 from boltzmann.exceptions import DistributionError, ReferenceNotFoundError
 from boltzmann.identity.digest import OciDigest
+from boltzmann.store.base import BlockStore
 from boltzmann.store.oci_layout import OciLayoutStore
-
-if TYPE_CHECKING:
-    from boltzmann.distribution.manifest import BrainManifest, Descriptor
-    from boltzmann.store.base import BlockStore
-
 
 HTTP_NOT_FOUND = 404
 """What a registry answers for a tag it does not have."""

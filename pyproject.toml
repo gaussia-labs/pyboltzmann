@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 # where `pygaussia` provides `gaussia`. What a user types to install and what they type to import differ
 # by three letters, which is why the README says both.
 name = "pyboltzmann"
-version = "0.5.0"
+version = "0.6.0-b.1"
 description = "An SDK for the Boltzmann Protocol: portable, verifiable, model-agnostic knowledge"
 readme = "README.md"
 license = {text = "MIT"}
@@ -148,7 +148,6 @@ select = [
     "RET",
     "SIM",
     "TID",
-    "TCH",
     "ARG",
     "PTH",
     "PD",
@@ -185,14 +184,6 @@ ignore = [
 "__init__.py" = ["F401", "E402", "RUF022"]
 "tests/**/*.py" = ["ARG", "PLR2004", "S101", "N802", "N806", "PTH", "DTZ", "B007", "UP038", "SIM117", "E402", "C401"]
 "examples/**/*.py" = ["ARG", "PTH", "B007", "C408", "T201", "PLR2004", "DTZ", "C401"]
-
-[tool.ruff.lint.flake8-type-checking]
-# Pydantic resolves annotations at runtime to build validators, so a model's field
-# types must stay importable outside a TYPE_CHECKING block.
-runtime-evaluated-base-classes = [
-    "pydantic.BaseModel",
-    "boltzmann.blocks.base.Block",
-]
 
 [tool.ruff.lint.isort]
 known-first-party = ["boltzmann"]
@@ -279,8 +270,6 @@ exclude_lines = [
     "raise AssertionError",
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
-    "if TYPE_CHECKING:",
-    "if typing.TYPE_CHECKING:",
     "@abstractmethod",
     "@abc.abstractmethod",
 ]

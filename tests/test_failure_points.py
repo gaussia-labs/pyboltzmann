@@ -18,7 +18,7 @@ import io
 import json
 import tarfile
 import time
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -37,9 +37,6 @@ from boltzmann.retention.policy import PERMISSIVE_POLICY, RetentionPolicy
 from boltzmann.retention.requests import ProducerDropRequest
 from boltzmann.store.memory import MemoryBlockStore
 from boltzmann.store.oci_layout import OciLayoutStore
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 ACTOR = Actor(kind=ActorKind.HUMAN, id="auditor")
 REDACTING_POLICY = RetentionPolicy(redactable_media_types=["*"])

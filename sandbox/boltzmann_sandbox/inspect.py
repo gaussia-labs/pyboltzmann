@@ -18,8 +18,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from typing import TYPE_CHECKING
 
+from boltzmann.distribution.manifest import BrainManifest, Descriptor
 from boltzmann.distribution.media_types import (
     ANNOTATION_BLOCK_COUNT,
     ANNOTATION_EMBEDDING_MODEL,
@@ -32,12 +32,7 @@ from boltzmann.distribution.media_types import (
 from boltzmann.exceptions import BoltzmannError, ReferenceNotFoundError
 
 from boltzmann_sandbox.brain import open_brain, registry_client
-from boltzmann_sandbox.config import ConfigError, load
-
-if TYPE_CHECKING:
-    from boltzmann.distribution.manifest import BrainManifest, Descriptor
-
-    from boltzmann_sandbox.config import Settings
+from boltzmann_sandbox.config import ConfigError, Settings, load
 
 
 def human(size: int) -> str:

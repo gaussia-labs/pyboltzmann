@@ -15,9 +15,10 @@ never be committed. A well-formed proposal that disagrees with knowledge already
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import Any, ClassVar, cast
 
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.content import require_media_type
@@ -25,16 +26,10 @@ from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.semantic import SemanticBlock
 from boltzmann.exceptions import BlockSchemaError, ProtocolError
 from boltzmann.identity.digest import BlockId
+from boltzmann.ingest.proposer import Candidate
+from boltzmann.ingest.task import ProcessingTask
 from boltzmann.ingest.validation import ValidationIssue
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
-
-    from boltzmann.identity.digest import BlockId
-    from boltzmann.ingest.proposer import Candidate
-    from boltzmann.ingest.task import ProcessingTask
-    from boltzmann.module.module import Module
-
+from boltzmann.module.module import Module
 
 _GATE_CACHE: ContextVar[dict[tuple[str, int], tuple[Exception | None, Any]] | None] = ContextVar(
     "boltzmann_gate_cache", default=None

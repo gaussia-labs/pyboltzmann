@@ -28,8 +28,9 @@ for the interface an implementation provides.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -44,8 +45,10 @@ from boltzmann.distribution.media_types import (
     ANNOTATION_MERKLE_ROOT,
     ANNOTATION_PROTOCOL_VERSION,
     ANNOTATION_SCHEMA_VERSIONS,
+    ANNOTATION_SNAPSHOT_COUNT,
     ARTIFACT_TYPE,
     CONFIG_MEDIA_TYPE,
+    HISTORY_MEDIA_TYPE,
     MANIFEST_MEDIA_TYPE,
     REF_NAME_ANNOTATION,
     VECTOR_INDEX_MEDIA_TYPE,
@@ -54,13 +57,8 @@ from boltzmann.distribution.media_types import (
 from boltzmann.exceptions import BlockNotFoundError, DistributionError, IdentityError
 from boltzmann.identity.digest import MerkleRoot, OciDigest
 from boltzmann.identity.serialization import canonicalize
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
-
-    from boltzmann.module.snapshot import ModuleRef, Snapshot
-    from boltzmann.store.base import BlockStore
-
+from boltzmann.module.snapshot import ModuleRef, Snapshot
+from boltzmann.store.base import BlockStore
 
 OCI_SCHEMA_VERSION = 2
 """What the OCI image-manifest specification fixes this at. Present in the document because the spec
@@ -106,6 +104,31 @@ class Descriptor(BaseModel):
     def is_vector_index(self) -> bool:
         """Whether this layer is a vector index travelling alongside its module."""
         return self.media_type == VECTOR_INDEX_MEDIA_TYPE
+
+    @property
+    def is_history(self) -> bool:
+        """Whether this layer carries the artifact's snapshot history."""
+        return self.media_type == HISTORY_MEDIA_TYPE
+
+    @classmethod
+    def for_history(cls, digest: OciDigest, size: int, count: int) -> Descriptor:
+        """
+        Build the descriptor for the history layer.
+
+        Args:
+            digest (OciDigest): Content address of the layer blob.
+            size (int): Size of the layer in bytes.
+            count (int): How many snapshot documents it carries.
+
+        Returns:
+            Descriptor: The descriptor.
+        """
+        return cls(
+            media_type=HISTORY_MEDIA_TYPE,
+            digest=digest,
+            size=size,
+            annotations={ANNOTATION_SNAPSHOT_COUNT: str(count)},
+        )
 
     @classmethod
     def for_module(cls, reference: ModuleRef, digest: OciDigest, size: int) -> Descriptor:
@@ -207,9 +230,26 @@ class BrainManifest(BaseModel):
         return None
 
     @property
+    def history(self) -> Descriptor | None:
+        """
+        The layer carrying this artifact's snapshot history, if it travels.
+
+        Absent on an artifact published by an implementation that predates it, which is why every caller
+        treats it as optional: a brain whose history did not travel is still installable, it just cannot be
+        reconciled against by anyone whose own history does not already reach the ancestor.
+
+        Returns:
+            Descriptor | None: The history layer, or ``None``.
+        """
+        for layer in self.layers:
+            if layer.is_history:
+                return layer
+        return None
+
+    @property
     def modules(self) -> list[MemoryType]:
         """Which modules this artifact carries, in canonical module order."""
-        present = {layer.memory_type for layer in self.layers if not layer.is_vector_index}
+        present = {layer.memory_type for layer in self.layers if not (layer.is_vector_index or layer.is_history)}
         return [kind for kind in MemoryType if kind in present]
 
     def to_bytes(self) -> bytes:

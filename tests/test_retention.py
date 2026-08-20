@@ -192,7 +192,7 @@ class TestPrivilegedCanonicalCascade:
             DropRequest(blocks=[wrong_pdf], memory_type=MemoryType.CANONICAL, actor=CURATOR, reason="x")
         )
         assert {MemoryType.CANONICAL, MemoryType.SEMANTIC, MemoryType.PROVENANCE} <= set(result.roots)
-        assert result.snapshot.parent is not None
+        assert result.snapshot.first_parent is not None
 
     def test_knowledge_from_other_evidence_survives(self, brain: Brain, wrong_pdf: BlockId) -> None:
         good = brain.register(b"%PDF-1.7 the right lecture", REQUEST).block_id

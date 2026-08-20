@@ -38,6 +38,25 @@ The vector index is the one derived structure a model-agnostic client cannot reb
 as its own layer and carries :data:`ANNOTATION_EMBEDDING_MODEL` (paper Section 6.3).
 """
 
+HISTORY_MEDIA_TYPE = "application/vnd.gaussia.boltzmann.history.v1+tar+gzip"
+"""Media type of the layer carrying an artifact's snapshot history.
+
+A snapshot names its parents, and an artifact that published only its head would name documents no
+consumer can resolve: the chain an audit walks would stop at the first parent, and a contributor's brain
+could never be reconciled by anyone but its own publisher, because finding the ancestor two histories
+share means reading their parents (paper Sections 12.1 and 12.6).
+
+Its own layer rather than extra blobs, for one reason: a blob no manifest references is unreferenced, and
+a registry is entitled to reclaim it. History that a garbage collection can remove is not history.
+
+The cost is small and bounded by what it describes -- a snapshot document is a few hundred bytes and
+compresses well against its near-identical siblings, so a history of thousands of versions is a fraction
+of any one module layer.
+"""
+
+ANNOTATION_SNAPSHOT_COUNT = "ai.gaussia.boltzmann.snapshot-count"
+"""How many snapshot documents a history layer carries."""
+
 ANNOTATION_MEMORY_TYPE = "ai.gaussia.boltzmann.memory-type"
 """Which module a layer holds. This is the annotation a selective install resolves on."""
 

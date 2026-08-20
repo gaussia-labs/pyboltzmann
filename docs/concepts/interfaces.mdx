@@ -17,8 +17,9 @@ The surface is split because *read* and *extend* are separable, and most consume
 | `BrainReader` | `snapshot`, `root_of`, `module`, `open_index`, `resolve`, `prove`, `resolvability`, `verify`, `search` |
 | `BrainWriter` | `register`, `replace`, `define_task`, `validate`, `commit` |
 | `BrainRetention` | `drop`, `drop_by_producer`, `supersede`, `demote`, `prune`, `redact` |
-| `BrainDistribution` | `pack`, `push`, `pull` |
-| `BoltzmannProtocol` | all four |
+| `BrainDistribution` | `pack`, `push`, `pull`, `fetch` |
+| `BrainReconciliation` | `plan_reconcile`, `reconcile`, `merge`, `rebase`, `squash`, `reconcile_status`, `reconcile_resolve`, `reconcile_accept_removals`, `reconcile_continue`, `reconcile_abort` |
+| `BoltzmannProtocol` | all five |
 
 Every one is `runtime_checkable`:
 

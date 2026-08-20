@@ -27,16 +27,13 @@ import hashlib
 import json
 import math
 import re
-from typing import TYPE_CHECKING, Any, ClassVar, Final
+from collections.abc import Iterable
+from typing import Any, ClassVar, Final
 
+from boltzmann.blocks.base import Block
 from boltzmann.identity.digest import BlockId
 from boltzmann.indices.base import AbstractIndex, IndexKind
 from boltzmann.query.scan import searchable_text
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
-
-    from boltzmann.blocks.base import Block
 
 _WORD = re.compile(r"[a-z0-9]+")
 """Tokens are runs of letters and digits, after case folding. Crude, and identical on every platform."""

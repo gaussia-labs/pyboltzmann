@@ -5,6 +5,9 @@ transport target and it exercises the same code path a network registry would. T
 tested against a fake registry, since a real one is not available offline.
 """
 
+import gzip
+import io
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -12,9 +15,21 @@ import pytest
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind
 from boltzmann.brain import Brain, Origin
-from boltzmann.distribution.layers import pack_module, required_blobs, unpack_layer
+from boltzmann.distribution.layers import (
+    SNAPSHOT_PREFIX,
+    pack_history,
+    pack_module,
+    required_blobs,
+    unpack_history,
+    unpack_layer,
+)
 from boltzmann.distribution.local import LocalLayoutRegistry
-from boltzmann.distribution.media_types import ARTIFACT_TYPE, REF_NAME_ANNOTATION, memory_type_of
+from boltzmann.distribution.media_types import (
+    ANNOTATION_SNAPSHOT_COUNT,
+    ARTIFACT_TYPE,
+    REF_NAME_ANNOTATION,
+    memory_type_of,
+)
 from boltzmann.exceptions import DistributionError, ReferenceNotFoundError
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
@@ -131,11 +146,58 @@ class TestPack:
 
     def test_one_layer_per_installed_module(self, tmp_path: Path, request_: RegistrationRequest) -> None:
         manifest = seeded(tmp_path / "brain", request_).pack(tag="v1")
-        assert {memory_type_of(layer.media_type) for layer in manifest.layers} == {
+        assert {memory_type_of(layer.media_type) for layer in manifest.layers if not layer.is_history} == {
             MemoryType.CANONICAL,
             MemoryType.SEMANTIC,
             MemoryType.PROVENANCE,
         }
+
+    def test_the_history_travels_as_its_own_layer(self, tmp_path: Path, request_: RegistrationRequest) -> None:
+        """A snapshot names its parents, so an artifact that published only its head would name documents
+        the consumer cannot resolve."""
+        brain = seeded(tmp_path / "brain", request_)
+        manifest = brain.pack(tag="v1")
+
+        history = manifest.history
+        assert history is not None
+        assert history.annotations[ANNOTATION_SNAPSHOT_COUNT] == str(len(brain.reachable_history()))
+        assert manifest.modules == brain.snapshot().installed  # the history layer is not a module
+
+    def test_a_history_layer_that_misnames_its_entries_is_refused(
+        self, tmp_path: Path, request_: RegistrationRequest
+    ) -> None:
+        """Content addressing means the name cannot make a substituted document land under the digest a
+        lineage asks for -- it lands under its own, and the parent simply fails to resolve much later. A
+        producer whose naming and payloads disagree is malformed, and one refusal here beats an unexplained
+        "no common ancestor" at reconcile time.
+        """
+        brain = seeded(tmp_path / "brain", request_)
+        documents = [brain.store.get_bytes(digest) for digest in brain.reachable_history()]
+        layer = pack_history(documents)
+
+        raw = gzip.decompress(layer)
+        renamed = io.BytesIO()
+        with (
+            tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as source,
+            tarfile.open(fileobj=renamed, mode="w", format=tarfile.PAX_FORMAT) as target,
+        ):
+            for info in source.getmembers():
+                handle = source.extractfile(info)
+                assert handle is not None
+                payload = handle.read()
+                info.name = f"{SNAPSHOT_PREFIX}{'0' * 64}"
+                target.addfile(info, io.BytesIO(payload))
+        tampered = gzip.compress(renamed.getvalue())
+
+        with pytest.raises(DistributionError, match="naming and its payloads disagree"):
+            unpack_history(tampered, MemoryBlockStore())
+
+    def test_a_history_layer_round_trips(self, tmp_path: Path, request_: RegistrationRequest) -> None:
+        brain = seeded(tmp_path / "brain", request_)
+        expected = set(brain.reachable_history())
+        store = MemoryBlockStore()
+
+        assert set(unpack_history(pack_history([brain.store.get_bytes(d) for d in expected]), store)) == expected
 
     def test_each_layer_carries_its_modules_root(self, tmp_path: Path, request_: RegistrationRequest) -> None:
         """The descriptor's digest names the file; the annotation names the composition inside it."""
@@ -392,7 +454,7 @@ class TestDivergence:
 
         assert target.origin is not None
         assert target.origin.partial
-        with pytest.raises(DistributionError, match="installed partially"):
+        with pytest.raises(DistributionError, match="which this snapshot does not name"):
             await target.push(registry, tag="v1")
 
     async def test_a_partial_install_may_be_published_elsewhere(
@@ -492,7 +554,7 @@ class TestAncestry:
         """The empty snapshot a fresh handle starts from is a placeholder, not a published version."""
         brain = Brain.open(tmp_path / "a", actor=CURATOR)
         brain.register(b"%PDF-1.7 Lecture 07", request_)
-        assert brain.snapshot().parent is None
+        assert brain.snapshot().parents == []
         assert brain.ancestry() == [brain.snapshot().digest]
 
     def test_an_empty_brain_has_no_ancestry(self, tmp_path: Path) -> None:

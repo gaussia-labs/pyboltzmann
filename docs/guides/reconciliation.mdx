@@ -1,0 +1,470 @@
+---
+title: "Reconciliation"
+description: "Two brains advanced from a common ancestor. Merge, rebase or squash — you choose which."
+---
+
+A push refuses to overwrite a remote that is absent from the local history. Refusing is safe and
+incomplete: it leaves the resolution to hand-editing, and it means a partial install can never be published
+back over the tag it came from. Reconciliation is what that refusal was standing in for.
+
+The thing that makes it different from git is what is being merged. Git merges lines of text. Here the unit
+is an immutable, content-addressed block. **A textual conflict is not representable**, and everything below
+follows from that, so it is worth establishing first.
+
+## No block is ever modified
+
+You cannot edit a block, and neither can anyone else — not yours, not one you pulled from someone else's
+brain. This is not a permission the protocol withholds; there is no operation that could express it. Four
+things stand in the way, and each one is enough on its own:
+
+1. **The object is frozen.** Block models are immutable — `block.statement = "something else"` raises.
+2. **`block_id` is the hash of the envelope.** Write the "same" block with a different statement and you get
+   `sha256:c261…` where you had `sha256:ad3d…`. That is not the block modified; it is a different block.
+3. **The store cannot file bytes under a foreign identity.** `put_bytes` returns the hash of what you handed
+   it. There is no way to say *store these bytes as that identity*.
+4. **Tampering is caught on read.** Corrupt a blob out of band and resolving it raises `stored bytes for
+   block_id sha256:ad3d… hash to sha256:c261…: the store is corrupt`. A consumer recomputes the hash, so a
+   publisher cannot serve different bytes under a known identity either.
+
+So the question "what if two people edit the same block?" has no answer here, because the situation cannot
+arise. What people actually do is one of three things, and each is a case reconciliation handles:
+
+| You want to… | What you actually do | The block you started from |
+| --- | --- | --- |
+| correct it | write a **new** block and record that it supersedes the old one | untouched, still verifies, still a member |
+| disagree with it | add your claim without superseding anything | untouched |
+| get rid of it | `drop`: a new composition that excludes it | untouched; only the new root stops naming it |
+
+None of them touches the original. That is why reconciling a module is set arithmetic over identifiers, and
+why it converges whichever side you call yours.
+
+<Note>
+  One property that surprises people coming from git: if two people make the **same** correction
+  independently, they produce the same bytes, therefore the same `block_id`, therefore nothing to reconcile.
+  Identical work converges for free rather than conflicting.
+</Note>
+
+<Warning>
+  There is exactly one operation that touches bytes already written, and it does not modify them — it
+  destroys them. `redact` tombstones a block's bytes for law or safety, never for correcting knowledge. It is
+  refused by the default policy *and* by `PERMISSIVE_POLICY`; a deployment must name the redactable media
+  types explicitly. Afterwards the block is still a member, the composition still verifies, and resolving it
+  raises `BlockTombstonedError` — reported as tombstoned rather than missing, so a removed block is never
+  indistinguishable from a corrupted one. See [Retention](/sdks/boltzmann/guides/retention).
+</Warning>
+
+## The whole structural change
+
+```python
+snapshot.parents            # [OciDigest, ...] -- a list
+snapshot.first_parent       # the history this was performed onto
+snapshot.is_reconciliation  # True when it names more than one
+```
+
+A field went from scalar to list. No new document. A linear history carries one entry, a root snapshot
+carries none, a reconciliation carries two or more.
+
+Order is significant in exactly one way: the **first parent** is the history the reconciliation was
+performed onto, and every rule that speaks of *the parent* means that one. The rest are merged-in history
+and grant nothing.
+
+<Note>
+  On the wire, one parent is written as the scalar `parent` and two or more as the list `parents`. So a
+  linear history keeps the exact bytes — and the exact digest — it had before `parents` existed, and a client
+  that knows nothing of reconciliation stops being able to read a brain only at the point where that brain
+  genuinely reconciled something. That is the same oldest-that-fits rule block schemas follow.
+</Note>
+
+## The four steps
+
+```python
+# 1. Retrieve their history. Nothing local changes.
+fetched = await brain.fetch(registry, "ghcr.io/sam/brain", "proposal")
+
+# 2. See what it would do, and what each strategy would cost.
+plan = brain.plan_reconcile(fetched.digest)
+
+# 3. Choose. Completes if everything applied; otherwise it halts and waits for you.
+result = brain.merge(fetched.digest, reason="reviewed contribution")
+
+# 4. Publish. The remote is now a parent, so this fast-forwards.
+await brain.push(registry, "ghcr.io/sam/brain", "proposal")
+```
+
+Step 3 either lands a new version or raises `ReconciliationHaltedError` without writing anything — see
+[Resolving what did not apply](#resolving-what-did-not-apply).
+
+## The plan is the review
+
+```python
+plan.ancestor                    # the snapshot the two histories parted from
+plan.modules[MemoryType.SEMANTIC].added_by_them
+plan.modules[MemoryType.SEMANTIC].removed
+plan.incoming.verdicts           # one per incoming block
+plan.admitted(MemoryType.SEMANTIC)
+plan.is_blocked
+plan.collapsed                   # snapshots they added on top of the ancestor
+```
+
+Reviewing a pull request means reading a diff. Here the incoming blocks are candidates, the ingestion gate
+applies unchanged, and **every incoming block arrives with a verdict** — so which parts of a contribution
+fit is known before anything is decided.
+
+`plan_reconcile` does not ask which strategy you picked. The composition is identical under all three, so
+its job is to inform that choice.
+
+### The ancestor cannot be skipped
+
+Without it, a block present in one composition and absent from the other is ambiguous between *they added
+it* and *I dropped it*, and those demand opposite outcomes. Two histories that share no ancestor raise
+`NoCommonAncestorError` rather than being merged on a guess.
+
+## You choose: merge, rebase or squash
+
+All three produce **the same set of blocks**. There is nothing to replay sequentially, because a snapshot is
+a complete statement of composition rather than a patch. What differs is only the lineage recorded — and
+therefore who remains on record as the author.
+
+| | Lineage recorded | Their snapshots kept | Their signature survives |
+| --- | --- | --- | --- |
+| `merge` | Two or more parents | Yes | Yes |
+| `rebase` | One parent: yours | No | No |
+| `squash` | One parent, theirs collapsed into one | No | No |
+
+```python
+brain.merge(theirs, reason="...")    # keeps them on record
+brain.rebase(theirs, reason="...")   # replays their versions as yours
+brain.squash(theirs, reason="...")   # one version, their chain collapsed
+```
+
+In git, choosing among these is a question of tidiness. Here it is a question of attribution: rebase and
+squash mint new snapshot identities, so a contributor's signature no longer covers anything in the resulting
+history and their work ends up signed by whoever performed the operation. That may be exactly what you want
+for a small reviewed contribution. It is not something the SDK will decide for you:
+
+```python
+plan.attribution[ReconcileStrategy.REBASE].their_signatures_survive   # False
+plan.attribution[ReconcileStrategy.MERGE].keeps_their_snapshots       # True
+```
+
+`ReconcileRequest.strategy` is required. There is no default and no policy-level default — you choose per
+operation, the way you write `git merge` or `git rebase`.
+
+<Note>
+  This SDK implements no signing yet, so `their_signatures_survive` describes what *will* hold. It is
+  reported now because the decision is made now: a report that appeared only once authenticity shipped would
+  arrive after the only moment it could have informed anything.
+</Note>
+
+### Rebase preserves granularity only where it can
+
+```python
+plan.collapsed     # 4 -- versions they added
+plan.replayable    # 1 -- versions this brain can restate
+```
+
+A published artifact carries the compositions of *one* version, its head. A history's intermediate versions
+arrive as snapshot documents whose composition documents never travelled, and a Merkle root commits to a set
+without being invertible into it. So a rebase over a fetched contribution replays what it can and says how
+much granularity was available — rather than quietly behaving like a squash.
+
+## Exclusion wins, and that is a feature
+
+```python
+M = (B | X | Y) - ((B - X) | (B - Y))
+```
+
+Everything either side added is kept; everything either side removed stays removed. A block one side dropped
+does not return because the other side still held it.
+
+Dropped evidence also cannot be smuggled back by re-ingesting it: re-registering the same source yields the
+same identifier, so the reconciliation recognizes it as something this brain removed rather than as a new
+contribution. No special rule required.
+
+<Note>
+  A module that is *absent* is not a module that was emptied. A selective install does not hold every module,
+  and only blocks missing from a composition both sides hold count as removals.
+</Note>
+
+## The conflicts that are real
+
+Because no textual conflict is representable, what remains is semantic — and the case that proves
+reconciliation cannot be purely structural is this one:
+
+> Branch A drops canonical block `C`. Branch B adds a semantic block derived from `C`.
+
+Each module's set arithmetic is individually correct: the drop is respected in the canonical composition, the
+addition in the semantic one. The result still violates R1, because a derived block now cites evidence that
+is not in the composition. **The invariant that broke lives between modules**, and a set operation never
+crosses that boundary.
+
+So the structural result is validated as if it were an ingestion:
+
+> **A conflict in this protocol is a validation failure, not a differencing failure.**
+
+Every question these conflicts raise — does this evidence exist, does this contradict what is held, is this
+relation admissible, does the payload satisfy a registered schema — is already asked on the ingestion path.
+No new checks are introduced.
+
+```python
+from boltzmann.reconcile.gate import RECONCILE_VALIDATORS
+
+plan = brain.plan_reconcile(theirs, validators=[*RECONCILE_VALIDATORS, MyDomainCheck()])
+```
+
+Only blocks that emerge `VALIDATED` enter on their own. **If anything did not apply cleanly, nothing is
+written** — the reconciliation stops and waits for you. The same holds if it would take work *out* of your
+brain; see [removals](#when-the-reconciliation-removes-your-work).
+
+## Every case, and what you do about it
+
+Automatic unless the last column says otherwise. Nothing here is a merge conflict in the git sense — there is
+no half-merged state on disk and nothing to hand-edit, because the unit is an immutable block and the only
+questions are whether it enters and, where two histories disagree, which one prevails.
+
+| Situation | What the protocol does | What you do |
+| --- | --- | --- |
+| Each side added different blocks | Both enter. Equation 1 keeps everything either side added | nothing |
+| Both sides made the **same** correction | Same bytes, same `block_id`, nothing to reconcile | nothing |
+| Both corrected the same block **differently**, each recording a supersession | Both successors enter and both edges are recorded. The precedence is `PENDING_REVIEW` | `prefer(winner)` — writes one more edge, from the winner over the loser |
+| Both added claims that disagree, without superseding | `CONTRADICTED`, with the conflicting blocks named | `admit` to hold both, or `reject` |
+| They dropped a block you still hold | Exclusion has precedence, so it leaves your composition. Their removal record travels with it | `reconcile_accept_removals()`, or `reconcile_abort()` |
+| They withdrew evidence **you** derived from | The dependent follows the evidence out, via the same cascade a `drop` runs | `reconcile_accept_removals()`, or `reconcile_abort()` |
+| **You** dropped evidence they derived from | Their block is `REJECTED` — it would cite evidence the composition does not hold | `reject` it, or abort, re-admit the evidence, reconcile again |
+| They shipped a derived block without its source | `REJECTED`, diagnosed `NEVER_HELD` | tell them to resend it whole; `reject` for now |
+| One side does not hold a module at all | Not a removal. That module's root is taken from the other side unchanged | nothing |
+| Their history dropped from the episodic module | Refused: `AppendOnlyViolationError`. No conforming history can have done it, so theirs is malformed | nothing to resolve — the history is invalid, not conflicting |
+| A domain check of yours declines to decide | `PENDING_REVIEW` | `admit` or `reject` |
+| The two histories share no ancestor | Refused: `NoCommonAncestorError` | nothing — a three-way merge needs the ancestor, and guessing is the one thing it must not do |
+| The two histories carry different trust roots | **Not implemented** — needs authenticity | see [what this does not do](#what-this-does-not-do) |
+
+<Note>
+  Only the rows that touch what you already hold, or that the protocol declines to decide, stop the
+  operation. A contribution whose every block applies commits in one call.
+</Note>
+
+## Resolving what did not apply
+
+```python
+try:
+    brain.merge(theirs, reason="reviewed #12")
+except ReconciliationHaltedError:
+    pass
+
+status = brain.reconcile_status()
+status.unresolved              # what still needs a decision
+status.verdict_for(block)      # why it stopped on this one
+status.state.resolutions       # what has been decided so far
+
+brain.reconcile_resolve(block, ResolutionKind.REJECT, reason="ours is right")
+brain.reconcile_continue()     # or brain.reconcile_abort()
+```
+
+Committing the part that fits would be a decision about the rest, taken without asking — the contributor
+loses those blocks and nobody was consulted. So it halts, the way a merge conflict does.
+
+The state lives in a `reconcile` pointer next to `head`, so it survives the process: a decision taken today
+is still there tomorrow, and a separate tool can read what is open. While one is unresolved, ordinary writes
+are refused — the decisions were taken against a particular head, and a commit underneath them would leave
+them describing a reconciliation that no longer exists.
+
+<Note>
+  The plan is recomputed on every call, not remembered. It is a deterministic function of your head, the other
+  history, the ancestor and the blocks in the store, so recomputing it costs little and cannot report a
+  judgment that has since stopped holding. What gets persisted is what a person decided.
+</Note>
+
+### The three decisions, and the one that is not on offer
+
+| Verdict | `REJECT` | `ADMIT` | `PREFER` |
+| --- | --- | --- | --- |
+| `CONTRADICTED` | yes | **yes** | — |
+| `PENDING_REVIEW` | yes | yes | yes, for a precedence question |
+| `REJECTED` | yes | **no** | — |
+
+Admitting a contradiction is legitimate: a contradiction is information, not a defect, and holding two claims
+that disagree is a state the protocol permits without deciding between them.
+
+Admitting a rejection is not, and this is the one place the model departs from version control on purpose. In
+git you can force anything into a commit. Here a derived block whose evidence the composition does not hold
+cannot be audited against its source, `verify()` would not catch it — it recomputes hashes and compositions,
+not citations across modules — and so the option does not exist:
+
+```
+sha256:8f3a… cannot be admitted by decision — evidence-not-found: cited evidence
+sha256:c105… is not in the canonical composition. A block whose evidence the
+composition does not hold cannot be audited against its source, and no later
+check would notice. Fix the cause instead: re-admit the evidence that was
+removed, or register a replacement and re-derive against it. Both are ordinary
+commits, so abandon this reconciliation first with reconcile_abort().
+```
+
+There is nothing to hand-edit either. The unit is an immutable block, so there is no third version to write
+between two — the only questions are whether it enters and, where two histories disagree, which one wins.
+
+### Settling precedence
+
+```python
+status.plan.incoming.by_status(ValidationStatus.PENDING_REVIEW)[0].conflicts_with
+# [BlockId('sha256:44dc…'), BlockId('sha256:9e02…')] -- the competing successors
+
+brain.reconcile_resolve(block, ResolutionKind.PREFER, prefer=winner, reason="the edition we keep")
+```
+
+Both histories' supersession edges stay recorded — the record of what each side did is not what gets
+resolved. What the decision adds is one more edge, from the winner over the loser, which is the only way this
+architecture states precedence. Afterwards the question is closed and only the winner is accessible:
+
+```python
+ledger.successors_of(original)   # {first, second} -- both edges, still there
+ledger.contested(original)       # set() -- settled
+ledger.is_accessible(first)      # False
+```
+
+## When the reconciliation removes your work
+
+Exclusion has precedence in Equation 1, so a block the other history dropped leaves your composition too.
+That is deliberate — it is what stops a drop from being undone by whoever still held the block — and it is
+also a decision about your work, so it does not happen without being seen:
+
+```python
+try:
+    brain.merge(theirs, reason="reviewed")
+except ReconciliationHaltedError:
+    pass
+
+status = brain.reconcile_status()
+status.withdrawn            # {MemoryType.SEMANTIC: [BlockId('sha256:8f3a…')]}
+status.removals_accepted    # False
+
+brain.reconcile_accept_removals(reason="they are right, the claim was wrong")
+brain.reconcile_continue()
+```
+
+One answer rather than one per block, because the granularity would be false: there is no per-block choice
+to offer when exclusion wins by construction. What is genuinely open is whether this reconciliation happens
+at all, and the alternative to accepting is `reconcile_abort()`. Re-admitting a removed block afterwards
+remains possible and remains an ordinary commit — doing it inside a reconciliation would make the arithmetic
+depend on who was resolving it.
+
+Nothing is destroyed. The bytes stay in the store, older retained roots still name the block and still
+verify, and the removal is auditable without a record written here: the history that dropped it wrote one,
+and Equation 1 keeps it like any other provenance block.
+
+<Note>
+  The acceptance records what it covered. If the plan is recomputed and something else would now leave — you
+  fetched the rest of a partial history, say — the earlier statement no longer answers the question and
+  `removals_accepted` goes back to `False`.
+</Note>
+
+### Withdrawn evidence takes what cites it
+
+```python
+plan.cascaded    # {MemoryType.SEMANTIC: [BlockId('sha256:44dc…')]}
+```
+
+Equation 1 is applied per module and is individually correct in each, which is exactly why it is not
+enough. If the other history withdrew a canonical source and you hold a block derived from it, the source
+leaves and the dependent would stay behind, citing evidence the composition no longer holds. R1 is violated
+and `verify()` would not catch it — it recomputes hashes and compositions, not citations across modules.
+
+So the reconciliation runs the same cascade a `drop` runs, and the dependent follows its evidence out. The
+validation gate catches the mirror case, where the derived block is the incoming one; it cannot catch this
+one, because nobody proposed the block — it was already here.
+
+The consequence gets its own removal record, attributed to whoever accepted the removals: the other history
+recorded withdrawing the evidence, and nothing yet recorded what that cost here.
+
+The record lands in the same version as the exclusion it explains. That matters most for a rebase, which
+writes one version per version it replays: the step that withdrew the evidence is the step the dependent
+leaves on, and the steps before it keep both. Applying the whole contribution's cascade to every step would
+publish versions excluding a block whose evidence they still hold, with nothing on record saying why — an
+unexplained removal, which is the one thing an auditable history cannot contain.
+
+### Abandoning
+
+`reconcile_abort()` discards the decisions. Nothing is undone, because nothing was written: a halted
+reconciliation never touched a composition or the head pointer. The blocks it fetched stay in the store,
+unreachable from any root, for a prune to reclaim — the ordinary fate of anything no version names.
+
+## Missing evidence has two causes, and the diagnosis matters
+
+The block is rejected either way. *Why* the evidence is absent determines what the contributor should be
+told, and provenance already holds the answer, because it is the removal ledger.
+
+```python
+plan.incoming.advice
+# {BlockId('sha256:8f3a…'): MissingEvidence.DROPPED_DELIBERATELY,
+#  BlockId('sha256:c105…'): MissingEvidence.NEVER_HELD}
+```
+
+| | Meaning | Tell them |
+| --- | --- | --- |
+| `DROPPED_DELIBERATELY` | A removal record exists: this brain judged the evidence wrong | Do **not** resend |
+| `NEVER_HELD` | No record, identity unknown: the transfer was incomplete | Resend it **whole** |
+
+Same verdict, opposite advice. Collapsing the two discards legitimate work over a packaging mistake.
+
+Rejection is not final: if a replacement source is later registered, `rederive` can rebuild what was lost
+against it. That is a separate, deliberate step, and it is never folded into a reconciliation — one that
+quietly re-derived rejected blocks against substituted evidence would be inventing knowledge in the middle
+of an operation you believe to be mechanical.
+
+## A contribution needs no new object
+
+Public read, restricted write. A contribution is a snapshot in another repository whose parent belongs to
+the maintainer's history — the parent pointer is the entire link, exactly as a branch is in version control.
+There is no proposal object and no pending state, and this protocol defines no notification mechanism, in
+the same way version control defines no pull requests.
+
+```python
+# The contributor: install, extend, publish to a repository they control.
+await mine.pull(registry, "ghcr.io/org/brain", "v1")
+mine.ingest(source, request, proposer)
+await mine.push(registry, "ghcr.io/sam/brain", "proposal")
+
+# The maintainer: fetch the delta, judge it, incorporate it.
+fetched = await brain.fetch(registry, "ghcr.io/sam/brain", "proposal")
+plan = brain.plan_reconcile(fetched.digest)
+if plan.incoming.is_clean:
+    brain.merge(fetched.digest, reason="reviewed #12")
+else:
+    ...  # decide each open question, then reconcile_continue()
+```
+
+The transfer is only the delta: the contributor's brain shares every block it did not change with the
+maintainer's, byte for byte. A contribution of forty blocks transfers forty blocks, not a brain.
+
+## Publishing back from a partial install
+
+A snapshot produced by a partial install names roots only for the modules that install holds, so publishing
+it over the tag it came from would drop the rest. Reconciliation resolves this rather than working around it:
+
+```python
+await partial.pull(registry, "ghcr.io/org/brain", "v1", modules=[MemoryType.SEMANTIC])
+partial.ingest(source, request, proposer)
+
+fetched = await partial.fetch(registry, "ghcr.io/org/brain", "v1")
+partial.merge(fetched.digest, reason="publishing back what I hold")
+
+await partial.push(registry, "ghcr.io/org/brain", "v1")
+```
+
+The modules this brain does not hold take their roots from the remote **unchanged** — a root is a complete
+statement of a version, so adopting one does not require holding what it commits to:
+
+```python
+plan.carried      # {MemoryType.PROVENANCE: ModuleRef(...)} -- taken at the remote's root
+plan.untransferred
+```
+
+The published snapshot then names every module the remote named, and no module regresses. A push still
+refuses when the snapshot omits a module the remote tag carries — stated over the snapshot, because what
+makes a publish dangerous is that it names less than what is there.
+
+## What this does not do
+
+No signing exists in the SDK yet, so two rows of the protocol's conflict table are out of reach: histories
+carrying **different trust roots** must not be reconciled automatically — unioning two key lists grants the
+union of both sides' permissions — and a `propose`-scoped snapshot must not be treated as a brain's current
+state. Both arrive with authenticity.

@@ -17,23 +17,18 @@ Two details worth stating, because both are protocol rules rather than preferenc
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import Actor, ActorKind
 from boltzmann.brain import Brain
 from boltzmann.distribution.oras_client import OrasRegistryClient
+from boltzmann.indices.base import Index
 from boltzmann.retention.policy import RetentionPolicy
 
+from boltzmann_sandbox.config import Settings
 from boltzmann_sandbox.indices import InvertedIndex, VectorIndex
 from boltzmann_sandbox.planner import HybridPlanner
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    from boltzmann.indices.base import Index
-
-    from boltzmann_sandbox.config import Settings
 
 INDEXED: tuple[MemoryType, ...] = (MemoryType.SEMANTIC, MemoryType.EPISODIC, MemoryType.PROCEDURAL)
 """The memory types worth indexing here.

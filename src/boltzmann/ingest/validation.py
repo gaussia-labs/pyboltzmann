@@ -14,23 +14,19 @@ the protocol will not decide alone. Only ``VALIDATED`` reaches commit.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import StrEnum
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from boltzmann.blocks.base import Block
+from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import Producer
 from boltzmann.identity.digest import BlockId
-from boltzmann.ingest.proposer import Candidate
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from boltzmann.blocks.memory_type import MemoryType
-    from boltzmann.ingest.proposer import CandidateSet
-    from boltzmann.ingest.task import ProcessingTask
-    from boltzmann.module.module import Module
+from boltzmann.ingest.proposer import Candidate, CandidateSet
+from boltzmann.ingest.task import ProcessingTask
+from boltzmann.module.module import Module
 
 
 class ValidationStatus(StrEnum):

@@ -52,6 +52,7 @@ from boltzmann.blocks import (
     require_media_type,
 )
 from boltzmann.brain import Brain, BrainState
+from boltzmann.distribution import FetchResult
 from boltzmann.exceptions import BoltzmannError
 from boltzmann.identity import BlockId, MerkleRoot, OciDigest
 from boltzmann.identity.time import utc_timestamp
@@ -75,10 +76,27 @@ from boltzmann.protocol import (
     BoltzmannProtocol,
     BrainDistribution,
     BrainReader,
+    BrainReconciliation,
     BrainRetention,
     BrainWriter,
 )
 from boltzmann.query import EvidenceBundle, Match, Query, QueryFilters, QueryHints, QueryPlanner, RetrievalMode
+from boltzmann.reconcile import (
+    AttributionReport,
+    BlockVerdict,
+    IncomingReport,
+    MissingEvidence,
+    ModuleReconciliation,
+    ReconcilePlan,
+    ReconcileRequest,
+    ReconcileResult,
+    ReconcileState,
+    ReconcileStatus,
+    ReconcileStrategy,
+    RemovalAcceptance,
+    Resolution,
+    ResolutionKind,
+)
 from boltzmann.retention import (
     CascadePlan,
     DropRequest,
@@ -92,9 +110,15 @@ from boltzmann.retention import (
 )
 from boltzmann.store import BlockStore, MemoryBlockStore, OciLayoutStore
 
-__version__ = "0.5.0"
+__version__ = "0.6.0-b.1"
 
 __all__ = [
+    "AttributionReport",
+    "BlockVerdict",
+    "FetchResult",
+    "IncomingReport",
+    "MissingEvidence",
+    "ModuleReconciliation",
     "PROTOCOL_VERSION",
     "Actor",
     "ActorKind",
@@ -106,6 +130,7 @@ __all__ = [
     "Brain",
     "BrainDistribution",
     "BrainReader",
+    "BrainReconciliation",
     "BrainRetention",
     "BrainState",
     "BrainWriter",
@@ -122,6 +147,12 @@ __all__ = [
     "DropResult",
     "ProducerDropRequest",
     "PruneReport",
+    "ReconcilePlan",
+    "ReconcileRequest",
+    "ReconcileResult",
+    "ReconcileState",
+    "ReconcileStatus",
+    "ReconcileStrategy",
     "RedactionResult",
     "ResolvabilityReport",
     "SupersessionResult",
@@ -157,6 +188,9 @@ __all__ = [
     "RegistrationResult",
     "Relation",
     "RemovalMechanism",
+    "RemovalAcceptance",
+    "Resolution",
+    "ResolutionKind",
     "RetentionPolicy",
     "RetrievalMode",
     "SemanticBlock",

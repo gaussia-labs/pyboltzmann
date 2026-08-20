@@ -21,7 +21,8 @@ index engine -- the suite says nothing.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -29,6 +30,15 @@ from boltzmann.blocks.base import Block
 from boltzmann.blocks.canonical import CanonicalBlock
 from boltzmann.blocks.content import ContentRef
 from boltzmann.blocks.memory_type import MemoryType
+from boltzmann.blocks.provenance import (
+    Actor,
+    ActorKind,
+    DerivationRecord,
+    Producer,
+    ProducerKind,
+    ProvenanceBlock,
+    SupersessionRecord,
+)
 from boltzmann.blocks.semantic import SemanticBlock, SemanticBlockV2, SemanticKind
 from boltzmann.conformance import golden
 from boltzmann.exceptions import (
@@ -38,18 +48,45 @@ from boltzmann.exceptions import (
     BlockTombstonedError,
     BoltzmannError,
     DigestKindError,
+    NoCommonAncestorError,
     NonDeterministicValueError,
     SnapshotError,
 )
 from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
 from boltzmann.identity.serialization import canonicalize
+from boltzmann.identity.time import utc_timestamp
 from boltzmann.merkle.tree import MerkleTree, merkle_root
 from boltzmann.module.composition import Composition
+from boltzmann.module.ledger import Ledger
+from boltzmann.module.module import Module
+from boltzmann.module.snapshot import Snapshot
+from boltzmann.reconcile.ancestry import common_ancestor
+from boltzmann.reconcile.merge import merge_module
+from boltzmann.reconcile.requests import ReconcileStrategy
+from boltzmann.reconcile.strategies import attribution_table
+from boltzmann.retention.cascade import plan_many
+from boltzmann.store.base import BlockStore
+from boltzmann.store.memory import MemoryBlockStore
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
-    from boltzmann.store.base import BlockStore
+def _supersedes(block: BlockId, superseded: BlockId) -> ProvenanceBlock:
+    """A supersession record, for the suites that reason about precedence."""
+    return ProvenanceBlock(
+        record=SupersessionRecord(
+            block=block,
+            supersedes=superseded,
+            actor=Actor(id="curator", kind=ActorKind.HUMAN),
+            at=utc_timestamp(),
+        )
+    )
+
+
+def _ledger_over(*records: ProvenanceBlock) -> Ledger:
+    """A ledger read from a real provenance composition, the way every caller reads one."""
+    store = MemoryBlockStore()
+    ids = [store.put_block(record) for record in records]
+    module = Module(MemoryType.PROVENANCE, store, Composition(MemoryType.PROVENANCE, ids))
+    return Ledger.of({MemoryType.PROVENANCE: module})
 
 
 def sample_semantic(label: str = "Fourier series") -> SemanticBlock:
@@ -241,6 +278,169 @@ class CompositionConformance:
         assert difference.added == [added]
         assert difference.removed == [blocks[0]]
         assert difference.transfer_size == 1
+
+
+class ReconciliationConformance:
+    """What reconciling two histories must do, whoever implements it (paper Section 12).
+
+    Only the part the protocol fixes. How a client presents a plan, whether it offers a default strategy in
+    its own UI, and what it does with a rejected contribution are the implementation's business. That the
+    arithmetic converges, that exclusion wins, that the three strategies agree on the result, and that a
+    missing ancestor is a distinguishable failure are not.
+    """
+
+    @staticmethod
+    def _composition(*numbers: int) -> Composition:
+        return Composition(MemoryType.SEMANTIC, [BlockId.of(str(number).encode()) for number in numbers])
+
+    def test_the_arithmetic_converges_whichever_side_is_ours(self) -> None:
+        """A module's reconciliation is set arithmetic over identifiers, so the order the sides are
+        combined in cannot change the result."""
+        base, ours, theirs = self._composition(1, 2), self._composition(1, 3), self._composition(1, 2, 4)
+        left = merge_module(MemoryType.SEMANTIC, base, ours, theirs)
+        right = merge_module(MemoryType.SEMANTIC, base, theirs, ours)
+
+        assert left is not None
+        assert right is not None
+        assert left.root == right.root
+
+    def test_exclusion_wins(self) -> None:
+        """A block one side dropped does not return because the other side still held it."""
+        dropped = BlockId.of(b"2")
+        merged = merge_module(
+            MemoryType.SEMANTIC, self._composition(1, 2), self._composition(1), self._composition(1, 2, 3)
+        )
+
+        assert merged is not None
+        assert dropped not in merged.block_ids
+        assert dropped in merged.removed
+
+    def test_re_ingesting_dropped_evidence_does_not_smuggle_it_back(self) -> None:
+        """Re-registering the same source yields the same identifier, so a reconciliation recognizes it as
+        something this brain removed rather than as a new contribution -- no special rule required."""
+        resent = BlockId.of(b"2")
+        merged = merge_module(
+            MemoryType.SEMANTIC,
+            self._composition(1, 2),
+            self._composition(1),
+            self._composition(1, 2),
+        )
+
+        assert merged is not None
+        assert resent not in merged.block_ids
+
+    def test_module_level_absence_is_not_a_removal(self) -> None:
+        """A partial install does not hold every module, and not holding one is not having emptied it."""
+        theirs = self._composition(1, 2, 3)
+        merged = merge_module(MemoryType.SEMANTIC, self._composition(1), None, theirs)
+
+        assert merged is not None
+        assert merged.root == theirs.root
+
+    def test_an_append_only_module_cannot_be_narrowed(self) -> None:
+        """No conforming history can have dropped from the episodic module."""
+        base = Composition(MemoryType.EPISODIC, [BlockId.of(b"1"), BlockId.of(b"2")])
+        with pytest.raises(AppendOnlyViolationError):
+            merge_module(MemoryType.EPISODIC, base, base, Composition(MemoryType.EPISODIC, [BlockId.of(b"1")]))
+
+    def test_the_three_strategies_differ_only_in_what_they_record(self) -> None:
+        """All three land the same blocks, so the choice between them is attribution and not outcome. An
+        implementation must not present a rebased or squashed contribution as bearing the contributor's
+        signature."""
+        table = attribution_table(collapsed=3)
+
+        assert table[ReconcileStrategy.MERGE].keeps_their_snapshots
+        assert table[ReconcileStrategy.MERGE].their_signatures_survive
+        for strategy in (ReconcileStrategy.REBASE, ReconcileStrategy.SQUASH):
+            assert not table[strategy].keeps_their_snapshots
+            assert not table[strategy].their_signatures_survive
+            assert table[strategy].mints_new_identities
+        assert table[ReconcileStrategy.SQUASH].snapshots_written == 1
+
+    def test_withdrawn_evidence_takes_what_cites_it(self) -> None:
+        """Equation 1 is applied per module and the invariants run between them, so excluding evidence in one
+        module leaves its dependents behind in another -- individually correct, and a violation of R1
+        overall. The cascade Section 10.3 defines is what resolves it, and reconciliation must run the same
+        one: a derived block whose evidence the composition does not hold cannot be audited against its
+        source, and recomputing hashes and compositions would not reveal it."""
+        store = MemoryBlockStore()
+        source = store.put_block(sample_canonical())
+        derived = store.put_block(sample_semantic("a later reading"))
+        record = store.put_block(
+            ProvenanceBlock(
+                record=DerivationRecord(
+                    block=derived,
+                    derived_from=[source],
+                    producer=Producer(kind=ProducerKind.MODEL, id="some-model", version="1"),
+                    actor=Actor(id="curator", kind=ActorKind.HUMAN),
+                    at=utc_timestamp(),
+                )
+            )
+        )
+        modules = {
+            MemoryType.CANONICAL: Module(MemoryType.CANONICAL, store, Composition(MemoryType.CANONICAL, [])),
+            MemoryType.SEMANTIC: Module(MemoryType.SEMANTIC, store, Composition(MemoryType.SEMANTIC, [derived])),
+            MemoryType.PROVENANCE: Module(MemoryType.PROVENANCE, store, Composition(MemoryType.PROVENANCE, [record])),
+        }
+
+        cascade = plan_many([source], MemoryType.CANONICAL, modules, Ledger.of(modules))
+
+        assert derived in cascade.dependents[MemoryType.SEMANTIC]
+
+    def test_a_precedence_question_is_not_answered_by_the_ledger(self) -> None:
+        """Two histories replacing the same block with different successors leaves two edges, and the ledger
+        must not present one of them as the answer. Whichever record it happened to read last would otherwise
+        decide a question Section 12.4 assigns to a person."""
+        original, first, second = BlockId.of(b"original"), BlockId.of(b"first"), BlockId.of(b"second")
+        ledger = _ledger_over(_supersedes(first, original), _supersedes(second, original))
+
+        assert ledger.successors_of(original) == {first, second}
+        assert ledger.contested(original) == {first, second}
+
+    def test_settling_precedence_closes_the_question_without_erasing_an_edge(self) -> None:
+        """Precedence is stated the only way this architecture can state it -- one more supersession edge --
+        so the record of what each history did survives the decision about which one prevails."""
+        original, first, second = BlockId.of(b"original"), BlockId.of(b"first"), BlockId.of(b"second")
+        ledger = _ledger_over(
+            _supersedes(first, original),
+            _supersedes(second, original),
+            _supersedes(second, first),
+        )
+
+        assert ledger.contested(original) == set()
+        assert ledger.successors_of(original) == {first, second}
+        assert not ledger.is_accessible(first)
+        assert ledger.is_accessible(second)
+
+    def test_no_ancestor_is_a_distinguishable_failure(self) -> None:
+        """Without a common ancestor, a block on one side and not the other is ambiguous between "they
+        added it" and "I dropped it", so there is no three-way merge to compute."""
+        store = MemoryBlockStore()
+        theirs = Snapshot()
+        digest = store.put_bytes(theirs.canonical_bytes())
+
+        with pytest.raises(NoCommonAncestorError):
+            common_ancestor(store, [OciDigest.of(b"an unrelated history")], theirs, digest)
+
+    def test_a_lineage_records_which_history_it_was_performed_onto(self) -> None:
+        """Order is significant in exactly one way: the first parent is the history the reconciliation was
+        performed onto, and the rest are merged-in history that grants nothing."""
+        ours = Snapshot().with_modules([])
+        theirs = Snapshot(labels={"side": "theirs"})
+        reconciliation = ours.reconciled([], [theirs.digest])
+
+        assert reconciliation.first_parent == ours.digest
+        assert reconciliation.is_reconciliation
+        assert theirs.digest in reconciliation.parents
+
+    def test_one_parent_is_written_as_a_scalar(self) -> None:
+        """A version is a statement, not a preference: a snapshot is written under the oldest form that can
+        express it, so a linear history stays readable by a client that knows nothing of reconciliation."""
+        linear = Snapshot().with_modules([])
+        merged = linear.reconciled([], [Snapshot(labels={"side": "theirs"}).digest])
+
+        assert b'"parent":' in linear.canonical_bytes()
+        assert b'"parents":' in merged.canonical_bytes()
 
 
 class BlockStoreConformance(ABC):

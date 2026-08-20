@@ -21,7 +21,7 @@ this interface is all it takes.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,9 +29,7 @@ from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import Producer
 from boltzmann.constants import CANDIDATES_SCHEMA
 from boltzmann.identity.digest import BlockId
-
-if TYPE_CHECKING:
-    from boltzmann.ingest.task import ProcessingTask
+from boltzmann.ingest.task import ProcessingTask
 
 
 class Candidate(BaseModel):

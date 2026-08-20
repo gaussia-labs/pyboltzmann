@@ -65,14 +65,17 @@ the registry filed it under — which is what makes `org/brain@sha256:…` resol
 at a version nobody can move a tag away from.
 
 <Warning>
-  A push **refuses to overwrite a remote whose snapshot is absent from the local history.** The protocol
-  defines no merge for divergent brains, so the safe behavior is to refuse and say where the two parted.
+  A push **refuses to overwrite a remote whose snapshot is absent from the local history.** The two brains
+  advanced from a common ancestor, and publishing would drop whichever side lost.
 
   ```
   v1 is at snapshot sha256:0ce547eb89f3, which is not in this brain's history;
-  the two diverged. Pull and re-commit, or pass force=True to overwrite the remote.
+  the two diverged. Reconcile them -- fetch the remote and merge, rebase, or squash
+  it -- or pass force=True to overwrite the remote.
   ```
 
+  It raises `DivergenceError`, a `DistributionError` you can catch on its own, because it is the one
+  distribution failure with a defined remedy: see [Reconciliation](/sdks/boltzmann/guides/reconciliation).
   Pass `force=True` only when you mean to replace the remote.
 </Warning>
 
@@ -145,6 +148,41 @@ This option does not weaken module verification and does not silently translate 
 is still checked against the published Merkle root. The SDK is model-agnostic, so the caller must then build a
 compatible local vector index before relying on semantic retrieval. The default remains strict and rejects a
 published index from a different model space.
+
+## Fetch: retrieve a history without adopting it
+
+```python
+fetched = await brain.fetch(registry, "ghcr.io/org/brain", "v1")
+
+fetched.snapshot        # the remote head, as published
+fetched.digest          # its identity -- what a reconciliation records as a merged parent
+fetched.incoming        # per module, the blocks it holds that this brain does not
+fetched.block_count
+```
+
+`fetch` writes blocks and the remote history into the local layout and **leaves the current snapshot
+exactly where it was**. That is the difference from `pull`: judging an incoming history should not require
+adopting it first. It is the step at which nothing has changed yet, and it is what
+[Reconciliation](/sdks/boltzmann/guides/reconciliation) starts from.
+
+No index is touched. A travelling vector index is bound to the root it was built over, so loading one for a
+history that is not installed would leave this brain holding an index bound to a root its snapshot does not
+name.
+
+### The history travels as its own layer
+
+```python
+manifest.history                 # the layer carrying the snapshot documents
+manifest.history.annotations     # {'ai.gaussia.boltzmann.snapshot-count': '7'}
+```
+
+A snapshot names its parents. An artifact that published only its head would hand over a lineage whose
+links resolve to nothing — the chain an audit walks would stop at one, and nobody but the publisher could
+find the ancestor two histories share. So the snapshot documents ship alongside the modules.
+
+Its own layer rather than loose blobs, because a blob no manifest references is unreferenced, and a registry
+is entitled to reclaim it. A snapshot document is a few hundred bytes and compresses well against its
+near-identical siblings.
 
 ## Publishing without a registry
 
