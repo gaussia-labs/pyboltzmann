@@ -16,6 +16,7 @@ from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from boltzmann.authenticity.trust_root import TrustRoot
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.exceptions import SnapshotError
@@ -69,6 +70,14 @@ class Snapshot(BaseModel):
             snapshot carries none; a reconciliation carries two or more
             (paper Section 12.1).
         labels (dict[str, str] | None): Free-form annotations, such as a release tag.
+        trust_root (TrustRoot | None): The keys authorized to sign for this brain, and the scopes
+            each one holds (paper Section 8.5). Carried here rather than in a module or a layer
+            because it MUST reach every install, complete or partial, and because living inside
+            the signed document means a signature can never be evaluated against a key list the
+            signer did not commit to. ``None`` is the zero-configuration case: a brain with no
+            authorship from the outset, fully verifiable for integrity. A ``None`` never enters
+            the canonical bytes, so a brain that never adopts a trust root keeps the exact digests
+            it had before this field existed.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -78,6 +87,7 @@ class Snapshot(BaseModel):
     created_at: Timestamp = Field(default_factory=utc_timestamp)
     parents: list[OciDigest] = Field(default_factory=list)
     labels: dict[str, str] | None = None
+    trust_root: TrustRoot | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -233,12 +243,18 @@ class Snapshot(BaseModel):
         advanced = {**self.modules}
         for reference in references:
             advanced[reference.memory_type] = reference
+        # The trust root is carried forward verbatim on every derivation. A commit is not a
+        # governance act: if a derivation dropped it, an ordinary commit would present a changed
+        # trust-root digest (present -> absent) to the verifier, be classified as a revision, and
+        # demand a ``govern`` quorum it has no reason to carry. Propagation is what keeps "the
+        # trust root changed" a statement about governance rather than about which constructor ran.
         return Snapshot(
             boltzmann=self.boltzmann,
             modules=advanced,
             created_at=utc_timestamp(),
             parents=[self.digest],
             labels=self.labels,
+            trust_root=self.trust_root,
         )
 
     def with_module(self, reference: ModuleRef) -> Snapshot:
@@ -288,12 +304,17 @@ class Snapshot(BaseModel):
             raise SnapshotError(
                 f"snapshot {self.digest.short} cannot be merged with itself: it is already the first parent"
             )
+        # The trust root is the FIRST parent's, never the other side's: a merge does not adopt a
+        # key list. Reconciling two histories that carry different trust roots is refused upstream
+        # as a governance conflict -- unioning two key lists would grant the union of both sides'
+        # permissions, which defeats the quorum rule outright (paper Section 12.5).
         return Snapshot(
             boltzmann=self.boltzmann,
             modules={reference.memory_type: reference for reference in references},
             created_at=utc_timestamp(),
             parents=[self.digest, *others],
             labels=self.labels,
+            trust_root=self.trust_root,
         )
 
     def without_module(self, memory_type: MemoryType) -> Snapshot:
@@ -313,16 +334,64 @@ class Snapshot(BaseModel):
             created_at=utc_timestamp(),
             parents=[self.digest],
             labels=self.labels,
+            trust_root=self.trust_root,
+        )
+
+    def with_trust_root(self, trust_root: TrustRoot) -> Snapshot:
+        """
+        Derive a trust-root revision: the key list changes and nothing else does.
+
+        The modules are copied verbatim from this snapshot, so the constructor is structurally
+        incapable of folding a content change into a governance act -- the paper requires a
+        revision's module roots to equal its first parent's (Section 8.5), and here that is not a
+        rule to check but a thing that cannot be otherwise. The verifier still re-checks it,
+        because it also meets revisions this SDK did not build.
+
+        The revision this snapshot introduces is not valid on its own: it must be covered by at
+        least ``govern_quorum`` signatures from distinct keys holding ``govern`` in the trust
+        root as it stood *before* the change. Collecting those signatures and refusing to advance
+        without them is the caller's job (``Brain.rotate``); this method only shapes the document.
+
+        Args:
+            trust_root (TrustRoot): The new key list.
+
+        Returns:
+            Snapshot: The revision, chained to this snapshot.
+
+        Raises:
+            SnapshotError: If this snapshot already carries a trust root whose revision is not
+                strictly below the new one. Equal covers the byte-identical case -- a revision
+                that revises nothing would demand a quorum for no change -- and lower would make
+                "the revision in force" ambiguous between two documents.
+        """
+        if self.trust_root is not None and trust_root.revision <= self.trust_root.revision:
+            raise SnapshotError(
+                f"a trust-root revision must exceed the one in force: revision {trust_root.revision} "
+                f"does not follow {self.trust_root.revision}"
+            )
+        return Snapshot(
+            boltzmann=self.boltzmann,
+            modules=self.modules,
+            created_at=utc_timestamp(),
+            parents=[self.digest],
+            labels=self.labels,
+            trust_root=trust_root,
         )
 
     @classmethod
-    def of(cls, references: Iterable[ModuleRef], labels: dict[str, str] | None = None) -> Snapshot:
+    def of(
+        cls,
+        references: Iterable[ModuleRef],
+        labels: dict[str, str] | None = None,
+        trust_root: TrustRoot | None = None,
+    ) -> Snapshot:
         """
         Build a snapshot from a set of module versions.
 
         Args:
             references (Iterable[ModuleRef]): The installed modules.
             labels (dict[str, str] | None): Optional annotations.
+            trust_root (TrustRoot | None): The keys authorized to sign for this brain, if it has any.
 
         Returns:
             Snapshot: The snapshot naming those versions.
@@ -330,4 +399,5 @@ class Snapshot(BaseModel):
         return cls(
             modules={reference.memory_type: reference for reference in references},
             labels=labels,
+            trust_root=trust_root,
         )

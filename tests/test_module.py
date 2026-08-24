@@ -3,6 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
+from boltzmann.authenticity import Scope, SshPublicKey, TrustedKey, TrustRoot
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.semantic import SemanticBlock, SemanticKind
 from boltzmann.exceptions import (
@@ -246,3 +247,123 @@ class TestSnapshot:
                 composition=OciDigest.of(b"leaves"),
                 block_count=1,
             )
+
+
+class TestSnapshotTrustRoot:
+    """The trust root travels on every derivation, and a brain without one keeps its old digests."""
+
+    def build(self, *memory_types: MemoryType, trust_root: TrustRoot | None = None) -> Snapshot:
+        return Snapshot.of(
+            (
+                ModuleRef(
+                    memory_type=kind,
+                    root=MerkleRoot.of(kind.value.encode()),
+                    composition=OciDigest.of(kind.value.encode()),
+                    block_count=1,
+                )
+                for kind in memory_types
+            ),
+            trust_root=trust_root,
+        )
+
+    def advance(self, snapshot: Snapshot) -> Snapshot:
+        return snapshot.with_module(
+            ModuleRef(
+                memory_type=MemoryType.SEMANTIC,
+                root=MerkleRoot.of(b"v2"),
+                composition=OciDigest.of(b"v2 leaves"),
+                block_count=2,
+            )
+        )
+
+    def test_a_snapshot_without_a_trust_root_keeps_the_bytes_it_had(self) -> None:
+        # The exact bytes the pre-field SDK produced, rebuilt from a plain dict that has no idea
+        # the field exists. If these ever diverge, every published snapshot changes identity.
+        from boltzmann.identity.serialization import canonicalize
+
+        reference = ModuleRef(
+            memory_type=MemoryType.SEMANTIC,
+            root=MerkleRoot.of(b"semantic"),
+            composition=OciDigest.of(b"semantic leaves"),
+            block_count=1,
+        )
+        snapshot = Snapshot(modules={MemoryType.SEMANTIC: reference}, created_at="2026-01-01T00:00:00Z")
+        expected = canonicalize(
+            {
+                "boltzmann": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+                "modules": {
+                    "semantic": {
+                        "memory_type": "semantic",
+                        "root": str(reference.root),
+                        "composition": str(reference.composition),
+                        "block_count": 1,
+                        "layout": LAYOUT_NAME,
+                    }
+                },
+            }
+        )
+        assert snapshot.canonical_bytes() == expected
+        assert b"trust_root" not in expected
+
+    def test_adding_and_removing_the_field_returns_the_original_digest(self, trust_root: TrustRoot) -> None:
+        bare = self.build(MemoryType.SEMANTIC)
+        dressed = bare.model_copy(update={"trust_root": trust_root})
+        undressed = dressed.model_copy(update={"trust_root": None})
+        assert dressed.digest != bare.digest
+        assert undressed.digest == bare.digest
+
+    @pytest.fixture
+    def trust_root(self) -> TrustRoot:
+        point = bytes(32)
+        blob = b"\x00\x00\x00\x0bssh-ed25519" + b"\x00\x00\x00\x20" + point
+        return TrustRoot(
+            revision=1,
+            govern_quorum=1,
+            keys=(TrustedKey(key=SshPublicKey.from_blob(blob), scopes=(Scope.GOVERN, Scope.COMMIT), since=1),),
+        )
+
+    @pytest.fixture
+    def governed(self, trust_root: TrustRoot) -> Snapshot:
+        return self.build(MemoryType.SEMANTIC, MemoryType.CANONICAL, trust_root=trust_root)
+
+    def test_every_derivation_carries_the_trust_root_forward(self, governed: Snapshot) -> None:
+        # A commit is not a governance act: a derivation that dropped the trust root would present
+        # a changed digest (present -> absent) to the verifier and be misread as a revision.
+        advanced = self.advance(governed)
+        assert advanced.trust_root == governed.trust_root
+        assert governed.without_module(MemoryType.CANONICAL).trust_root == governed.trust_root
+
+    def test_a_reconciliation_keeps_the_first_parents_trust_root(self, governed: Snapshot) -> None:
+        other = self.build(MemoryType.SEMANTIC)
+        merged = governed.reconciled(governed.modules.values(), [other.digest])
+        assert merged.trust_root == governed.trust_root
+
+    def test_the_embedded_document_digests_identically_to_the_standalone_one(
+        self, governed: Snapshot, trust_root: TrustRoot
+    ) -> None:
+        import json
+
+        embedded = json.loads(governed.canonical_bytes())["trust_root"]
+        assert TrustRoot.model_validate(embedded).digest == trust_root.digest
+
+    def test_a_revision_changes_the_keys_and_is_structurally_unable_to_change_roots(
+        self, governed: Snapshot, trust_root: TrustRoot
+    ) -> None:
+        revised = trust_root.model_copy(update={"revision": 2, "govern_quorum": 1})
+        revision = governed.with_trust_root(revised)
+        assert revision.modules == governed.modules
+        assert revision.parents == [governed.digest]
+        assert revision.trust_root == revised
+
+    def test_a_revision_that_does_not_advance_the_number_is_refused(
+        self, governed: Snapshot, trust_root: TrustRoot
+    ) -> None:
+        with pytest.raises(SnapshotError, match="does not follow"):
+            governed.with_trust_root(trust_root)
+
+    def test_a_first_trust_root_on_an_ungoverned_chain_is_allowed(self, trust_root: TrustRoot) -> None:
+        bare = self.build(MemoryType.SEMANTIC)
+        governed = bare.with_trust_root(trust_root)
+        assert governed.trust_root == trust_root
+        assert governed.parents == [bare.digest]
