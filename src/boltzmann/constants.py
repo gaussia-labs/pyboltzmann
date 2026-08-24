@@ -20,3 +20,26 @@ EVIDENCE_BUNDLE_SCHEMA = "boltzmann.evidence/v1"
 
 PROCESSING_TASK_SCHEMA = "boltzmann.task/v1"
 """Schema of the processing task the protocol hands to an external LLM (paper Section 8.2)."""
+
+SNAPSHOT_NAMESPACE = "boltzmann.snapshot.v1"
+"""SSHSIG namespace a snapshot signature is made under (paper Section 8.3).
+
+Not decoration: the namespace is what prevents cross-protocol replay, so a signature a
+contributor produced for a Git commit cannot be presented as a Boltzmann one, and a later
+version of the protocol can introduce a new namespace without invalidating signatures made
+under this one. A conforming implementation MUST reject a signature made under any other.
+"""
+
+EMPTY_CONFIG_MEDIA_TYPE = "application/vnd.oci.empty.v1+json"
+"""OCI's empty descriptor media type, the config of an artifact that has none of its own."""
+
+EMPTY_CONFIG_BYTES = b"{}"
+"""The two bytes of the OCI empty blob."""
+
+EMPTY_CONFIG_DIGEST = "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+"""The empty blob's digest, fixed by the OCI spec and pinned here so nobody recomputes it wrong.
+
+These live here rather than in :mod:`boltzmann.distribution.media_types` because the signature
+record store needs the digest to keep the blob reachable through a prune, and the kernel must not
+depend on the distribution layer.
+"""
