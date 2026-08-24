@@ -62,7 +62,9 @@ class AttributionReport(BaseModel):
     (paper Section 12.3), and must not present a rebased or squashed contribution as bearing the
     contributor's signature.
 
-    This SDK implements no signing, so ``their_signatures_survive`` describes what *would* hold. It is
+    ``their_signatures_survive`` states a mechanical fact about detached signatures: they cover
+    snapshot identities, so a strategy that keeps the other side's snapshots keeps their signatures
+    covering something, and one that mints new identities leaves them covering nothing. It is
     reported now because the operator's decision is made now: the strategy is chosen before signatures
     exist to be invalidated, and a report that appeared only once authenticity shipped would arrive after
     the only moment it could have informed anything.

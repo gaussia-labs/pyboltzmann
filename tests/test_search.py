@@ -459,7 +459,11 @@ class TestPlannerDelegation:
 
         planner = Fixed()
         brain = Brain(MemoryBlockStore(), actor=CURATOR, planner=planner)
-        assert brain.search(Query(text="anything")) is sentinel
+        result = brain.search(Query(text="anything"))
+        # The planner's bundle comes back enriched with the authorship line, which is the
+        # protocol's to add -- everything the planner produced is untouched.
+        assert result.model_copy(update={"authorship": None}) == sentinel
+        assert result.authorship is not None
         assert planner.calls == 1
 
 
@@ -533,3 +537,61 @@ class TestProvenanceView:
         """No provenance module is legitimate, not an error."""
         brain = Brain(MemoryBlockStore(), actor=CURATOR)
         assert ProvenanceView.of(brain.modules()).superseded_by == {}
+
+
+class TestAuthorshipInTheBundle:
+    """The second verification rides beside the first, and is never folded into it."""
+
+    def test_an_ungoverned_brain_reports_unsigned_not_nothing(self, brain: Brain) -> None:
+        bundle = brain.search(Query(text="Fourier"))
+        assert bundle.authorship is not None
+        assert bundle.authorship.state.value == "unsigned"
+        assert bundle.authorship.snapshot == brain.snapshot().digest
+
+    def test_authorship_does_not_touch_verified(self, brain: Brain) -> None:
+        bundle = brain.search(Query(text="Fourier"))
+        assert bundle.all_verified, "hash-and-membership verification is its own fact"
+        assert bundle.authorship is not None
+        assert bundle.authorship.state.value == "unsigned"
+
+    def test_a_signed_brain_reports_authorized_evidence(self, tmp_path) -> None:
+        ed25519 = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.ed25519")
+        serialization = pytest.importorskip("cryptography.hazmat.primitives.serialization")
+        from boltzmann.authenticity import Scope, SshPublicKey, TrustedKey, TrustRoot, rfc4253_signature
+
+        private = ed25519.Ed25519PrivateKey.from_private_bytes(bytes([0x61]) * 32)
+        line = private.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH)
+
+        class Party:
+            public_key = SshPublicKey.parse(line.decode("ascii"))
+
+            @staticmethod
+            def sign_blob(data: bytes) -> bytes:
+                return rfc4253_signature("ssh-ed25519", private.sign(data))
+
+        root = TrustRoot(
+            revision=1,
+            govern_quorum=1,
+            keys=(TrustedKey(key=Party.public_key, scopes=(Scope.INGEST, Scope.COMMIT, Scope.GOVERN), since=1),),
+        )
+        governed = Brain.init(tmp_path / "governed", actor=CURATOR, trust_root=root, signers=[Party()])
+        bundle = governed.search(Query(text="anything"))
+        assert bundle.authorship is not None
+        assert bundle.authorship.state.value == "authorized"
+        assert bundle.authorship.key == Party.public_key.fingerprint
+        assert bundle.authorship.trust_root == root.digest
+
+    def test_the_chain_walk_is_paid_once_per_head(self, brain: Brain, monkeypatch) -> None:
+        from boltzmann.authenticity.authenticator import Authenticator
+
+        calls = {"count": 0}
+        original = Authenticator.authenticate
+
+        def counting(self, snapshot, records=None, current=None):
+            calls["count"] += 1
+            return original(self, snapshot, records=records, current=current)
+
+        monkeypatch.setattr(Authenticator, "authenticate", counting)
+        brain.search(Query(text="Fourier"))
+        brain.search(Query(text="series"))
+        assert calls["count"] == 1, "the second query must not pay for the walk the first one paid"

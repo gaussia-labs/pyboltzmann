@@ -559,3 +559,294 @@ class TestAncestry:
 
     def test_an_empty_brain_has_no_ancestry(self, tmp_path: Path) -> None:
         assert Brain.open(tmp_path / "empty", actor=CURATOR).ancestry() == []
+
+
+class TestSignedDistribution:
+    """Signatures accumulate around an artifact, never inside it, and travel wherever it goes."""
+
+    def _party(self, seed: int):
+        ed25519 = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.ed25519")
+        serialization = pytest.importorskip("cryptography.hazmat.primitives.serialization")
+        from boltzmann.authenticity import SshPublicKey, rfc4253_signature
+
+        private = ed25519.Ed25519PrivateKey.from_private_bytes(bytes([seed]) * 32)
+        line = private.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH)
+
+        class Party:
+            public_key = SshPublicKey.parse(line.decode("ascii"))
+
+            @staticmethod
+            def sign_blob(data: bytes) -> bytes:
+                return rfc4253_signature("ssh-ed25519", private.sign(data))
+
+        return Party()
+
+    def _governed(self, path: Path, party) -> Brain:
+        from boltzmann.authenticity import Scope, TrustedKey, TrustRoot
+
+        root = TrustRoot(
+            revision=1,
+            govern_quorum=1,
+            keys=(
+                TrustedKey(
+                    key=party.public_key,
+                    scopes=(Scope.INGEST, Scope.COMMIT, Scope.GOVERN),
+                    since=1,
+                ),
+            ),
+        )
+        return Brain.init(path, actor=CURATOR, trust_root=root, signers=[party])
+
+    def test_countersigning_leaves_the_brain_manifest_digest_untouched(self, tmp_path: Path) -> None:
+        # The test the whole referrers design exists for: a brain must not change identity
+        # because someone agreed with it.
+        party = self._party(0x71)
+        second = self._party(0x72)
+        brain = self._governed(tmp_path / "brain", party)
+        manifest = brain.pack(tag="v1")
+        before = manifest.digest
+
+        record = brain.countersign(brain.snapshot().canonical_bytes(), second)
+        brain.add_signature(record)
+        after = brain.pack(tag="v1")
+        assert after.digest == before
+
+    def test_the_manifest_declares_the_trust_root_before_any_transfer(self, tmp_path: Path) -> None:
+        from boltzmann.distribution.media_types import ANNOTATION_TRUST_ROOT
+
+        party = self._party(0x73)
+        brain = self._governed(tmp_path / "brain", party)
+        manifest = brain.pack(tag="v1")
+        assert manifest.annotations[ANNOTATION_TRUST_ROOT] == str(brain.trust_root.digest)  # type: ignore[union-attr]
+
+    async def test_signatures_travel_and_the_consumer_verifies_them(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        from boltzmann.authenticity import AuthorshipState, PinSource
+
+        party = self._party(0x74)
+        publisher = self._governed(tmp_path / "publisher", party)
+        await publisher.push(registry, REFERENCE, "v1")
+
+        consumer = Brain.open(tmp_path / "consumer", actor=SAM)
+        installed = await consumer.pull(registry, REFERENCE, "v1")
+        assert consumer.signatures(installed.digest), "the records crossed with the artifact"
+        report = consumer.authenticate()
+        assert report.state is AuthorshipState.AUTHORIZED
+
+        # Trust on first use: pin, then pull again -- the anchor holds.
+        pin = consumer.pin()
+        assert pin.source is PinSource.FIRST_USE
+        await consumer.pull(registry, REFERENCE, "v1")
+
+    async def test_a_pinned_consumer_refuses_a_swapped_authority_before_any_layer_moves(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        from boltzmann.exceptions import TrustRootMismatchError
+
+        party = self._party(0x75)
+        mallory = self._party(0x76)
+        publisher = self._governed(tmp_path / "publisher", party)
+        await publisher.push(registry, REFERENCE, "v1")
+
+        consumer = Brain.open(tmp_path / "consumer", actor=SAM)
+        await consumer.pull(registry, REFERENCE, "v1")
+        consumer.pin()
+
+        # Mallory republishes the tag with their own, internally flawless brain.
+        forged = self._governed(tmp_path / "mallory", mallory)
+        await forged.push(registry, REFERENCE, "v1", force=True)
+
+        with pytest.raises(TrustRootMismatchError, match="before transferring"):
+            await consumer.pull(registry, REFERENCE, "v1")
+
+    async def test_an_approved_rotation_passes_the_pin_gate(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        from boltzmann.authenticity import AuthorshipState, Scope, TrustedKey, TrustRoot
+
+        party = self._party(0x77)
+        second = self._party(0x78)
+        publisher = self._governed(tmp_path / "publisher", party)
+        await publisher.push(registry, REFERENCE, "v1")
+
+        consumer = Brain.open(tmp_path / "consumer", actor=SAM)
+        await consumer.pull(registry, REFERENCE, "v1")
+        consumer.pin()
+
+        revised = TrustRoot(
+            revision=2,
+            govern_quorum=1,
+            keys=(
+                *publisher.trust_root.keys,  # type: ignore[union-attr]
+                TrustedKey(key=second.public_key, scopes=(Scope.COMMIT,), since=2),
+            ),
+        )
+        publisher.rotate(revised, signers=[party])
+        await publisher.push(registry, REFERENCE, "v1")
+
+        installed = await consumer.pull(registry, REFERENCE, "v1")
+        assert installed.trust_root == revised
+        assert consumer.authenticate().state is AuthorshipState.AUTHORIZED
+
+    async def test_a_transport_without_referrers_still_moves_the_brain(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        class BareTransport:
+            """A third-party RegistryClient that never learned about referrers."""
+
+            async def resolve(self, reference: str, tag: str):
+                return await registry.resolve(reference, tag)
+
+            async def pull_blob(self, reference: str, digest, store) -> None:
+                await registry.pull_blob(reference, digest, store)
+
+            async def push(self, reference: str, tag: str, manifest, store):
+                return await registry.push(reference, tag, manifest, store)
+
+        party = self._party(0x79)
+        publisher = self._governed(tmp_path / "publisher", party)
+        with caplog.at_level("WARNING"):
+            await publisher.push(BareTransport(), REFERENCE, "v1")
+        assert any("stay local" in message for message in caplog.messages)
+
+        from boltzmann.authenticity import AuthorshipState
+
+        consumer = Brain.open(tmp_path / "consumer", actor=SAM)
+        await consumer.pull(BareTransport(), REFERENCE, "v1")
+        assert consumer.authenticate().state is AuthorshipState.UNSIGNED
+
+    def test_prune_keeps_the_records_and_the_empty_config(self, tmp_path: Path) -> None:
+        party = self._party(0x7A)
+        brain = self._governed(tmp_path / "brain", party)
+        brain.pack(tag="v1")
+        report = brain.prune(dry_run=False)
+        assert brain.signatures(), "pruning must never reclaim a live signature"
+        assert brain.authenticate().state.value == "authorized"
+        assert report.reclaimed == []
+
+    def test_a_signature_manifest_parses_and_a_foreign_one_is_refused(self, tmp_path: Path) -> None:
+        from boltzmann.distribution.manifest import parse_signature_manifest
+
+        party = self._party(0x7B)
+        brain = self._governed(tmp_path / "brain", party)
+        manifest = brain.pack(tag="v1")
+        index = brain.store.index()  # type: ignore[attr-defined]
+        signature_entries = [
+            entry
+            for entry in index["manifests"]
+            if entry.get("artifactType") == "application/vnd.gaussia.boltzmann.signature.v1+json"
+        ]
+        assert len(signature_entries) == 1
+        from boltzmann.identity.digest import OciDigest
+
+        parsed = parse_signature_manifest(brain.store.get_bytes(OciDigest.parse(signature_entries[0]["digest"])))
+        assert parsed.subject.digest == manifest.digest
+        with pytest.raises(DistributionError, match="not a Boltzmann signature"):
+            parse_signature_manifest(manifest.to_bytes())
+
+
+class TestVerificationPolicyOnPull:
+    """The install-time gate: unsigned brains, stripped signatures, and propose-scoped heads."""
+
+    def _party(self, seed: int):
+        ed25519 = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.ed25519")
+        serialization = pytest.importorskip("cryptography.hazmat.primitives.serialization")
+        from boltzmann.authenticity import SshPublicKey, rfc4253_signature
+
+        private = ed25519.Ed25519PrivateKey.from_private_bytes(bytes([seed]) * 32)
+        line = private.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH)
+
+        class Party:
+            public_key = SshPublicKey.parse(line.decode("ascii"))
+
+            @staticmethod
+            def sign_blob(data: bytes) -> bytes:
+                return rfc4253_signature("ssh-ed25519", private.sign(data))
+
+        return Party()
+
+    async def test_an_unsigned_brain_installs_with_a_warning_on_first_contact(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest, caplog
+    ) -> None:
+        publisher = seeded(tmp_path / "publisher", request_)
+        await publisher.push(registry, REFERENCE, "v1")
+        consumer = Brain.open(tmp_path / "consumer", actor=SAM)
+        with caplog.at_level("WARNING"):
+            await consumer.pull(registry, REFERENCE, "v1")
+        assert any("authorship is unclaimed" in message for message in caplog.messages)
+
+    async def test_a_stripped_brain_is_refused_once_seen_signed(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> None:
+        from boltzmann.authenticity import Scope, TrustedKey, TrustRoot, UnsignedPolicy, VerificationPolicy
+        from boltzmann.exceptions import UnsignedBrainError
+
+        party = self._party(0x81)
+        root = TrustRoot(
+            revision=1,
+            govern_quorum=1,
+            keys=(TrustedKey(key=party.public_key, scopes=(Scope.INGEST, Scope.COMMIT, Scope.GOVERN), since=1),),
+        )
+        publisher = Brain.init(tmp_path / "publisher", actor=CURATOR, trust_root=root, signers=[party])
+        await publisher.push(registry, REFERENCE, "v1")
+        consumer = Brain.open(tmp_path / "consumer", actor=SAM)
+        await consumer.pull(registry, REFERENCE, "v1")
+
+        # A new version whose signature never arrives: from this consumer's seat, stripping.
+        publisher.ingest(b"%PDF-1.7 more evidence", request_, llm("Laplace"))
+        await publisher.push(registry, REFERENCE, "v2")
+        with pytest.raises(UnsignedBrainError, match="stripping"):
+            await consumer.pull(registry, REFERENCE, "v2")
+        # And the policy is the consumer's to relax, explicitly.
+        await consumer.pull(registry, REFERENCE, "v2", verification=VerificationPolicy(unsigned=UnsignedPolicy.PERMIT))
+
+    async def test_a_propose_scoped_head_is_refused_unless_the_policy_permits_it(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> None:
+        from boltzmann.authenticity import Scope, TrustedKey, TrustRoot, VerificationPolicy
+        from boltzmann.exceptions import InsufficientScopeError
+
+        owner = self._party(0x82)
+        contributor = self._party(0x83)
+        root = TrustRoot(
+            revision=1,
+            govern_quorum=1,
+            keys=(
+                TrustedKey(key=owner.public_key, scopes=(Scope.INGEST, Scope.COMMIT, Scope.GOVERN), since=1),
+                TrustedKey(key=contributor.public_key, scopes=(Scope.PROPOSE,), since=1),
+            ),
+        )
+        publisher = Brain.init(tmp_path / "publisher", actor=CURATOR, trust_root=root, signers=[owner])
+        publisher.ingest(b"%PDF-1.7 contributed evidence", request_, llm("Fourier"))
+        source = publisher.module(MemoryType.CANONICAL).block_ids[0]
+        publisher.sign(owner)
+        # The contribution: derived knowledge only, citing evidence already held -- the change a
+        # propose scope can stand in for. Touching canonical would (correctly) exceed it.
+        task = publisher.define_task(source)
+        report = publisher.validate(
+            CandidateSet(
+                producer=MODEL,
+                candidates=[
+                    Candidate(
+                        memory_type=MemoryType.SEMANTIC,
+                        evidence=[source],
+                        payload={"kind": "concept", "label": "Laplace", "statement": "a transform"},
+                    )
+                ],
+            ),
+            task,
+        )
+        publisher.commit(report)
+        publisher.sign(contributor)  # the contribution's head, signed only under propose
+        await publisher.push(registry, "registry.example/contributor/brain", "proposal")
+
+        consumer = Brain.open(tmp_path / "consumer", actor=SAM)
+        with pytest.raises(InsufficientScopeError, match="explicitly not the published state"):
+            await consumer.pull(registry, "registry.example/contributor/brain", "proposal")
+        await consumer.pull(
+            registry,
+            "registry.example/contributor/brain",
+            "proposal",
+            verification=VerificationPolicy(allow_propose_head=True),
+        )
