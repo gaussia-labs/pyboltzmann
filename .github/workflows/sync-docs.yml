@@ -45,6 +45,12 @@ jobs:
             cp "$f" "../central-docs/${TARGET_DIR}/$f"
           done
 
+      # The manifest already describes the whole tab, group by group and page by page, and only its
+      # target_dir was ever read -- so the navigation was maintained twice, once as a declaration
+      # nobody applied and once by hand. That is how the reconciliation guide shipped unreachable.
+      - name: Apply the navigation from the manifest
+        run: python3 .github/scripts/apply_docs_nav.py docs/docs-sync.json central-docs
+
       - name: Get short SHA
         id: short-sha
         run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
@@ -67,9 +73,11 @@ jobs:
             ---
             This PR was created automatically by the `sync-docs` workflow.
 
-            The workflow copies `*.mdx` only and does not touch `docs.json`. If this PR
-            **adds or renames** a page, add its path to the `Boltzmann SDK` tab in
-            `docs.json` before merging, or the page will ship unreachable.
+            The `Boltzmann SDK` tab in `docs.json` is rewritten from the `navigation` block of
+            `docs/docs-sync.json` in pyboltzmann; every other tab is left byte-identical. So a
+            page that is **added or renamed** needs its path in that manifest, not here — and the
+            workflow fails rather than syncing if the manifest and the synced files disagree in
+            either direction.
           commit-message: "docs(boltzmann): sync SDK docs from pyboltzmann@${{ github.sha }}"
           labels: |
             documentation
