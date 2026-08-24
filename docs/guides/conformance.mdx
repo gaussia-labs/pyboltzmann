@@ -15,7 +15,8 @@ installed `pyboltzmann` without this SDK running any of its own code.
 from boltzmann.conformance import golden
 
 golden.VECTOR_FILES
-# ('block_ids.json', 'merkle_roots.json', 'inclusion_proofs.json', 'serialization.json')
+# ('block_ids.json', 'merkle_roots.json', 'inclusion_proofs.json', 'serialization.json',
+#  'sshsig.json', 'signatures.json')
 
 for vector in golden.load("block_ids.json")["vectors"]:
     assert my_implementation.block_id(vector["envelope"]) == vector["block_id"]
@@ -29,9 +30,13 @@ golden.load_all()   # every file, by name
 | `block_ids.json` | The identity of a given envelope |
 | `merkle_roots.json` | The root of a given set of block ids |
 | `inclusion_proofs.json` | The audit path for a given leaf and tree size |
+| `sshsig.json` | The SSHSIG wire format, byte for byte — including the signed-data blob, which tells a framing bug from a signing bug |
+| `signatures.json` | Whole chains, published test key pairs, and the verdict a verifier MUST reach for each of the paper's worked cases |
 
-Those four cover the whole chain from a payload to a version identifier. Agree on all of them and two
-clients share a brain; disagree on any and they do not, whatever else they implement.
+The first four cover the whole chain from a payload to a version identifier. Agree on all of them and two
+clients share a brain; disagree on any and they do not, whatever else they implement. The last two cover
+the authenticity role — divergence there is not silent identity drift but a verifier accepting what
+another refuses, which is worse.
 
 ## The behavioral suite, for Python
 
@@ -90,6 +95,14 @@ class TestComposition(CompositionConformance): pass
     - An empty composition still has a well-defined root.
     - Every leaf proves into the root, at every tree size.
     - A proof does not verify against another root.
+  </Accordion>
+  <Accordion title="AuthenticityConformance">
+    - Every published `signatures.json` case reaches its stated verdict: the paper's worked cases —
+      admission by quorum, self-admission failing with no pin, retirement standing where compromise
+      withdraws — as executable oracles over your store.
+    - Signing never changes a snapshot's identity: detached means detached.
+    - Needs the `[authenticity]` extra, because `authorized` without the mathematics is the one claim
+      this role must never make.
   </Accordion>
   <Accordion title="CompositionConformance">
     - Dropping yields a new root, and does not disturb the earlier one.

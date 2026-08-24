@@ -30,6 +30,7 @@ assigns elsewhere.**
 | Identity: canonical serialization, `block_id`, Merkle roots, inclusion proofs | Two clients that disagree on these do not share a brain at all |
 | The wire formats, and their JSON Schema | Two clients that disagree cannot hand work to the same model |
 | Ingestion, query, retention, distribution | You should not have to write hashing, cascades and mark-and-sweep yourself |
+| Authenticity: SSHSIG signatures, the trust root, positional revocation | Whose brain this is must be checkable mechanically, offline, by anyone |
 | A conformance suite and golden vectors | So an implementation can prove it conforms, in any language |
 
 | You supply | Because |

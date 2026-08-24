@@ -151,9 +151,10 @@ plan.attribution[ReconcileStrategy.MERGE].keeps_their_snapshots       # True
 operation, the way you write `git merge` or `git rebase`.
 
 <Note>
-  This SDK implements no signing yet, so `their_signatures_survive` describes what *will* hold. It is
-  reported now because the decision is made now: a report that appeared only once authenticity shipped would
-  arrive after the only moment it could have informed anything.
+  `their_signatures_survive` states a mechanical fact about detached signatures: they cover snapshot
+  identities, so a merge keeps the contributor's signatures covering something, while a rebase or a
+  squash mints new identities that leave them covering nothing. The [authenticity guide](/guides/authenticity)
+  covers what a signature is and who decides whose count.
 </Note>
 
 ### Rebase preserves granularity only where it can
@@ -236,7 +237,7 @@ questions are whether it enters and, where two histories disagree, which one pre
 | Their history dropped from the episodic module | Refused: `AppendOnlyViolationError`. No conforming history can have done it, so theirs is malformed | nothing to resolve — the history is invalid, not conflicting |
 | A domain check of yours declines to decide | `PENDING_REVIEW` | `admit` or `reject` |
 | The two histories share no ancestor | Refused: `NoCommonAncestorError` | nothing — a three-way merge needs the ancestor, and guessing is the one thing it must not do |
-| The two histories carry different trust roots | **Not implemented** — needs authenticity | see [what this does not do](#what-this-does-not-do) |
+| The two histories carry different trust roots | Refused: `GovernanceConflictError`. Unioning two key lists grants the union of both sides' permissions | nothing here — resolve the change of authority first, as a trust-root revision under the quorum rule |
 
 <Note>
   Only the rows that touch what you already hold, or that the protocol declines to decide, stop the
@@ -462,9 +463,12 @@ The published snapshot then names every module the remote named, and no module r
 refuses when the snapshot omits a module the remote tag carries — stated over the snapshot, because what
 makes a publish dangerous is that it names less than what is there.
 
-## What this does not do
+## Where governance meets reconciliation
 
-No signing exists in the SDK yet, so two rows of the protocol's conflict table are out of reach: histories
-carrying **different trust roots** must not be reconciled automatically — unioning two key lists grants the
-union of both sides' permissions — and a `propose`-scoped snapshot must not be treated as a brain's current
-state. Both arrive with authenticity.
+Two rows of the protocol's conflict table are governance questions, and reconciliation refuses to answer
+them. Histories carrying **different trust roots** are never reconciled automatically — unioning two key
+lists would grant the union of both sides' permissions, defeating the quorum rule — so `plan_reconcile`
+and every strategy raise `GovernanceConflictError` until the change of authority is resolved as an explicit
+trust-root revision. And a `propose`-scoped snapshot is never treated as a brain's current state: `pull`
+refuses it unless a `VerificationPolicy` explicitly permits it. Both live in the
+[authenticity guide](/guides/authenticity).
