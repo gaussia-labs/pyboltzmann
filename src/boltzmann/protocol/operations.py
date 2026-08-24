@@ -17,7 +17,8 @@ The surface is split because *read* and *extend* are separable, and most consume
 * :class:`BrainRetention` -- drop, supersede, prune, redact.
 * :class:`BrainDistribution` -- pack, push, pull, fetch.
 * :class:`BrainReconciliation` -- merge, rebase, squash, and resolving what did not apply.
-* :class:`BoltzmannProtocol` -- all five, for an implementation that offers everything.
+* :class:`BrainAuthenticity` -- sign, authenticate, pin, rotate, revoke.
+* :class:`BoltzmannProtocol` -- all six, for an implementation that offers everything.
 
 A read-only client that satisfies :class:`BrainReader` is conforming. It does not have to pretend to
 support writes it will refuse.
@@ -29,9 +30,18 @@ through :class:`~boltzmann.ingest.proposer.CandidateProposer`.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Protocol, runtime_checkable
 
+from boltzmann.authenticity.authenticator import AuthenticationReport
+from boltzmann.authenticity.governance import RotationPlan, RotationResult
+from boltzmann.authenticity.keys import SshPublicKey
+from boltzmann.authenticity.pins import PinSource, TrustPin
+from boltzmann.authenticity.policy import VerificationPolicy
+from boltzmann.authenticity.record import SignatureRecord
+from boltzmann.authenticity.scopes import Scope
+from boltzmann.authenticity.signers import Signer
+from boltzmann.authenticity.trust_root import TrustRoot
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.distribution.manifest import BrainManifest
@@ -684,7 +694,171 @@ class BrainReconciliation(Protocol):
 
 
 @runtime_checkable
-class BoltzmannProtocol(BrainReader, BrainWriter, BrainRetention, BrainDistribution, BrainReconciliation, Protocol):
+class BrainAuthenticity(Protocol):
+    """Attesting to snapshots, and deciding whose attestations matter (paper Section 8).
+
+    Claimable separately, and deliberately so: a consumer that recomputes integrity while holding
+    no trust anchor is not a degraded client -- it is the zero-configuration case the protocol
+    guarantees, and requiring signature verification for a reader to conform would make offline
+    integrity conditional on configuration the protocol promises it does not need. What no
+    implementation may do is claim an authenticity it did not check.
+
+    The paper's ``init`` operation -- a genesis snapshot with its first trust root -- is a
+    constructor rather than an instance capability, so it is not a member here; this SDK offers
+    it as ``Brain.init``.
+    """
+
+    def sign(
+        self,
+        signer: Signer,
+        snapshot: OciDigest | None = None,
+        scopes: Iterable[Scope] | None = None,
+    ) -> SignatureRecord:
+        """
+        Produce a detached signature over a snapshot under the protocol namespace.
+
+        Args:
+            signer (Signer): What produces the signature; the private key never enters the brain.
+            snapshot (OciDigest | None): Which snapshot. Defaults to the current one.
+            scopes (Iterable[Scope] | None): The claim to record. Defaults to the computed
+                requirement; never the basis of any decision.
+
+        Returns:
+            SignatureRecord: The record, persisted beside the snapshot.
+        """
+        ...
+
+    def authenticate(
+        self,
+        snapshot: OciDigest | None = None,
+        policy: VerificationPolicy | None = None,
+    ) -> AuthenticationReport:
+        """
+        Check signatures against the trust root in force at a snapshot's position.
+
+        Reported separately from integrity, never collapsed into one boolean.
+
+        Args:
+            snapshot (OciDigest | None): Which snapshot. Defaults to the current one.
+            policy (VerificationPolicy | None): This consumer's tolerances.
+
+        Returns:
+            AuthenticationReport: Every verdict and finding, with the summary derived.
+        """
+        ...
+
+    def pin(self, trust_root: OciDigest | None = None, source: PinSource | None = None) -> TrustPin:
+        """
+        Record a trust root digest as the anchor for this brain.
+
+        Args:
+            trust_root (OciDigest | None): The digest to pin. Defaults to the current one --
+                trust on first use.
+            source (PinSource | None): How the pin was established.
+
+        Returns:
+            TrustPin: The recorded pin, held in consumer-side state and never in the artifact.
+        """
+        ...
+
+    def plan_rotate(self, trust_root: TrustRoot) -> RotationPlan:
+        """
+        Build a trust-root revision without advancing the head, for multi-party signing.
+
+        Args:
+            trust_root (TrustRoot): The new key list.
+
+        Returns:
+            RotationPlan: The exact bytes every countersignature must cover.
+        """
+        ...
+
+    def countersign(self, document: bytes, signer: Signer) -> SignatureRecord:
+        """
+        Inspect a governance document someone else built, and sign its exact bytes.
+
+        Args:
+            document (bytes): A revision snapshot's canonical bytes, verbatim as received.
+            signer (Signer): What produces the signature.
+
+        Returns:
+            SignatureRecord: The record to send back to the initiator.
+        """
+        ...
+
+    def rotate(
+        self,
+        trust_root: TrustRoot | None = None,
+        signers: Sequence[Signer] = (),
+        records: Sequence[SignatureRecord] = (),
+        plan: RotationPlan | None = None,
+    ) -> RotationResult:
+        """
+        Commit a trust-root revision, under the quorum rule.
+
+        Args:
+            trust_root (TrustRoot | None): The new key list, when building fresh.
+            signers (Sequence[Signer]): Local signers.
+            records (Sequence[SignatureRecord]): Signatures collected elsewhere.
+            plan (RotationPlan | None): The planned document those records cover.
+
+        Returns:
+            RotationResult: What took effect. A failed quorum advances nothing.
+        """
+        ...
+
+    def revoke(
+        self,
+        key: SshPublicKey | str,
+        signers: Sequence[Signer] = (),
+        records: Sequence[SignatureRecord] = (),
+        retired_from: int | None = None,
+        compromised_from: OciDigest | None = None,
+    ) -> RotationResult:
+        """
+        Record that a key is retired, or compromised from a chain position.
+
+        Args:
+            key (SshPublicKey | str): The key, by object, fingerprint, or authorized_keys line.
+            signers (Sequence[Signer]): Who signs the revision.
+            records (Sequence[SignatureRecord]): Signatures collected elsewhere.
+            retired_from (int | None): The revision the key stops being authorized at.
+            compromised_from (OciDigest | None): The snapshot its signatures are withdrawn from.
+
+        Returns:
+            RotationResult: The revision that recorded it.
+        """
+        ...
+
+    def signatures(self, snapshot: OciDigest | None = None) -> list[SignatureRecord]:
+        """
+        The signature records held over a snapshot.
+
+        Args:
+            snapshot (OciDigest | None): Which snapshot. Defaults to the current one.
+
+        Returns:
+            list[SignatureRecord]: The records, possibly empty.
+        """
+        ...
+
+    def add_signature(self, record: SignatureRecord) -> OciDigest:
+        """
+        Keep a signature record someone else produced.
+
+        Args:
+            record (SignatureRecord): The record to keep.
+
+        Returns:
+            OciDigest: The record blob's content address.
+        """
+        ...
+
+
+@runtime_checkable
+class BoltzmannProtocol(
+    BrainReader, BrainWriter, BrainRetention, BrainDistribution, BrainReconciliation, BrainAuthenticity, Protocol
+):
     """An implementation that offers the whole protocol.
 
     Conforming to this is not required. A read-only client satisfies :class:`BrainReader` and is
