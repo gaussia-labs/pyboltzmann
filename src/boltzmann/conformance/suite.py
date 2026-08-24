@@ -21,6 +21,10 @@ index engine -- the suite says nothing.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from boltzmann.authenticity.authenticator import AuthenticationReport
 from collections.abc import Callable
 from typing import Any
 
@@ -703,3 +707,78 @@ class BrainReaderConformance(ABC):
         except BoltzmannError:
             return
         assert index.kind is IndexKind.VECTOR
+
+
+class AuthenticityConformance(ABC):
+    """
+    What a verifier must decide, whoever wrote it (paper Section 8).
+
+    Subclass this and implement :meth:`make_store`. The cases replayed here are the published
+    ``signatures.json`` golden vectors -- the paper's worked cases, including a self-admitted key
+    failing with no pin at all -- so an implementation passing this suite reaches the same
+    verdicts every other conforming verifier reaches. Requires the ``[authenticity]`` extra,
+    because a verdict of ``authorized`` without the mathematics would be the one claim this role
+    is forbidden to make.
+    """
+
+    @abstractmethod
+    def make_store(self) -> BlockStore:
+        """
+        Build an empty store to verify against.
+
+        Returns:
+            BlockStore: The store under test.
+        """
+
+    def _replayed(self, case: dict) -> AuthenticationReport:
+        pytest.importorskip("cryptography")
+        from boltzmann.authenticity.authenticator import Authenticator
+        from boltzmann.authenticity.pins import PinSource, write_pin
+        from boltzmann.authenticity.record import SignatureRecord, store_record
+        from boltzmann.authenticity.trust_root import TrustRoot
+        from boltzmann.conformance.golden import load
+        from boltzmann.identity.digest import OciDigest
+        from boltzmann.module.snapshot import Snapshot
+
+        vectors = load("signatures.json")
+        store = self.make_store()
+        for described in vectors["snapshots"].values():
+            store.put_bytes(described["canonical"].encode("utf-8"))
+        for described in vectors["signatures"].values():
+            store_record(store, SignatureRecord.model_validate(described))
+        if "pin" in case:
+            write_pin(store, OciDigest.parse(vectors["trust_roots"][case["pin"]]["digest"]), PinSource.OUT_OF_BAND)
+        snapshot = Snapshot.model_validate_json(vectors["snapshots"][case["snapshot"]]["canonical"].encode("utf-8"))
+        records = [SignatureRecord.model_validate(vectors["signatures"][name]) for name in case["signatures"]]
+        current = None
+        if "current_trust_root" in case:
+            current = TrustRoot.model_validate(vectors["trust_roots"][case["current_trust_root"]]["document"])
+        return Authenticator(store).authenticate(snapshot, records=records, current=current)
+
+    def test_every_published_case_reaches_its_verdict(self) -> None:
+        """The whole judgement layer, one case at a time, against this store."""
+        from boltzmann.conformance.golden import load
+
+        for case in load("signatures.json")["cases"]:
+            report = self._replayed(case)
+            expect = case["expect"]
+            assert report.state.value == expect["state"], case["name"]
+            if "quorum_met" in expect:
+                assert report.quorum_met == expect["quorum_met"], case["name"]
+            for kind in expect.get("findings_include", []):
+                assert any(finding.kind.value == kind for finding in report.findings), (case["name"], kind)
+
+    def test_signing_never_changes_a_snapshots_identity(self) -> None:
+        """Detached means detached: the record lands beside the snapshot, never inside it."""
+        from boltzmann.authenticity.record import SignatureRecord, store_record
+        from boltzmann.conformance.golden import load
+        from boltzmann.identity.digest import OciDigest
+        from boltzmann.module.snapshot import Snapshot
+
+        vectors = load("signatures.json")
+        store = self.make_store()
+        described = vectors["snapshots"]["S7"]
+        digest = store.put_bytes(described["canonical"].encode("utf-8"))
+        store_record(store, SignatureRecord.model_validate(vectors["signatures"]["A-over-S7"]))
+        snapshot = Snapshot.model_validate_json(store.get_bytes(OciDigest.parse(described["digest"])))
+        assert snapshot.digest == digest

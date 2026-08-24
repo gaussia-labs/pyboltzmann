@@ -1,0 +1,88 @@
+{
+  "boltzmann": 1,
+  "serialization": "jcs/1",
+  "hash": "sha256",
+  "namespace": "boltzmann.snapshot.v1",
+  "description": "SSHSIG framing vectors. The signed_data blob is the highest-value entry: without it, a framing bug and a signing bug are indistinguishable. Note the signed data carries no version field, the armor wraps at 70 columns, and reserved is always empty in the signed data even though the outer blob's is ignored.",
+  "warning": "The private seeds below are PUBLISHED, deliberately: they exist so an implementation in any language can regenerate and extend these vectors. Never use them for anything real.",
+  "keys": [
+    {
+      "name": "lecturer",
+      "type": "ssh-ed25519",
+      "seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "public": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAOhB7/zzhC+HXDdGOdLwJln5NYwm6UNXx3chmQSVTG4",
+      "public_key_blob_hex": "0000000b7373682d656432353531390000002003a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+      "fingerprint": "SHA256:lbmsoA0yIEcEiVDRnMWuzm+nV+3ZEEpVIURqFoeSspg"
+    }
+  ],
+  "vectors": [
+    {
+      "name": "ed25519_sha512_snapshot_namespace",
+      "key": "lecturer",
+      "namespace": "boltzmann.snapshot.v1",
+      "hash_algorithm": "sha512",
+      "message_base64": "eyJib2x0em1hbm4iOjF9",
+      "message_digest_hex": "cce38b46a2865ea35ac389cd7e4724c5c55c997802287c08d9a6d041b08720ff47fbef5d8d12bd6f4b491ee5089d047d5a4a20005bca6a60a19674c854570dd7",
+      "signed_data_blob_hex": "53534853494700000015626f6c747a6d616e6e2e736e617073686f742e7631000000000000000673686135313200000040cce38b46a2865ea35ac389cd7e4724c5c55c997802287c08d9a6d041b08720ff47fbef5d8d12bd6f4b491ee5089d047d5a4a20005bca6a60a19674c854570dd7",
+      "raw_signature_hex": "99d973f99ccba6700391c894060135c68dc1cc75b82afcfdf2e487544b31a0bea38548a77bbf559d7dd2eb3ac263e7293144a20e06e863f22dc78c19d2a6480d",
+      "signature_blob_hex": "53534853494700000001000000330000000b7373682d656432353531390000002003a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b800000015626f6c747a6d616e6e2e736e617073686f742e76310000000000000006736861353132000000530000000b7373682d656432353531390000004099d973f99ccba6700391c894060135c68dc1cc75b82afcfdf2e487544b31a0bea38548a77bbf559d7dd2eb3ac263e7293144a20e06e863f22dc78c19d2a6480d",
+      "armored": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgA6EHv/POEL4dcN0Y50vAmWfk1j\nCbpQ1fHdyGZBJVMbgAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQJnZc/mcy6ZwA5HIlAYBNcaNwcx1uCr8/fLkh1RLMa\nC+o4VIp3u/VZ190us6wmPnKTFEog4G6GPyLceMGdKmSA0=\n-----END SSH SIGNATURE-----\n"
+    },
+    {
+      "name": "ed25519_sha256_snapshot_namespace",
+      "key": "lecturer",
+      "namespace": "boltzmann.snapshot.v1",
+      "hash_algorithm": "sha256",
+      "message_base64": "eyJib2x0em1hbm4iOjF9",
+      "message_digest_hex": "53259cf67fbecabd5bc7b00eb05021afa854920a81e2174df24b53a861b34217",
+      "signed_data_blob_hex": "53534853494700000015626f6c747a6d616e6e2e736e617073686f742e763100000000000000067368613235360000002053259cf67fbecabd5bc7b00eb05021afa854920a81e2174df24b53a861b34217",
+      "raw_signature_hex": "364fe5cade87949b587adc10dde770714aee9d524daa1963b0373fc9b22e36ab1a83ce2c4441da4d10ff1abfcbd6c38175009baa16711caa70f0d557e44cbd07",
+      "signature_blob_hex": "53534853494700000001000000330000000b7373682d656432353531390000002003a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b800000015626f6c747a6d616e6e2e736e617073686f742e76310000000000000006736861323536000000530000000b7373682d6564323535313900000040364fe5cade87949b587adc10dde770714aee9d524daa1963b0373fc9b22e36ab1a83ce2c4441da4d10ff1abfcbd6c38175009baa16711caa70f0d557e44cbd07",
+      "armored": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgA6EHv/POEL4dcN0Y50vAmWfk1j\nCbpQ1fHdyGZBJVMbgAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGEyNTYA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQDZP5creh5SbWHrcEN3ncHFK7p1STaoZY7A3P8myLj\narGoPOLERB2k0Q/xq/y9bDgXUAm6oWcRyqcPDVV+RMvQc=\n-----END SSH SIGNATURE-----\n"
+    }
+  ],
+  "rejections": [
+    {
+      "name": "another_namespace_is_a_mismatch_not_a_forgery",
+      "armored": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgA6EHv/POEL4dcN0Y50vAmWfk1j\nCbpQ1fHdyGZBJVMbgAAAADZ2l0AAAAAAAAAAZzaGE1MTIAAABTAAAAC3NzaC1lZDI1NTE5\nAAAAQHqtO2EJxtNOa9bjqjkb3/e4C05BGJjoUe0mZNCrYsRbhVUbv8h/VnLGgvai5yt7sx\nymUP/Zzx65GrnoxcQFjAs=\n-----END SSH SIGNATURE-----\n",
+      "verify_under": "boltzmann.snapshot.v1",
+      "expect": "namespace_mismatch"
+    },
+    {
+      "name": "version_2_is_refused_rather_than_read",
+      "blob_hex": "53534853494700000002000000330000000b7373682d656432353531390000002003a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b800000015626f6c747a6d616e6e2e736e617073686f742e76310000000000000006736861353132000000530000000b7373682d656432353531390000004099d973f99ccba6700391c894060135c68dc1cc75b82afcfdf2e487544b31a0bea38548a77bbf559d7dd2eb3ac263e7293144a20e06e863f22dc78c19d2a6480d",
+      "expect": "format"
+    },
+    {
+      "name": "a_signature_made_over_a_non_empty_reserved_never_verifies",
+      "armored": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgA6EHv/POEL4dcN0Y50vAmWfk1j\nCbpQ1fHdyGZBJVMbgAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAXgAAAAGc2hhNTEy\nAAAAUwAAAAtzc2gtZWQyNTUxOQAAAEAIwlrzZiQndU1XU507kBtQY5ZS6FBWKwDqjVdaV4\n0JCHwyM0L895zMg7zB5fsASCiwZr8quAyUfJEvmNewEiUA\n-----END SSH SIGNATURE-----\n",
+      "verify_under": "boltzmann.snapshot.v1",
+      "expect": "invalid"
+    },
+    {
+      "name": "trailing_bytes_after_the_structure",
+      "blob_hex": "53534853494700000001000000330000000b7373682d656432353531390000002003a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b800000015626f6c747a6d616e6e2e736e617073686f742e76310000000000000006736861353132000000530000000b7373682d656432353531390000004099d973f99ccba6700391c894060135c68dc1cc75b82afcfdf2e487544b31a0bea38548a77bbf559d7dd2eb3ac263e7293144a20e06e863f22dc78c19d2a6480d00",
+      "expect": "format"
+    },
+    {
+      "name": "every_truncation_is_a_format_error",
+      "blob_hex": "53534853494700000001000000330000000b7373682d656432353531390000002003a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b800000015626f6c747a6d616e6e2e736e617073686f742e76310000000000",
+      "expect": "format"
+    },
+    {
+      "name": "md5_is_not_a_hash_algorithm_here",
+      "blob_hex": "53534853494700000001000000330000000b7373682d656432353531390000002003a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b800000015626f6c747a6d616e6e2e736e617073686f742e763100000000000000036d6435000000530000000b7373682d656432353531390000004099d973f99ccba6700391c894060135c68dc1cc75b82afcfdf2e487544b31a0bea38548a77bbf559d7dd2eb3ac263e7293144a20e06e863f22dc78c19d2a6480d",
+      "expect": "format"
+    },
+    {
+      "name": "armor_missing_its_footer",
+      "armored": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgA6EHv/POEL4dcN0Y50vAmWfk1j\nCbpQ1fHdyGZBJVMbgAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQJnZc/mcy6ZwA5HIlAYBNcaNwcx1uCr8/fLkh1RLMa\nC+o4VIp3u/VZ190us6wmPnKTFEog4G6GPyLceMGdKmSA0=\n\n",
+      "expect": "format"
+    },
+    {
+      "name": "armor_with_a_leading_byte",
+      "armored": " -----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgA6EHv/POEL4dcN0Y50vAmWfk1j\nCbpQ1fHdyGZBJVMbgAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQJnZc/mcy6ZwA5HIlAYBNcaNwcx1uCr8/fLkh1RLMa\nC+o4VIp3u/VZ190us6wmPnKTFEog4G6GPyLceMGdKmSA0=\n-----END SSH SIGNATURE-----\n",
+      "expect": "format"
+    }
+  ]
+}
