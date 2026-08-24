@@ -14,8 +14,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from boltzmann.distribution.manifest import BrainManifest, parse_manifest
-from boltzmann.distribution.media_types import ARTIFACT_TYPE, MANIFEST_MEDIA_TYPE, REF_NAME_ANNOTATION
+from boltzmann.distribution.manifest import (
+    BrainManifest,
+    Descriptor,
+    SignatureManifest,
+    parse_manifest,
+    parse_signature_manifest,
+)
+from boltzmann.distribution.media_types import (
+    ARTIFACT_TYPE,
+    EMPTY_CONFIG_BYTES,
+    MANIFEST_MEDIA_TYPE,
+    REF_NAME_ANNOTATION,
+    SIGNATURE_MEDIA_TYPE,
+)
 from boltzmann.exceptions import DistributionError, ReferenceNotFoundError
 from boltzmann.identity.digest import OciDigest
 from boltzmann.store.base import BlockStore
@@ -158,6 +170,99 @@ class LocalLayoutRegistry:
         index["manifests"] = [*kept, entry]
         target.write_index(index)
         return digest
+
+    async def push_referrer(self, reference: str, manifest: SignatureManifest, store: BlockStore) -> OciDigest:
+        """
+        Publish a signature manifest into the layout, beside the artifact it refers to.
+
+        In a layout the "referrers index" is ``index.json`` itself: the signature manifest is one
+        more entry, carrying no tag, discovered by parsing. The referred brain manifest is never
+        touched, so countersigning changes nothing anybody pinned.
+
+        Args:
+            reference (str): Repository reference.
+            manifest (SignatureManifest): What to publish.
+            store (BlockStore): Where the record blob is read from.
+
+        Returns:
+            OciDigest: Digest of the published signature manifest.
+        """
+        target = self.layout(reference, create=True)
+        if not target.is_resolvable(manifest.config.digest):
+            target.put_bytes(EMPTY_CONFIG_BYTES)
+        if not target.is_resolvable(manifest.record.digest):
+            target.put_bytes(store.get_bytes(manifest.record.digest))
+        payload = manifest.to_bytes()
+        digest = target.put_bytes(payload)
+
+        index = target.index()
+        if any(entry.get("digest") == str(digest) for entry in index.get("manifests", [])):
+            return digest
+        index["manifests"] = [
+            *index.get("manifests", []),
+            {
+                "mediaType": MANIFEST_MEDIA_TYPE,
+                "artifactType": SIGNATURE_MEDIA_TYPE,
+                "digest": str(digest),
+                "size": len(payload),
+                "annotations": dict(manifest.annotations),
+            },
+        ]
+        target.write_index(index)
+        return digest
+
+    async def referrers(self, reference: str, subject: OciDigest, artifact_type: str | None = None) -> list[Descriptor]:
+        """
+        The signature manifests in this layout referring to one subject.
+
+        Args:
+            reference (str): Repository reference.
+            subject (OciDigest): The referred manifest's digest.
+            artifact_type (str | None): Narrow to one artifact type.
+
+        Returns:
+            list[Descriptor]: One descriptor per matching referrer.
+        """
+        try:
+            store = self.layout(reference)
+        except DistributionError:
+            return []
+        found: list[Descriptor] = []
+        for entry in store.index().get("manifests", []):
+            declared = entry.get("artifactType")
+            if declared != SIGNATURE_MEDIA_TYPE or (artifact_type is not None and declared != artifact_type):
+                continue
+            digest = OciDigest.parse(entry["digest"])
+            if not store.is_resolvable(digest):
+                continue
+            try:
+                candidate = parse_signature_manifest(store.get_bytes(digest))
+            except DistributionError:
+                continue
+            if candidate.subject.digest == subject:
+                found.append(
+                    Descriptor(
+                        media_type=MANIFEST_MEDIA_TYPE,
+                        digest=digest,
+                        size=int(entry.get("size", 0)),
+                        artifact_type=declared,
+                        annotations=dict(entry.get("annotations", {})),
+                    )
+                )
+        return found
+
+    async def pull_referrer(self, reference: str, digest: OciDigest) -> SignatureManifest:
+        """
+        Read one signature manifest from the layout.
+
+        Args:
+            reference (str): Repository reference.
+            digest (OciDigest): The signature manifest's digest.
+
+        Returns:
+            SignatureManifest: The parsed manifest.
+        """
+        return parse_signature_manifest(self.layout(reference).get_bytes(digest))
 
     def tags(self, reference: str) -> list[str]:
         """

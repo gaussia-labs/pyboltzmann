@@ -27,7 +27,7 @@ import io
 import tarfile
 from collections.abc import Iterable
 
-from boltzmann.exceptions import DistributionError
+from boltzmann.exceptions import BoltzmannError, DistributionError
 from boltzmann.identity.digest import BlockId, Digest, OciDigest
 from boltzmann.module.composition import Composition
 from boltzmann.module.module import Module
@@ -37,6 +37,16 @@ from boltzmann.store.base import BlockStore
 COMPOSITION_ENTRY = "composition.json"
 
 SNAPSHOT_PREFIX = "snapshots/"
+
+COMPOSITION_PREFIX = "compositions/"
+"""Where the history layer files the composition documents its snapshots reference.
+
+A snapshot names each module's composition by digest, and a digest a consumer cannot resolve is a
+version that can be verified but never reopened -- and never *differenced*, which is what the
+authenticity role computes required scopes from: without the parent's compositions, every pulled
+commit is undecidable between an ingest and a canonical drop, and a verifier that guessed smaller
+would be exploitable. They ride in the history layer because they are the same kind of thing a
+snapshot is: small documents whose absence silently caps how far back anyone can audit."""
 """Prefix of a history layer entry, one per snapshot document."""
 """Name of the composition document inside a layer."""
 
@@ -133,9 +143,9 @@ def pack_module(module: Module) -> bytes:
     return compressed.getvalue()
 
 
-def pack_history(documents: Iterable[bytes]) -> bytes:
+def pack_history(documents: Iterable[bytes], compositions: Iterable[bytes] = ()) -> bytes:
     """
-    Pack a set of snapshot documents into the history layer.
+    Pack a history's snapshot documents, and the composition documents they reference.
 
     Order is by digest rather than by chain position, so two clients publishing the same history produce
     byte-identical layers and the registry deduplicates them -- the same reason a composition's leaves are
@@ -143,15 +153,22 @@ def pack_history(documents: Iterable[bytes]) -> bytes:
 
     Args:
         documents (Iterable[bytes]): The snapshot documents, as stored.
+        compositions (Iterable[bytes]): The composition documents those snapshots reference, as
+            stored. Optional because a history is readable without them; what is lost is the
+            ability to reopen and difference old versions, which the docstring of
+            :data:`COMPOSITION_PREFIX` explains is not nothing.
 
     Returns:
         bytes: The gzipped tar.
     """
     payloads = {OciDigest.of(document): document for document in documents}
+    referenced = {OciDigest.of(document): document for document in compositions}
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as archive:
         for digest in sorted(payloads, key=lambda value: value.hex):
             _add(archive, f"{SNAPSHOT_PREFIX}{digest.hex}", payloads[digest])
+        for digest in sorted(referenced, key=lambda value: value.hex):
+            _add(archive, f"{COMPOSITION_PREFIX}{digest.hex}", referenced[digest])
 
     compressed = io.BytesIO()
     with gzip.GzipFile(fileobj=compressed, mode="wb", compresslevel=GZIP_LEVEL, mtime=0) as stream:
@@ -188,7 +205,28 @@ def unpack_history(data: bytes, store: BlockStore, max_size: int | None = None) 
     written = []
     with tarfile.open(fileobj=io.BytesIO(_inflate(data, limit)), mode="r:") as archive:
         for info in archive.getmembers():
-            if not info.isfile() or not info.name.startswith(SNAPSHOT_PREFIX):
+            if not info.isfile():
+                continue
+            if info.name.startswith(COMPOSITION_PREFIX):
+                handle = archive.extractfile(info)
+                if handle is None:
+                    continue
+                payload = handle.read()
+                try:
+                    Composition.from_document(payload)
+                except (ValueError, BoltzmannError) as error:
+                    raise DistributionError(
+                        f"history layer entry {info.name} is not a composition document: {error}"
+                    ) from error
+                digest = OciDigest.of(payload)
+                if info.name.removeprefix(COMPOSITION_PREFIX) != digest.hex:
+                    raise DistributionError(
+                        f"history layer entry {info.name} holds the document for {digest.short} instead; "
+                        f"the layer's naming and its payloads disagree"
+                    )
+                store.put_bytes(payload)
+                continue
+            if not info.name.startswith(SNAPSHOT_PREFIX):
                 continue
             handle = archive.extractfile(info)
             if handle is None:

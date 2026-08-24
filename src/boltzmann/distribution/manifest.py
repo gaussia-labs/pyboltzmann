@@ -32,7 +32,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
@@ -45,12 +45,19 @@ from boltzmann.distribution.media_types import (
     ANNOTATION_MERKLE_ROOT,
     ANNOTATION_PROTOCOL_VERSION,
     ANNOTATION_SCHEMA_VERSIONS,
+    ANNOTATION_SIGNATURE_KEY,
+    ANNOTATION_SIGNATURE_SNAPSHOT,
     ANNOTATION_SNAPSHOT_COUNT,
+    ANNOTATION_TRUST_ROOT,
     ARTIFACT_TYPE,
     CONFIG_MEDIA_TYPE,
+    EMPTY_CONFIG_BYTES,
+    EMPTY_CONFIG_DIGEST,
+    EMPTY_CONFIG_MEDIA_TYPE,
     HISTORY_MEDIA_TYPE,
     MANIFEST_MEDIA_TYPE,
     REF_NAME_ANNOTATION,
+    SIGNATURE_MEDIA_TYPE,
     VECTOR_INDEX_MEDIA_TYPE,
     module_media_type,
 )
@@ -87,6 +94,13 @@ class Descriptor(BaseModel):
     digest: OciDigest
     size: int = Field(ge=0)
     annotations: dict[str, str] = Field(default_factory=dict)
+    artifact_type: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("artifactType", "artifact_type"),
+        serialization_alias="artifactType",
+    )
+    """What the referred is, when this descriptor came out of a referrers listing. ``None`` --
+    the default, excluded from every serialization -- keeps existing digests untouched."""
 
     @property
     def memory_type(self) -> MemoryType | None:
@@ -320,6 +334,10 @@ def build_manifest(
         annotations={
             **(annotations or {}),
             ANNOTATION_PROTOCOL_VERSION: str(PROTOCOL_VERSION),
+            # The trust root's digest, so a consumer can compare a pin before transferring
+            # anything. Written after the caller's annotations for the same reason the protocol
+            # version is: the side that benefits from disabling a check must not be able to.
+            **({ANNOTATION_TRUST_ROOT: str(snapshot.trust_root.digest)} if snapshot.trust_root is not None else {}),
         },
     )
 
@@ -494,6 +512,155 @@ def published_artifacts(store: BlockStore) -> list[PublishedArtifact]:
         )
         artifacts.append(PublishedArtifact(digest=digest, tag=tag if isinstance(tag, str) else None, manifest=manifest))
     return artifacts
+
+
+class SignatureManifest(BaseModel):
+    """
+    The manifest that carries one signature record and refers to the brain it covers.
+
+    A signature cannot be a layer of the brain manifest -- countersigning would change the
+    brain's digest -- and it cannot live only in a registry's referrers index, which does not
+    survive an export. So it is the single layer of its *own* manifest, whose ``subject`` names
+    the brain manifest: in a registry that is a referrer the Referrers API discovers, and in a
+    local layout it is one more entry in ``index.json``, which is exactly what an export carries.
+    One object, both homes (paper Section 8.8).
+
+    Attributes:
+        schema_version (int): OCI's schema version, always 2.
+        media_type (str): OCI's manifest media type.
+        artifact_type (str): What this artifact is: a Boltzmann signature record.
+        config (Descriptor): The OCI empty descriptor. A signature has no config; the empty blob
+            exists so the manifest is structurally an ordinary artifact every registry accepts.
+        layers (list[Descriptor]): Exactly one: the signature record blob.
+        subject (Descriptor): The brain manifest this signature refers to. What makes signatures
+            accumulate *around* an artifact without touching it.
+        annotations (dict[str, str]): The signer's fingerprint and the covered snapshot, for
+            registry tooling; verification never reads them.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+
+    schema_version: int = Field(
+        default=OCI_SCHEMA_VERSION,
+        validation_alias=AliasChoices("schemaVersion", "schema_version"),
+        serialization_alias="schemaVersion",
+    )
+    media_type: str = Field(
+        default=MANIFEST_MEDIA_TYPE,
+        validation_alias=AliasChoices("mediaType", "media_type"),
+        serialization_alias="mediaType",
+    )
+    artifact_type: str = Field(
+        default=SIGNATURE_MEDIA_TYPE,
+        validation_alias=AliasChoices("artifactType", "artifact_type"),
+        serialization_alias="artifactType",
+    )
+    config: Descriptor
+    layers: list[Descriptor] = Field(min_length=1, max_length=1)
+    subject: Descriptor
+    annotations: dict[str, str] = Field(default_factory=dict)
+
+    def to_bytes(self) -> bytes:
+        """
+        Serialize as OCI wire bytes, the same bytes in the layout and in the registry.
+
+        Returns:
+            bytes: The manifest as canonical JSON.
+        """
+        document = self.model_dump(mode="json", by_alias=True, exclude_none=True)
+        for descriptor in [document["config"], document["subject"], *document.get("layers", [])]:
+            if not descriptor.get("annotations"):
+                descriptor.pop("annotations", None)
+        if not document.get("annotations"):
+            document.pop("annotations", None)
+        return canonicalize(document)
+
+    @property
+    def digest(self) -> OciDigest:
+        """The manifest's identity, everywhere it exists."""
+        return OciDigest.of(self.to_bytes())
+
+    @property
+    def record(self) -> Descriptor:
+        """The signature record blob this manifest carries."""
+        return self.layers[0]
+
+
+def empty_config_descriptor() -> Descriptor:
+    """
+    The OCI empty descriptor, for artifacts that have no config of their own.
+
+    Returns:
+        Descriptor: Media type, digest, and size fixed by the OCI spec.
+    """
+    return Descriptor(
+        media_type=EMPTY_CONFIG_MEDIA_TYPE,
+        digest=OciDigest.parse(EMPTY_CONFIG_DIGEST),
+        size=len(EMPTY_CONFIG_BYTES),
+    )
+
+
+def build_signature_manifest(
+    record_digest: OciDigest,
+    record_size: int,
+    key: str,
+    snapshot: OciDigest,
+    subject: Descriptor,
+) -> SignatureManifest:
+    """
+    Assemble the manifest that publishes one signature record.
+
+    Args:
+        record_digest (OciDigest): Content address of the record blob.
+        record_size (int): Its size in bytes.
+        key (str): The signing key's fingerprint, for the browsing annotations.
+        snapshot (OciDigest): The snapshot the record covers, likewise.
+        subject (Descriptor): The brain manifest being referred to.
+
+    Returns:
+        SignatureManifest: Ready to write into a layout index or push as a referrer.
+    """
+    return SignatureManifest(
+        config=empty_config_descriptor(),
+        layers=[
+            Descriptor(media_type=SIGNATURE_MEDIA_TYPE, digest=record_digest, size=record_size),
+        ],
+        subject=subject,
+        annotations={
+            ANNOTATION_SIGNATURE_KEY: key,
+            ANNOTATION_SIGNATURE_SNAPSHOT: str(snapshot),
+        },
+    )
+
+
+def parse_signature_manifest(data: bytes) -> SignatureManifest:
+    """
+    Parse a signature manifest fetched from a registry or read from a layout.
+
+    Args:
+        data (bytes): The manifest JSON.
+
+    Returns:
+        SignatureManifest: The parsed manifest.
+
+    Raises:
+        DistributionError: If the document is not a Boltzmann signature manifest.
+    """
+    try:
+        document: Any = json.loads(data)
+    except json.JSONDecodeError as error:
+        raise DistributionError(f"signature manifest is not valid JSON: {error}") from error
+    if not isinstance(document, dict):
+        raise DistributionError(f"signature manifest must be an object, got {type(document).__name__}")
+    declared = document.get("artifactType")
+    if declared != SIGNATURE_MEDIA_TYPE:
+        raise DistributionError(
+            f"not a Boltzmann signature: artifactType is {declared!r}, expected {SIGNATURE_MEDIA_TYPE!r}"
+        )
+    try:
+        return SignatureManifest.model_validate(document)
+    except ValidationError as error:
+        raise DistributionError(f"malformed signature manifest: {error}") from error
 
 
 def parse_manifest(data: bytes) -> BrainManifest:

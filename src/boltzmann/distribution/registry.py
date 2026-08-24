@@ -19,7 +19,7 @@ from typing import Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field
 
 from boltzmann.blocks.memory_type import MemoryType
-from boltzmann.distribution.manifest import BrainManifest
+from boltzmann.distribution.manifest import BrainManifest, Descriptor, SignatureManifest
 from boltzmann.identity.digest import BlockId, OciDigest
 from boltzmann.module.snapshot import Snapshot
 from boltzmann.store.base import BlockStore
@@ -149,5 +149,65 @@ class RegistryClient(Protocol):
 
         Returns:
             OciDigest: Digest of the pushed manifest.
+        """
+        ...
+
+
+@runtime_checkable
+class RegistryReferrers(Protocol):
+    """
+    The optional referrers surface: signatures published *around* an artifact.
+
+    A separate protocol rather than three more methods on :class:`RegistryClient`, because adding
+    methods to a protocol breaks every third-party client that already satisfies it. A transport
+    that implements only :class:`RegistryClient` stays conforming; it simply cannot carry
+    signatures over the wire, and callers feature-detect this the way ``published_artifacts``
+    already feature-detects a store's index.
+    """
+
+    async def push_referrer(self, reference: str, manifest: SignatureManifest, store: BlockStore) -> OciDigest:
+        """
+        Publish a signature manifest referring to an artifact already pushed.
+
+        The referred artifact is never touched: that is the entire point. On a registry without
+        the Referrers API the transport maintains the ``sha256-<hex>`` fallback tag instead.
+
+        Args:
+            reference (str): Repository reference.
+            manifest (SignatureManifest): What to publish.
+            store (BlockStore): Where the record blob and the empty config are read from.
+
+        Returns:
+            OciDigest: Digest of the published signature manifest.
+        """
+        ...
+
+    async def referrers(self, reference: str, subject: OciDigest, artifact_type: str | None = None) -> list[Descriptor]:
+        """
+        Discover the manifests referring to one subject.
+
+        Args:
+            reference (str): Repository reference.
+            subject (OciDigest): The referred manifest's digest.
+            artifact_type (str | None): Narrow to one artifact type, when the registry can.
+
+        Returns:
+            list[Descriptor]: One descriptor per referrer, possibly empty.
+        """
+        ...
+
+    async def pull_referrer(self, reference: str, digest: OciDigest) -> SignatureManifest:
+        """
+        Fetch one signature manifest by digest.
+
+        A separate method from ``pull_blob`` because registries serve manifests through the
+        manifests API, not the blobs API.
+
+        Args:
+            reference (str): Repository reference.
+            digest (OciDigest): The signature manifest's digest.
+
+        Returns:
+            SignatureManifest: The parsed manifest.
         """
         ...
