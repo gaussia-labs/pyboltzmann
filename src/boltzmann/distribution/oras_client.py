@@ -15,9 +15,12 @@ internal Merkle root, and a config blob that is the snapshot document.
 
 from __future__ import annotations
 
+import logging
 import tempfile
 from pathlib import Path
 from typing import Any
+
+from pydantic import ValidationError
 
 from boltzmann.distribution.manifest import (
     BrainManifest,
@@ -401,12 +404,41 @@ class OrasRegistryClient:
             raise DistributionError(
                 f"querying referrers of {subject.short} at {reference} failed with {response.status_code}"
             )
-        entries = response.json().get("manifests", [])
-        found = [Descriptor.model_validate(entry) for entry in entries]
-        if artifact_type is not None:
-            # The API's filter is advisory: a registry that ignored it sets no annotation, and the
-            # client filters regardless, as the spec instructs.
-            found = [descriptor for descriptor in found if descriptor.artifact_type == artifact_type]
+        try:
+            listing = response.json()
+        except ValueError as error:
+            raise DistributionError(
+                f"the referrers listing for {subject.short} at {reference} is not JSON: {error}"
+            ) from error
+        return self._parse_referrer_entries(listing, artifact_type, subject)
+
+    @staticmethod
+    def _parse_referrer_entries(listing: object, artifact_type: str | None, subject: OciDigest) -> list[Descriptor]:
+        """Read a referrers listing tolerantly: filter first, parse second, skip what fails.
+
+        A listing is shared space -- other tools attach their own referrers, whose descriptors
+        legally carry fields this model does not (``platform``, ``urls``, ``data``) -- so an
+        entry is only parsed once it claims the artifact type asked for, and one unreadable
+        entry never hides the others. The API's own filter is advisory: a registry that ignored
+        it sets no annotation, and the client filters regardless, as the spec instructs.
+        """
+        entries = listing.get("manifests", []) if isinstance(listing, dict) else None
+        if not isinstance(entries, list):
+            logging.getLogger(__name__).warning(
+                "the referrers listing for %s does not carry a manifests array; treating it as empty",
+                subject.short,
+            )
+            return []
+        found: list[Descriptor] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if artifact_type is not None and entry.get("artifactType") != artifact_type:
+                continue
+            try:
+                found.append(Descriptor.model_validate(entry))
+            except ValidationError:
+                logging.getLogger(__name__).warning("skipping an unreadable referrer of %s", subject.short)
         return found
 
     async def pull_referrer(self, reference: str, digest: OciDigest) -> SignatureManifest:
@@ -445,6 +477,12 @@ class OrasRegistryClient:
 
     def _fallback_referrers(self, reference: str, subject: OciDigest, artifact_type: str | None) -> list[Descriptor]:
         """Read the ``sha256-<hex>`` index a pre-Referrers registry holds instead."""
+        return self._parse_referrer_entries(
+            {"manifests": self._fallback_raw_entries(reference, subject)}, artifact_type, subject
+        )
+
+    def _fallback_raw_entries(self, reference: str, subject: OciDigest) -> list[dict[str, Any]]:
+        """The fallback index's entries as the registry holds them, so a rewrite drops nothing."""
         response = self._request_manifest(reference, self._fallback_tag(subject))
         if response.status_code == HTTP_NOT_FOUND:
             return []
@@ -452,19 +490,29 @@ class OrasRegistryClient:
             raise DistributionError(
                 f"reading the referrers fallback tag for {subject.short} failed with {response.status_code}"
             )
-        entries = response.json().get("manifests", [])
-        found = [Descriptor.model_validate(entry) for entry in entries]
-        if artifact_type is not None:
-            found = [descriptor for descriptor in found if descriptor.artifact_type == artifact_type]
-        return found
+        try:
+            listing = response.json()
+        except ValueError as error:
+            raise DistributionError(
+                f"the referrers fallback index for {subject.short} at {reference} is not JSON: {error}"
+            ) from error
+        entries = listing.get("manifests", []) if isinstance(listing, dict) else None
+        if not isinstance(entries, list):
+            return []
+        return [entry for entry in entries if isinstance(entry, dict)]
 
     def _append_to_fallback(self, reference: str, manifest: SignatureManifest, digest: OciDigest, size: int) -> None:
-        """Read-modify-write the fallback index so pre-Referrers registries still list signatures."""
-        existing = self._fallback_referrers(reference, manifest.subject.digest, None)
-        if any(descriptor.digest == digest for descriptor in existing):
+        """Read-modify-write the fallback index so pre-Referrers registries still list signatures.
+
+        The existing entries are carried as raw documents, not re-parsed descriptors: the tag is
+        shared space, and rewriting a foreign entry through this client's model would silently
+        drop the fields it does not know.
+        """
+        existing = self._fallback_raw_entries(reference, manifest.subject.digest)
+        if any(entry.get("digest") == str(digest) for entry in existing):
             return
         entries = [
-            *(descriptor.model_dump(mode="json", by_alias=True, exclude_none=True) for descriptor in existing),
+            *existing,
             {
                 "mediaType": MANIFEST_MEDIA_TYPE,
                 "artifactType": SIGNATURE_MEDIA_TYPE,

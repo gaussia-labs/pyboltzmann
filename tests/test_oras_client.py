@@ -23,12 +23,14 @@ import pytest
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind
 from boltzmann.brain import Brain
-from boltzmann.distribution.manifest import BrainManifest
+from boltzmann.distribution.manifest import BrainManifest, Descriptor, build_signature_manifest
 from boltzmann.distribution.media_types import (
     ARTIFACT_TYPE,
     HISTORY_MEDIA_TYPE,
+    IMAGE_INDEX_MEDIA_TYPE,
     MANIFEST_MEDIA_TYPE,
     REF_NAME_ANNOTATION,
+    SIGNATURE_MEDIA_TYPE,
 )
 from boltzmann.distribution.oras_client import OrasRegistryClient
 from boltzmann.distribution.registry import RegistryClient
@@ -562,3 +564,105 @@ class TestAuthorizingAWrite:
         fake.auth.request_token = refuse  # type: ignore[method-assign]
         await brain.push(client, REFERENCE, "v1")
         assert fake.uploads
+
+
+class TestReferrers:
+    """The referrers listing is shared, unauthenticated space, and is read tolerantly.
+
+    Other tools attach their own referrers (SBOMs, attestations) whose descriptors legally carry
+    fields this SDK does not model. None of that may break discovering our own signatures.
+    """
+
+    SUBJECT = OciDigest.of(b"the referred brain manifest")
+
+    def _signature_entry(self) -> dict[str, Any]:
+        return {
+            "mediaType": MANIFEST_MEDIA_TYPE,
+            "artifactType": SIGNATURE_MEDIA_TYPE,
+            "digest": str(OciDigest.of(b"a signature manifest")),
+            "size": 123,
+        }
+
+    def _listing_key(self) -> str:
+        return f"registry.example/v2/org/brain/referrers/{self.SUBJECT}?artifactType={SIGNATURE_MEDIA_TYPE}"
+
+    async def test_foreign_and_malformed_entries_never_hide_a_signature(
+        self, fake: FakeRegistry, client: OrasRegistryClient
+    ) -> None:
+        listing = {
+            "schemaVersion": 2,
+            "mediaType": IMAGE_INDEX_MEDIA_TYPE,
+            "manifests": [
+                {
+                    # A foreign attachment carrying perfectly legal OCI descriptor fields
+                    # (platform, data) that this SDK's Descriptor model does not know.
+                    "mediaType": MANIFEST_MEDIA_TYPE,
+                    "artifactType": "application/vnd.example.sbom",
+                    "digest": str(OciDigest.of(b"an sbom")),
+                    "size": 9,
+                    "platform": {"os": "linux", "architecture": "amd64"},
+                    "data": "e30=",
+                },
+                {
+                    # Claims our artifact type but cannot be parsed: skipped, never fatal.
+                    "mediaType": MANIFEST_MEDIA_TYPE,
+                    "artifactType": SIGNATURE_MEDIA_TYPE,
+                    "digest": str(OciDigest.of(b"a broken entry")),
+                    "size": 7,
+                    "annotations": None,
+                },
+                "not even an object",
+                self._signature_entry(),
+            ],
+        }
+        fake.manifests[self._listing_key()] = json.dumps(listing).encode()
+        found = await client.referrers(REFERENCE, self.SUBJECT, artifact_type=SIGNATURE_MEDIA_TYPE)
+        assert [str(descriptor.digest) for descriptor in found] == [self._signature_entry()["digest"]]
+
+    async def test_a_listing_without_a_manifests_array_is_empty_not_fatal(
+        self, fake: FakeRegistry, client: OrasRegistryClient
+    ) -> None:
+        fake.manifests[self._listing_key()] = json.dumps(["not", "an", "index"]).encode()
+        assert await client.referrers(REFERENCE, self.SUBJECT, artifact_type=SIGNATURE_MEDIA_TYPE) == []
+
+    async def test_a_listing_that_is_not_json_is_a_distribution_error(
+        self, fake: FakeRegistry, client: OrasRegistryClient
+    ) -> None:
+        fake.serve = FakeResponse(b"<html>proxy error page</html>", status_code=200, reason="OK")
+        with pytest.raises(DistributionError, match="not JSON"):
+            await client.referrers(REFERENCE, self.SUBJECT, artifact_type=SIGNATURE_MEDIA_TYPE)
+
+    async def test_appending_to_the_fallback_preserves_foreign_entries(
+        self, fake: FakeRegistry, client: OrasRegistryClient
+    ) -> None:
+        """The fallback tag is shared space too: a rewrite must not strip fields it does not model."""
+        foreign = {
+            "mediaType": MANIFEST_MEDIA_TYPE,
+            "artifactType": "application/vnd.example.sbom",
+            "digest": str(OciDigest.of(b"an sbom")),
+            "size": 9,
+            "platform": {"os": "linux", "architecture": "amd64"},
+            "urls": ["https://example.test/sbom"],
+        }
+        fallback_tag = f"sha256-{self.SUBJECT.hex}"
+        fake.manifests[f"{REFERENCE}:{fallback_tag}"] = json.dumps(
+            {"schemaVersion": 2, "mediaType": IMAGE_INDEX_MEDIA_TYPE, "manifests": [foreign]}
+        ).encode()
+
+        store = MemoryBlockStore()
+        record_bytes = b'{"a":"record"}'
+        record_digest = store.put_bytes(record_bytes)
+        manifest = build_signature_manifest(
+            record_digest,
+            len(record_bytes),
+            "SHA256:someprintedkey",
+            OciDigest.of(b"a snapshot"),
+            Descriptor(media_type=MANIFEST_MEDIA_TYPE, digest=self.SUBJECT, size=42, artifact_type=ARTIFACT_TYPE),
+        )
+        await client.push_referrer(REFERENCE, manifest, store)
+
+        written = json.loads(fake.manifests[f"registry.example/v2/org/brain/manifests/{fallback_tag}"])
+        assert foreign in written["manifests"], "the foreign entry must survive byte-for-byte"
+        assert any(entry.get("artifactType") == SIGNATURE_MEDIA_TYPE for entry in written["manifests"]), (
+            "the new signature entry must be appended beside it"
+        )
