@@ -313,14 +313,14 @@ class AuthenticationReport(BaseModel):
         if state is AuthorshipState.UNSIGNED:
             raise UnsignedBrainError(f"snapshot {self.snapshot} carries no signature")
         if self.has(FindingKind.TRUST_ROOT_MISMATCH):
-            raise TrustRootMismatchError(self._detail(FindingKind.TRUST_ROOT_MISMATCH))
+            raise TrustRootMismatchError(self.detail(FindingKind.TRUST_ROOT_MISMATCH))
         if self.has(FindingKind.SINCE_REFUTED) or self.has(FindingKind.CHAIN_TRUNCATED):
             raise UnauthorizedKeyError(
-                self._detail(FindingKind.SINCE_REFUTED) or self._detail(FindingKind.CHAIN_TRUNCATED)
+                self.detail(FindingKind.SINCE_REFUTED) or self.detail(FindingKind.CHAIN_TRUNCATED)
             )
         for kind in (FindingKind.QUORUM_FAILURE, FindingKind.REVISION_CHANGED_CONTENT, FindingKind.REVISION_REGRESSED):
             if self.has(kind):
-                raise QuorumFailureError(self._detail(kind))
+                raise QuorumFailureError(self.detail(kind))
         if self.withdrawn:
             raise CompromisedKeyError(
                 f"signatures by {', '.join(verdict.key for verdict in self.withdrawn)} over "
@@ -366,7 +366,16 @@ class AuthenticationReport(BaseModel):
             pinned=self.pinned,
         )
 
-    def _detail(self, kind: FindingKind) -> str:
+    def detail(self, kind: FindingKind) -> str:
+        """
+        The first finding's detail of a kind, or an empty string.
+
+        Args:
+            kind (FindingKind): What to look for.
+
+        Returns:
+            str: The prose a refusal can carry verbatim.
+        """
         for finding in self.findings:
             if finding.kind is kind:
                 return finding.detail
@@ -464,7 +473,7 @@ class Authenticator:
                         )
                     )
 
-        self._judge_ancestry(snapshot, position, findings)
+        self._judge_ancestry(snapshot, position, findings, pinned=pinned)
 
         required = required_scopes(gather_evidence(self.store, snapshot, position.parent))
         if not required.is_complete:
@@ -743,7 +752,9 @@ class Authenticator:
             governors.add(parsed.public_key.blob)
         return len(governors)
 
-    def _judge_ancestry(self, snapshot: Snapshot, position: Position, findings: list[Finding]) -> None:
+    def _judge_ancestry(
+        self, snapshot: Snapshot, position: Position, findings: list[Finding], pinned: bool = False
+    ) -> None:
         """Validate every trust-root transition in the ancestry, not only the head's.
 
         Rejection propagates forward: a snapshot draws its trust root from its first parent, so a
@@ -752,10 +763,30 @@ class Authenticator:
         self-admission attack fails **with no pin at all** -- the verifier is checking an
         internal transition rule, and the chain the attacker must ship contains the evidence
         that their own change of authority was never approved.
+
+        A walk that ends at an unresolvable non-genesis position is the same attack one step
+        removed: whoever withheld the parent also withheld the proof that the oldest reachable
+        authority was ever granted. That truncation blocks -- unless a pin matched, because a pin
+        can only ever match within the resolvable walk, so a match *is* an explicit anchor at or
+        above the gap, and history behind an anchor decides nothing.
         """
         if position.truncated or position.parent is None:
             return
         for ancestor in walk_first_parents(self.store, position.parent):
+            if ancestor.truncated:
+                findings.append(
+                    Finding(
+                        kind=FindingKind.CHAIN_TRUNCATED,
+                        detail=(
+                            f"ancestor {ancestor.digest.short} names first parent "
+                            f"{ancestor.snapshot.first_parent} which is not held, so the origin of "
+                            f"the authority in force at the head is unverifiable"
+                            + ("; the pin anchors the authority above the gap" if pinned else "")
+                        ),
+                        blocking=not pinned,
+                    )
+                )
+                return
             if ancestor.role is not SnapshotRole.REVISION:
                 continue
             previous = ancestor.in_force

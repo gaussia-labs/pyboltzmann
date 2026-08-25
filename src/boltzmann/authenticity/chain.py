@@ -5,8 +5,11 @@ snapshot's position cannot be forged without changing every descendant's parent 
 is therefore expressed *positionally* rather than temporally -- no clock is consulted anywhere in
 this package -- and this module answers the positional questions everything else asks.
 
-Every rule here walks **first parents only**. The first parent is the history a reconciliation
-was performed onto, and no authorization is derived from merged-in parents (paper Section 12.1).
+Every rule that *derives authorization* walks **first parents only**. The first parent is the
+history a reconciliation was performed onto, and no authorization is derived from merged-in
+parents (paper Section 12.1). Revocation reachability (:func:`descends_from`) is the one
+exception: it walks **every** parent, because a compromise that arrived through a merge -- or
+that hides behind an unresolvable one -- must never read as a cleared one.
 
 One step decides the trust root in force: it is the one the first parent names (paper Section
 8.9, Case 1). Never search deeper -- if the parent carries no trust root, the brain genuinely has
@@ -203,11 +206,13 @@ def observed_revisions(store: BlockStore, snapshot: Snapshot) -> list[TrustRoot]
 
 def descends_from(store: BlockStore, snapshot: Snapshot, target: OciDigest) -> bool | None:
     """
-    Whether ``target`` lies on a snapshot's first-parent chain, itself included.
+    Whether ``target`` lies anywhere in a snapshot's ancestry, itself included.
 
     This is what gives ``compromised_from`` its meaning: a compromise recorded at a position
-    withdraws every signature at that position and after it, along the lineage authorization is
-    derived from.
+    withdraws every signature at that position and after it. Unlike authorization, which is
+    derived along first parents only, this walks **every** parent: a compromise merged in
+    through a reconciliation still happened, and clearing a key because the walk looked down
+    only one branch would fail open.
 
     Args:
         store (BlockStore): Where parent documents are read from.
@@ -215,11 +220,37 @@ def descends_from(store: BlockStore, snapshot: Snapshot, target: OciDigest) -> b
         target (OciDigest): The position being asked about.
 
     Returns:
-        bool | None: ``True`` when found, ``False`` when the walk reached a genesis without
-        finding it, and ``None`` when the chain truncated first -- fail-closed material: an
-        undecidable compromise is not a cleared one.
+        bool | None: ``True`` when the target is reachable through any parent path, ``False``
+        when every path closed at a genesis without finding it, and ``None`` when any named
+        parent could not be read first -- fail-closed material: an undecidable compromise is
+        not a cleared one.
+
+    Raises:
+        SnapshotError: If the ancestry exceeds :data:`MAX_WALK` snapshots, which honestly
+            hash-linked documents cannot produce.
     """
-    positions = walk_first_parents(store, snapshot)
-    if any(position.digest == target for position in positions):
+    if snapshot.digest == target:
         return True
-    return False if positions[-1].role is SnapshotRole.GENESIS else None
+    seen: set[OciDigest] = {snapshot.digest}
+    frontier: list[Snapshot] = [snapshot]
+    undecided = False
+    while frontier:
+        current = frontier.pop()
+        for parent in current.parents:
+            if parent == target:
+                return True
+            if parent in seen:
+                # A diamond: reconciliations legally reconverge, so a revisit is skipped, not
+                # raised -- the digest was already judged once.
+                continue
+            seen.add(parent)
+            if len(seen) > MAX_WALK:
+                raise SnapshotError(f"ancestry exceeds {MAX_WALK} snapshots; refusing to walk further")
+            document = load_snapshot(store, parent)
+            if document is None:
+                # A named parent that cannot be read: the target may hide behind it, so the
+                # answer is undecidable unless some other path still finds it.
+                undecided = True
+                continue
+            frontier.append(document)
+    return None if undecided else False

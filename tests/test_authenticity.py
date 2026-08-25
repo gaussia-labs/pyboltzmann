@@ -33,6 +33,7 @@ from boltzmann.exceptions import (
     CompromisedKeyError,
     QuorumFailureError,
     RetiredKeyError,
+    UnauthorizedKeyError,
     UnsignedBrainError,
 )
 from boltzmann.identity.digest import BlockId, OciDigest
@@ -325,6 +326,141 @@ class TestCompromise:
         # Validity is positional: whatever created_at claims, the chain position rules.
         _, two, head = self.build(store)
         assert Authenticator(store).authenticate(two, current=head.trust_root).state is (AuthorshipState.UNAUTHORIZED)
+
+
+class TestCompromiseAcrossMerges:
+    """Revocation reachability walks every parent: a merged-in compromise still happened.
+
+    Authorization stays first-parent-only, but ``descends_from`` may not look down one branch of
+    a reconciliation and declare a key cleared because the compromise sat on the other.
+    """
+
+    def build(self, store: MemoryBlockStore) -> tuple[Snapshot, Snapshot, Snapshot]:
+        """Genesis -> main; genesis -> side (the stolen-key era); merge(main, side); r2 records
+        the compromise at the side position, reachable only through the second parent."""
+        first = TrustRoot(
+            revision=1,
+            govern_quorum=1,
+            keys=(A.entry(Scope.GOVERN, Scope.COMMIT), C.entry(Scope.COMMIT)),
+        )
+        genesis = keep(store, Snapshot(trust_root=first))
+        endorse(store, genesis, A)
+        main = advance(store, genesis, "mainline work")
+        endorse(store, main, A)
+        side = advance(store, genesis, "stolen key era")
+        endorse(store, side, C)
+        merge = keep(store, main.reconciled(main.modules.values(), [side.digest]))
+        endorse(store, merge, C)
+        recorded = TrustRoot(
+            revision=2,
+            govern_quorum=1,
+            keys=(
+                A.entry(Scope.GOVERN, Scope.COMMIT),
+                C.entry(Scope.COMMIT, compromised_from=side.digest),
+            ),
+        )
+        head = keep(store, merge.with_trust_root(recorded))
+        endorse(store, head, A)
+        return side, merge, head
+
+    def test_a_compromise_behind_the_second_parent_withdraws(self, store: MemoryBlockStore) -> None:
+        from boltzmann.authenticity.chain import descends_from
+
+        side, merge, head = self.build(store)
+        assert descends_from(store, merge, side.digest) is True
+        report = Authenticator(store).authenticate(merge, current=head.trust_root)
+        assert report.state is AuthorshipState.UNAUTHORIZED
+        assert [verdict.key for verdict in report.withdrawn] == [C.public_key.fingerprint]
+        with pytest.raises(CompromisedKeyError):
+            report.require_authorized()
+
+    def test_a_fully_resolved_merge_clears_what_it_does_not_contain(self, store: MemoryBlockStore) -> None:
+        # Precision, not blanket refusal: every branch closed at the genesis, so a position
+        # nowhere in the DAG is a definitive False and honest governors stay admitted.
+        from boltzmann.authenticity.chain import descends_from
+
+        _, merge, _ = self.build(store)
+        assert descends_from(store, merge, OciDigest.of(b"nowhere in this history")) is False
+
+    def test_an_unresolvable_merged_parent_is_undecidable_not_cleared(self, store: MemoryBlockStore) -> None:
+        from boltzmann.authenticity.chain import descends_from
+
+        first = TrustRoot(
+            revision=1,
+            govern_quorum=1,
+            keys=(A.entry(Scope.GOVERN, Scope.COMMIT), C.entry(Scope.COMMIT)),
+        )
+        genesis = keep(store, Snapshot(trust_root=first))
+        main = advance(store, genesis, "mainline work")
+        withheld = OciDigest.of(b"a side history nobody shipped")
+        merge = keep(store, main.reconciled(main.modules.values(), [withheld]))
+        endorse(store, merge, C)
+
+        behind = OciDigest.of(b"the era hidden behind the withheld parent")
+        assert descends_from(store, merge, behind) is None
+        # The withheld position itself is still named by the merge, so it is decidedly reached.
+        assert descends_from(store, merge, withheld) is True
+
+        recorded = TrustRoot(
+            revision=2,
+            govern_quorum=1,
+            keys=(
+                A.entry(Scope.GOVERN, Scope.COMMIT),
+                C.entry(Scope.COMMIT, compromised_from=behind),
+            ),
+        )
+        head = keep(store, merge.with_trust_root(recorded))
+        report = Authenticator(store).authenticate(merge, current=head.trust_root)
+        assert report.state is AuthorshipState.UNAUTHORIZED
+        assert SignatureOutcome.COMPROMISE_UNDECIDABLE in report.outcomes().values(), (
+            "an undecidable compromise is not a cleared one"
+        )
+
+
+class TestDeepTruncation:
+    """A walk that ends at an unresolvable non-genesis position is the self-admission attack
+    one step removed: whoever withheld the parent also withheld the proof that the oldest
+    reachable authority was ever granted."""
+
+    def fabricate(self, store: MemoryBlockStore) -> Snapshot:
+        """P claims trust_root=TR_evil and a first parent X that is deliberately never shipped;
+        the head is an ordinary commit on top, signed by the evil key."""
+        evil = TrustRoot(
+            revision=7,
+            govern_quorum=1,
+            keys=(C.entry(Scope.GOVERN, Scope.COMMIT, since=7),),
+        )
+        withheld = OciDigest.of(b"the history that would show the rotation was never approved")
+        fabricated = keep(store, Snapshot(trust_root=evil, parents=[withheld]))
+        head = advance(store, fabricated, "loot")
+        endorse(store, head, C)
+        return head
+
+    def test_a_withheld_ancestor_blocks_instead_of_authorizing(self, store: MemoryBlockStore) -> None:
+        head = self.fabricate(store)
+        report = Authenticator(store).authenticate(head)
+        # The signature itself is flawless -- what fails is the chain that carries it.
+        assert report.outcomes()[C.public_key.fingerprint] is SignatureOutcome.VALID
+        assert report.has(FindingKind.CHAIN_TRUNCATED)
+        assert report.state is AuthorshipState.UNAUTHORIZED
+        with pytest.raises(UnauthorizedKeyError):
+            report.require_authorized()
+
+    def test_a_pin_matched_above_the_gap_anchors_it(self, store: MemoryBlockStore) -> None:
+        from boltzmann.authenticity.pins import PinSource, write_pin
+
+        head = self.fabricate(store)
+        write_pin(store, head.trust_root.digest, PinSource.OUT_OF_BAND)  # type: ignore[union-attr]
+        report = Authenticator(store).authenticate(head)
+        truncations = [finding for finding in report.findings if finding.kind is FindingKind.CHAIN_TRUNCATED]
+        assert truncations, "the gap is still reported"
+        assert all(not finding.blocking for finding in truncations)
+        assert report.state is AuthorshipState.AUTHORIZED
+
+    def test_a_complete_chain_reports_no_truncation(self, store: MemoryBlockStore, chain: Snapshot) -> None:
+        report = Authenticator(store).authenticate(chain)
+        assert not report.has(FindingKind.CHAIN_TRUNCATED)
+        assert report.state is AuthorshipState.AUTHORIZED
 
 
 class TestRevisionDiscipline:
