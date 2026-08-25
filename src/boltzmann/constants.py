@@ -12,6 +12,17 @@ conceptually.
 PROTOCOL_VERSION = 1
 """Version of the Boltzmann Protocol this SDK implements. Stored in every block envelope."""
 
+WIRE_VERSION = 2
+"""The highest artifact wire capability this client can consume.
+
+Distinct from :data:`PROTOCOL_VERSION`, which names the document and block schema and
+participates in every block identity -- bumping it would change every published ``block_id``
+and invalidate the golden vectors. The wire version only gates transfers: an artifact declares
+the capability it needs on its manifest (version 2 = the snapshot document carries a
+``trust_root``), a client refuses anything above what it implements before moving a single
+blob, and nothing content-addressed moves at all.
+"""
+
 CANDIDATES_SCHEMA = "boltzmann.candidates/v1"
 """Output schema an external LLM must satisfy when proposing blocks (paper Section 8.2)."""
 

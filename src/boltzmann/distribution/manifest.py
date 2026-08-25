@@ -36,7 +36,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
-from boltzmann.constants import PROTOCOL_VERSION
+from boltzmann.constants import PROTOCOL_VERSION, WIRE_VERSION
 from boltzmann.distribution.media_types import (
     ANNOTATION_BLOCK_COUNT,
     ANNOTATION_EMBEDDING_MODEL,
@@ -333,10 +333,15 @@ def build_manifest(
         # check could be disabled by the side that benefits from disabling it.
         annotations={
             **(annotations or {}),
-            ANNOTATION_PROTOCOL_VERSION: str(PROTOCOL_VERSION),
-            # The trust root's digest, so a consumer can compare a pin before transferring
-            # anything. Written after the caller's annotations for the same reason the protocol
-            # version is: the side that benefits from disabling a check must not be able to.
+            # A governed artifact needs a trust-root-aware consumer, so it declares the higher
+            # wire version and a pre-trust-root client refuses it cleanly at resolve time. An
+            # ungoverned one declares the version those clients implement: its bytes are ones
+            # they can read, and interoperability is the point of saying so.
+            ANNOTATION_PROTOCOL_VERSION: str(WIRE_VERSION if snapshot.trust_root is not None else PROTOCOL_VERSION),
+            # The trust root's digest, a diagnostic for browsing. Written after the caller's
+            # annotations for the same reason the protocol version is: the side that benefits
+            # from disabling a check must not be able to. No verifier *accepts* on it -- the pin
+            # gate authenticates the config itself.
             **({ANNOTATION_TRUST_ROOT: str(snapshot.trust_root.digest)} if snapshot.trust_root is not None else {}),
         },
     )
@@ -701,9 +706,20 @@ def parse_manifest(data: bytes) -> BrainManifest:
         raise DistributionError(f"manifest annotations must be an object, got {type(annotations).__name__}")
 
     declared = annotations.get(ANNOTATION_PROTOCOL_VERSION)
-    if declared is not None and declared != str(PROTOCOL_VERSION):
-        raise DistributionError(
-            f"artifact declares protocol version {declared!r}, this client implements {PROTOCOL_VERSION}"
-        )
+    if declared is not None:
+        try:
+            declared_version = int(declared)
+        except (TypeError, ValueError):
+            raise DistributionError(f"artifact declares an unreadable protocol version {declared!r}") from None
+        if declared_version > WIRE_VERSION:
+            raise DistributionError(
+                f"artifact declares protocol version {declared}, this client implements up to "
+                f"{WIRE_VERSION}; it was published by a newer SDK -- upgrade pyboltzmann"
+            )
 
-    return BrainManifest.model_validate(document)
+    try:
+        return BrainManifest.model_validate(document)
+    except ValidationError as error:
+        raise DistributionError(
+            f"not a readable brain manifest: {error}; if the artifact was published by a newer SDK, upgrade pyboltzmann"
+        ) from error
