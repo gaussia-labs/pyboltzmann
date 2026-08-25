@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,7 @@ from boltzmann.authenticity.authenticator import (
     AuthorshipState,
     FindingKind,
 )
-from boltzmann.authenticity.chain import locate, observed_revisions
+from boltzmann.authenticity.chain import SnapshotRole, load_snapshot, locate, observed_revisions, walk_first_parents
 from boltzmann.authenticity.diff import gather_evidence, required_scopes
 from boltzmann.authenticity.governance import RotationPlan, RotationResult
 from boltzmann.authenticity.keys import SshPublicKey
@@ -86,7 +87,6 @@ from boltzmann.distribution.media_types import (
     ANNOTATION_MEMORY_TYPE,
     ANNOTATION_SCHEMA_VERSIONS,
     ANNOTATION_SOURCE_SNAPSHOT,
-    ANNOTATION_TRUST_ROOT,
     ARTIFACT_TYPE,
     CONFIG_MEDIA_TYPE,
     EMPTY_CONFIG_BYTES,
@@ -97,11 +97,13 @@ from boltzmann.distribution.media_types import (
 )
 from boltzmann.distribution.registry import FetchResult, InstallPlan, RegistryClient, RegistryReferrers
 from boltzmann.exceptions import (
+    AuthenticityError,
     BlockError,
     BlockNotFoundError,
     DistributionError,
     DivergenceError,
     GovernanceConflictError,
+    IdentityError,
     InsufficientScopeError,
     NoCommonAncestorError,
     ProtocolError,
@@ -114,6 +116,7 @@ from boltzmann.exceptions import (
     ResolutionRefusedError,
     SnapshotError,
     TrustRootMismatchError,
+    UnauthorizedKeyError,
     UnsignedBrainError,
 )
 from boltzmann.identity.digest import BlockId, Digest, MerkleRoot, OciDigest
@@ -179,6 +182,13 @@ from boltzmann.store.oci_layout import OciLayoutStore
 HEAD_POINTER = "head"
 """Name of the mutable pointer that says which snapshot is current."""
 
+MAX_MERGED_PER_CALL = 4096
+"""Ceiling on signature records merged from one referrers listing.
+
+A listing is unauthenticated remote input: whoever can attach referrers decides its length, so one
+pull's work has to be bounded here rather than by the attacker.
+"""
+
 RECONCILE_POINTER = "reconcile"
 """Name of the pointer holding a reconciliation someone is still resolving.
 
@@ -239,6 +249,33 @@ class Origin(BaseModel):
     tag: str = Field(min_length=1)
     snapshot: OciDigest
     partial: bool = False
+
+
+REMOTES_POINTER = "remotes"
+"""Name of the pointer remembering which remotes were ever seen authentically signed."""
+
+
+class RemoteAuthenticity(BaseModel):
+    """
+    Which remotes this store has seen authentically signed, and at which snapshot first.
+
+    The anti-stripping guard's memory (paper Section 8.10): "previously seen signed" has to
+    survive local commits -- the signatures over the current local head say nothing about a
+    *remote* once the head moves -- and it has to be per-repository, so signing local work
+    never arms the guard against an honestly-unsigned upstream, and a stripper cannot dodge it
+    by publishing under a new tag of the same repository.
+
+    Attributes:
+        boltzmann (int): Protocol version that wrote this pointer.
+        seen_signed (dict[str, OciDigest]): Repository reference to the first snapshot whose
+            authorship verified as authorized from that remote. First sighting is kept, never
+            overwritten: it is evidence.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    boltzmann: int = PROTOCOL_VERSION
+    seen_signed: dict[str, OciDigest] = Field(default_factory=dict)
 
 
 class BrainState(BaseModel):
@@ -449,6 +486,18 @@ class Brain:
     def _read_state(self) -> BrainState | None:
         raw = self.store.read_pointer(HEAD_POINTER)
         return BrainState.model_validate_json(raw) if raw else None
+
+    def _read_remotes(self) -> RemoteAuthenticity:
+        raw = self.store.read_pointer(REMOTES_POINTER)
+        return RemoteAuthenticity.model_validate_json(raw) if raw else RemoteAuthenticity()
+
+    def _record_seen_signed(self, reference: str, snapshot: OciDigest) -> None:
+        """Remember that this repository was seen authentically signed, once, forever."""
+        remotes = self._read_remotes()
+        if reference in remotes.seen_signed:
+            return
+        updated = remotes.model_copy(update={"seen_signed": {**remotes.seen_signed, reference: snapshot}})
+        self.store.write_pointer(REMOTES_POINTER, canonicalize(updated.model_dump(mode="json", exclude_none=True)))
 
     def _load_snapshot(self) -> Snapshot:
         if self._state is None:
@@ -953,8 +1002,9 @@ class Brain:
             SnapshotError: If the bytes are not a canonical snapshot document.
             ResolutionRefusedError: If the document is not a pure revision over a history this
                 brain holds -- content smuggled into a governance act, an unknown parent, a
-                removed or non-advancing trust root, or an admission claim the observable chain
-                refutes. Refusal names what failed; nothing is signed.
+                removed or non-advancing trust root, an admission claim the observable chain
+                refutes, or a parentless genesis this brain does not hold. Refusal names what
+                failed; nothing is signed.
         """
         revision = Snapshot.model_validate_json(document)
         if revision.canonical_bytes() != document:
@@ -992,13 +1042,20 @@ class Brain:
                     f"the document's revision {revision.trust_root.revision} does not follow the "
                     f"revision {parent.trust_root.revision} in force at its parent"
                 )
-            observed = observed_revisions(self.store, revision)
-            for entry in revision.trust_root.keys:
-                if confirm_since(observed, entry) is SinceVerdict.REFUTED:
-                    raise ResolutionRefusedError(
-                        f"key {entry.fingerprint} claims authorization since revision {entry.since}, "
-                        f"which the observable chain refutes; this document lies about its own history"
-                    )
+        elif revision.digest != self._snapshot.digest and revision.digest not in self.reachable_history():
+            raise ResolutionRefusedError(
+                f"the document is a parentless genesis ({revision.digest.short}) this brain does "
+                f"not hold; a genesis asserts authority from nothing, so countersigning one is "
+                f"only offered for a genesis already in this brain's own history -- pull and "
+                f"inspect the brain first, then countersign what you actually hold"
+            )
+        observed = observed_revisions(self.store, revision)
+        for entry in revision.trust_root.keys:
+            if confirm_since(observed, entry) is SinceVerdict.REFUTED:
+                raise ResolutionRefusedError(
+                    f"key {entry.fingerprint} claims authorization since revision {entry.since}, "
+                    f"which the observable chain refutes; this document lies about its own history"
+                )
         signature = sshsig_sign(document, signer)
         record = SignatureRecord(
             snapshot=revision.digest,
@@ -3392,6 +3449,23 @@ class Brain:
         self._write_signature_manifests(manifest, manifest_digest, len(manifest_bytes))
         return manifest
 
+    def _published_record_snapshots(self, published: Snapshot) -> list[OciDigest]:
+        """Snapshots whose signature records travel with a publish of ``published``.
+
+        The records over the head claim the current state; the records over every first-parent
+        REVISION ancestor -- and over a governed genesis -- are what lets a consumer re-run the
+        custody walk, so a legitimately rotated brain does not arrive looking unauthorized.
+        """
+        digests: list[OciDigest] = []
+        for position in walk_first_parents(self.store, published):
+            if (
+                position.digest == published.digest
+                or position.role is SnapshotRole.REVISION
+                or (position.role is SnapshotRole.GENESIS and position.snapshot.trust_root is not None)
+            ):
+                digests.append(position.digest)
+        return digests
+
     def _write_signature_manifests(self, manifest: BrainManifest, digest: OciDigest, size: int) -> None:
         """Mirror every record over the packed snapshot into the layout index as signature manifests.
 
@@ -3400,7 +3474,11 @@ class Brain:
         """
         if not isinstance(self.store, OciLayoutStore):
             return
-        records = for_snapshot(self.store, manifest.config.digest)
+        records = [
+            record
+            for snapshot in self._published_record_snapshots(self._snapshot)
+            for record in for_snapshot(self.store, snapshot)
+        ]
         if not records:
             return
         self.store.put_bytes(EMPTY_CONFIG_BYTES)
@@ -3438,8 +3516,12 @@ class Brain:
             self.store.write_index(index)
 
     async def _push_signatures(self, client: RegistryClient, reference: str, manifest: BrainManifest) -> int:
-        """Publish every record over the pushed snapshot as a referrer of its manifest."""
-        records = for_snapshot(self.store, manifest.config.digest)
+        """Publish the records over the pushed snapshot and its custody walk as referrers."""
+        records = [
+            record
+            for snapshot in self._published_record_snapshots(self._snapshot)
+            for record in for_snapshot(self.store, snapshot)
+        ]
         if not records:
             return 0
         if not isinstance(client, RegistryReferrers):
@@ -3468,6 +3550,32 @@ class Brain:
             )
         return len(records)
 
+    def _acceptable_record_snapshots(self, manifest: BrainManifest) -> set[OciDigest]:
+        """Which snapshots a merged record may cover: the artifact's own custody walk.
+
+        Exactly the set the verifier consults -- the config snapshot, its first-parent
+        ancestry, and (for a subset artifact) the declared source head's ancestry. Never
+        anything the local store merely happens to hold: a hostile listing must not get to
+        attach records to unrelated local snapshots and poison their per-snapshot caps.
+        """
+        allowed: set[OciDigest] = {manifest.config.digest}
+        starts = [manifest.config.digest]
+        declared = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
+        if declared is not None:
+            with suppress(IdentityError):
+                starts.append(OciDigest.parse(declared))
+        for digest in starts:
+            document = load_snapshot(self.store, digest)
+            if document is None:
+                continue
+            allowed.add(digest)
+            try:
+                allowed.update(position.digest for position in walk_first_parents(self.store, document))
+            except SnapshotError:
+                # A manufactured chain (cycle, overlong): keep what resolved before it.
+                continue
+        return allowed
+
     async def _merge_signatures(self, client: RegistryClient, reference: str, manifest: BrainManifest) -> int:
         """Discover the referrers of a manifest and keep their records locally.
 
@@ -3477,8 +3585,26 @@ class Brain:
         """
         if not isinstance(client, RegistryReferrers):
             return 0
+        try:
+            listing = await client.referrers(reference, manifest.digest, artifact_type=SIGNATURE_MEDIA_TYPE)
+        except DistributionError as error:
+            logging.getLogger(__name__).warning(
+                "cannot list the signature referrers of %s: %s; continuing without remote signatures",
+                reference,
+                error,
+            )
+            return 0
+        allowed = self._acceptable_record_snapshots(manifest)
         merged = 0
-        for descriptor in await client.referrers(reference, manifest.digest, artifact_type=SIGNATURE_MEDIA_TYPE):
+        full: set[OciDigest] = set()
+        for descriptor in listing:
+            if merged >= MAX_MERGED_PER_CALL:
+                logging.getLogger(__name__).warning(
+                    "the referrers listing of %s carries more than %d records; the rest are ignored",
+                    reference,
+                    MAX_MERGED_PER_CALL,
+                )
+                break
             try:
                 signature_manifest = await client.pull_referrer(reference, descriptor.digest)
             except DistributionError:
@@ -3495,38 +3621,50 @@ class Brain:
                 record = SignatureRecord.model_validate_json(self.store.get_bytes(record_layer.digest))
             except (ValueError, BlockError):
                 continue
-            if record.snapshot != manifest.config.digest:
+            if record.snapshot not in allowed:
                 continue
-            store_record(self.store, record)
+            if record.snapshot in full:
+                continue
+            try:
+                store_record(self.store, record)
+            except AuthenticityError as error:
+                # Typically the per-snapshot record cap: locally-bounded state must win over an
+                # unbounded listing, so the excess is dropped, never the install.
+                full.add(record.snapshot)
+                logging.getLogger(__name__).warning(
+                    "not keeping further records over snapshot %s: %s", record.snapshot.short, error
+                )
+                continue
             merged += 1
         return merged
 
     async def _require_pin_holds(self, client: RegistryClient, reference: str, tag: str) -> None:
         """Judge a remote's trust root against the pin before transferring any module layer.
 
-        The cheap half is the manifest annotation: equal to the pin means nothing changed, and
-        nothing else moves. When it differs -- or the artifact predates the annotation -- the
-        config, the history, and the signatures are fetched (all small) and the full custody walk
-        runs: a change that followed the quorum rule is the mechanism working and is admitted; one
-        that did not is refused **before** any module layer is paid for, which is the entire
-        purpose of declaring the digest on the manifest (paper Section 8.8).
+        The manifest's trust-root annotation is diagnostic only. It is written by whoever
+        controls the registry, so equality with the pin proves nothing -- a forged annotation
+        over an attacker config was precisely the bypass -- and inequality proves nothing
+        either, because a quorum-approved rotation legitimately changes the digest. So the
+        config, the history, and the signatures are always fetched (all small) and the full
+        custody walk runs: a change of authority that followed the quorum rule is the mechanism
+        working and is admitted; one that did not -- or a chain whose origin was withheld -- is
+        refused **before** any module layer is paid for (paper Section 8.8).
         """
         pin = read_pin(self.store)
         if pin is None:
             return
         manifest = await client.resolve(reference, tag)
-        if manifest.annotations.get(ANNOTATION_TRUST_ROOT) == str(pin.trust_root):
-            return
         if not self.store.is_resolvable(manifest.config.digest):
             await client.pull_blob(reference, manifest.config.digest, self.store)
-        remote = Snapshot.model_validate_json(self.store.get_bytes(manifest.config.digest))
+        remote = self._read_remote_snapshot(manifest.config.digest)
         history = manifest.history
         if history is not None:
             if not self.store.is_resolvable(history.digest):
                 await client.pull_blob(reference, history.digest, self.store)
             unpack_history(self.store.get_bytes(history.digest), self.store)
         await self._merge_signatures(client, reference, manifest)
-        report = Authenticator(self.store).authenticate(remote, current=remote.trust_root)
+        subject = self._resolve_source_anchor(remote, manifest) or remote
+        report = Authenticator(self.store).authenticate(subject, current=subject.trust_root)
         if report.has(FindingKind.TRUST_ROOT_MISMATCH):
             raise TrustRootMismatchError(
                 f"{reference}:{tag} carries a trust root that neither matches the pinned "
@@ -3534,6 +3672,38 @@ class Brain:
                 f"before transferring any module layer. If this change of authority is expected, "
                 f"re-pin explicitly and pull again"
             )
+        for kind in (
+            FindingKind.QUORUM_FAILURE,
+            FindingKind.REVISION_CHANGED_CONTENT,
+            FindingKind.REVISION_REGRESSED,
+        ):
+            if report.has(kind):
+                raise QuorumFailureError(
+                    f"{reference}:{tag} reaches the pinned trust root only through an unapproved "
+                    f"revision -- {report.detail(kind)} -- refused before transferring any module layer"
+                )
+        if any(finding.kind is FindingKind.CHAIN_TRUNCATED and finding.blocking for finding in report.findings):
+            raise UnauthorizedKeyError(
+                f"{reference}:{tag} cannot prove where its authority came from -- "
+                f"{report.detail(FindingKind.CHAIN_TRUNCATED)} -- refused before transferring "
+                f"any module layer"
+            )
+
+    def _read_remote_snapshot(self, digest: OciDigest) -> Snapshot:
+        """Parse a registry-supplied snapshot document, wrapping the failure for the wire.
+
+        A config blob that does not fit this client's model is a compatibility fact, not a
+        programming error: it reaches here from a manifest whose version gate passed, so the
+        likeliest cause is an artifact from a newer SDK, and the refusal should say so instead
+        of leaking a validation traceback.
+        """
+        try:
+            return Snapshot.model_validate_json(self.store.get_bytes(digest))
+        except ValueError as error:
+            raise DistributionError(
+                f"the artifact's snapshot document {digest.short} cannot be read by this client: "
+                f"{error}; if the artifact was published by a newer SDK, upgrade pyboltzmann"
+            ) from error
 
     def _modules_to_publish(self, modules: Iterable[MemoryType] | None) -> list[MemoryType]:
         """Which modules an artifact will carry, refusing a subset that would strand a citation."""
@@ -3812,7 +3982,9 @@ class Brain:
         await self._require_pin_holds(client, reference, tag)
         manifest, remote, references, _ = await self._retrieve(client, reference, tag, modules)
         await self._merge_signatures(client, reference, manifest)
-        self._apply_verification_policy(remote, verification)
+        self._apply_verification_policy(
+            remote, verification, reference=reference, anchor=self._resolve_source_anchor(remote, manifest)
+        )
         wanted = [reference_.memory_type for reference_ in references]
 
         for memory_type in wanted:
@@ -3866,7 +4038,59 @@ class Brain:
         self.rebuild_indices(wanted)
         return advanced
 
-    def _apply_verification_policy(self, remote: Snapshot, verification: VerificationPolicy | None) -> None:
+    def _resolve_source_anchor(self, remote: Snapshot, manifest: BrainManifest) -> Snapshot | None:
+        """The signed source a subset artifact is a projection of, validated fail-closed.
+
+        A projection is parentless and nobody signs it; what its module roots commit to is
+        byte-identical content the source head attests. The annotation names the source, the
+        history layer carries its document, and this check makes the claim content-verified:
+        every module the projection carries must match the source's exactly, along with the
+        trust root. An honest publisher can never produce a mismatch, so one is refused
+        outright rather than degraded.
+
+        Returns:
+            Snapshot | None: The anchor to judge authorship against, or ``None`` when the
+            artifact is not a projection (or predates the annotation/history that would prove
+            it is one -- those degrade to being judged as what they carry).
+
+        Raises:
+            DistributionError: If the named source is held but the artifact's content is not a
+                subset of it.
+        """
+        declared = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
+        if declared is None:
+            return None
+        try:
+            source_digest = OciDigest.parse(declared)
+        except IdentityError:
+            return None
+        if source_digest == remote.digest:
+            return None
+        anchor = load_snapshot(self.store, source_digest)
+        if anchor is None:
+            return None
+        mismatched = (
+            any(anchor.modules.get(kind) != reference for kind, reference in remote.modules.items())
+            or remote.trust_root != anchor.trust_root
+            or remote.boltzmann != anchor.boltzmann
+            or remote.created_at != anchor.created_at
+            or remote.labels != anchor.labels
+        )
+        if mismatched:
+            raise DistributionError(
+                f"the artifact claims to be a projection of {source_digest.short} but its content is "
+                f"not a subset of it; refusing an anchor that lies"
+            )
+        return anchor
+
+    def _apply_verification_policy(
+        self,
+        remote: Snapshot,
+        verification: VerificationPolicy | None,
+        *,
+        reference: str,
+        anchor: Snapshot | None = None,
+    ) -> None:
         """The install-time gate the verification policy configures (paper Section 8.10).
 
         Three decisions, none of them about reporting: whether an unsigned brain may be
@@ -3876,21 +4100,27 @@ class Brain:
         implementation refuses unless the policy explicitly permits it (paper Section 12.6).
         Anything else unauthorized installs with a warning: what is not configurable is whether
         the result is reported, and the report is a call away either way.
+
+        A subset artifact is judged through its ``anchor`` -- the signed source it is a
+        validated projection of -- because the projection itself is parentless and unsigned by
+        design; its module roots are commitments the source attests, and the layers were
+        already verified against those roots.
         """
         policy = verification if verification is not None else VerificationPolicy()
-        records = for_snapshot(self.store, remote.digest)
+        judged = anchor if anchor is not None else remote
+        records = for_snapshot(self.store, judged.digest)
         if not records:
-            previously_signed = bool(self.signatures())
+            previously = self._read_remotes().seen_signed.get(reference)
             refused = policy.unsigned is UnsignedPolicy.REFUSE or (
-                previously_signed and policy.unsigned is not UnsignedPolicy.PERMIT
+                previously is not None and policy.unsigned is not UnsignedPolicy.PERMIT
             )
             if refused:
                 raise UnsignedBrainError(
                     "the remote head carries no signature"
                     + (
-                        " and this brain was previously seen signed, so the absence is evidence of "
-                        "stripping rather than of never having signed"
-                        if previously_signed
+                        f" and {reference} was previously seen signed (at {previously.short}), so the "
+                        f"absence is evidence of stripping rather than of never having signed"
+                        if previously is not None
                         else ", and the policy refuses unsigned brains"
                     )
                     + "; pass a VerificationPolicy that permits unsigned to install it anyway"
@@ -3900,14 +4130,16 @@ class Brain:
                     "installing %s unsigned: integrity verifies, authorship is unclaimed", remote.digest.short
                 )
             return
-        report = Authenticator(self.store, policy=policy).authenticate(remote, current=remote.trust_root)
+        report = Authenticator(self.store, policy=policy).authenticate(judged, current=judged.trust_root)
         if report.is_proposal and not policy.allow_propose_head:
             raise InsufficientScopeError(
-                f"the remote head {remote.digest.short} is signed only under propose: attributable, "
+                f"the remote head {judged.digest.short} is signed only under propose: attributable, "
                 f"verifiable, and explicitly not the published state. Treating it as current requires a "
                 f"VerificationPolicy with allow_propose_head"
             )
-        if report.state is not AuthorshipState.AUTHORIZED:
+        if report.state is AuthorshipState.AUTHORIZED:
+            self._record_seen_signed(reference, judged.digest)
+        else:
             logging.getLogger(__name__).warning(
                 "installing %s with authorship %s: %s",
                 remote.digest.short,
@@ -3945,7 +4177,7 @@ class Brain:
 
         if not self.store.is_resolvable(manifest.config.digest):
             await client.pull_blob(reference, manifest.config.digest, self.store)
-        remote = Snapshot.model_validate_json(self.store.get_bytes(manifest.config.digest))
+        remote = self._read_remote_snapshot(manifest.config.digest)
 
         # Before the modules, because it is what makes the retrieved snapshot's parents resolvable, and a
         # caller that fetched a history in order to reconcile against it needs that whether or not the
