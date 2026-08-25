@@ -164,6 +164,29 @@ class TestParseManifest:
         with pytest.raises(DistributionError, match="declares protocol version"):
             parse_manifest(json.dumps(document).encode())
 
+    @pytest.mark.parametrize("declared", ["1", "2"])
+    def test_every_wire_version_this_client_implements_is_accepted(self, declared: str) -> None:
+        _, manifest = build(MemoryType.SEMANTIC)
+        document = json.loads(manifest.to_bytes())
+        document["annotations"][ANNOTATION_PROTOCOL_VERSION] = declared
+        assert parse_manifest(json.dumps(document).encode()).digest is not None
+
+    def test_an_unreadable_protocol_version_is_refused(self) -> None:
+        _, manifest = build(MemoryType.SEMANTIC)
+        document = json.loads(manifest.to_bytes())
+        document["annotations"][ANNOTATION_PROTOCOL_VERSION] = "banana"
+        with pytest.raises(DistributionError, match="unreadable protocol version"):
+            parse_manifest(json.dumps(document).encode())
+
+    def test_an_unreadable_manifest_names_the_upgrade_path(self) -> None:
+        """A manifest that passes the gate but does not fit this client's model is most likely
+        from a newer SDK, and the refusal should say what to do about it."""
+        _, manifest = build(MemoryType.SEMANTIC)
+        document = json.loads(manifest.to_bytes())
+        document["config"]["futureField"] = {"from": "a newer SDK"}
+        with pytest.raises(DistributionError, match="upgrade pyboltzmann"):
+            parse_manifest(json.dumps(document).encode())
+
     @pytest.mark.parametrize(
         ("data", "match"),
         [(b"not json", "not valid JSON"), (b"[]", "must be an object")],

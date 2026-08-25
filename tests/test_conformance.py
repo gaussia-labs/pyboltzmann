@@ -13,6 +13,7 @@ from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind
 from boltzmann.brain import Brain
 from boltzmann.conformance import (
+    AuthenticityConformance,
     BlockStoreConformance,
     BrainReaderConformance,
     CompositionConformance,
@@ -97,3 +98,21 @@ class TestBrainAsReader(BrainReaderConformance):
 
 class TestReconciliation(ReconciliationConformance):
     """Set arithmetic over immutable blocks, and the lineage that records it."""
+
+
+class TestMemoryStoreAuthenticity(AuthenticityConformance):
+    """The shipped in-memory store reaches every published verdict."""
+
+    def make_store(self) -> MemoryBlockStore:
+        return MemoryBlockStore()
+
+
+class TestOciLayoutStoreAuthenticity(AuthenticityConformance):
+    """And so does the layout store, which is what a real brain verifies over."""
+
+    @pytest.fixture(autouse=True)
+    def _workspace(self, tmp_path: Path) -> None:
+        self._path = tmp_path
+
+    def make_store(self) -> OciLayoutStore:
+        return OciLayoutStore(self._path / "layout")

@@ -15,14 +15,30 @@ internal Merkle root, and a config blob that is the snapshot document.
 
 from __future__ import annotations
 
+import logging
 import tempfile
 from pathlib import Path
 from typing import Any
 
-from boltzmann.distribution.manifest import BrainManifest, Descriptor, parse_manifest
-from boltzmann.distribution.media_types import MANIFEST_MEDIA_TYPE
+from pydantic import ValidationError
+
+from boltzmann.distribution.manifest import (
+    BrainManifest,
+    Descriptor,
+    SignatureManifest,
+    parse_manifest,
+    parse_signature_manifest,
+)
+from boltzmann.distribution.media_types import (
+    EMPTY_CONFIG_BYTES,
+    IMAGE_INDEX_MEDIA_TYPE,
+    MANIFEST_MEDIA_TYPE,
+    REFERRERS_TAG_PREFIX,
+    SIGNATURE_MEDIA_TYPE,
+)
 from boltzmann.exceptions import DistributionError, ReferenceNotFoundError
 from boltzmann.identity.digest import OciDigest
+from boltzmann.identity.serialization import canonicalize
 from boltzmann.store.base import BlockStore
 from boltzmann.store.oci_layout import OciLayoutStore
 
@@ -232,7 +248,7 @@ class OrasRegistryClient:
         container = self.registry.get_container(f"{reference}:{tag}")
 
         for descriptor in [manifest.config, *manifest.layers]:
-            layer = descriptor.model_dump(mode="json", by_alias=True, exclude_defaults=False)
+            layer = descriptor.model_dump(mode="json", by_alias=True, exclude_defaults=False, exclude_none=True)
             if not descriptor.annotations:
                 layer.pop("annotations", None)
             if self.registry.blob_exists(layer, container):
@@ -302,6 +318,227 @@ class OrasRegistryClient:
                 f"rewrote the manifest, so the artifact has two names and neither side can pin it"
             )
         return ours
+
+    async def push_referrer(self, reference: str, manifest: SignatureManifest, store: BlockStore) -> OciDigest:
+        """
+        Publish a signature manifest as a referrer of an artifact already pushed.
+
+        The record blob and the empty config are uploaded through the ordinary blob path, then
+        the manifest is PUT at its own digest -- never at a tag. A registry that indexed the
+        ``subject`` answers with an ``OCI-Subject`` header; one that did not gets the fallback:
+        the ``sha256-<hex>`` tag is read, the referrer added, and the index written back, which
+        is the scheme the Referrers API specifies for registries that predate it.
+
+        Args:
+            reference (str): Repository reference.
+            manifest (SignatureManifest): What to publish.
+            store (BlockStore): Where the record blob is read from.
+
+        Returns:
+            OciDigest: Digest of the published signature manifest.
+
+        Raises:
+            DistributionError: If an upload fails.
+        """
+        container = self.registry.get_container(f"{reference}:latest")
+        for descriptor, payload in (
+            (manifest.config, EMPTY_CONFIG_BYTES),
+            (manifest.record, store.get_bytes(manifest.record.digest)),
+        ):
+            layer = descriptor.model_dump(mode="json", by_alias=True, exclude_defaults=False, exclude_none=True)
+            layer.pop("annotations", None)
+            if self.registry.blob_exists(layer, container):
+                continue
+            self._authorize_write(reference)
+            with _StagedFile(payload) as path:
+                response = self.registry.upload_blob(str(path), container, layer)
+            if response.status_code not in OK_STATUSES:
+                raise DistributionError(
+                    f"uploading signature blob {descriptor.digest.short} to {reference} failed with "
+                    f"{response.status_code}"
+                )
+
+        payload = manifest.to_bytes()
+        digest = OciDigest.of(payload)
+        self._authorize_write(reference)
+        response = self.registry.do_request(
+            self._manifest_url(reference, str(digest)),
+            "PUT",
+            headers={"Content-Type": MANIFEST_MEDIA_TYPE},
+            data=payload,
+        )
+        if response.status_code not in OK_STATUSES:
+            raise DistributionError(
+                f"publishing a signature referrer to {reference} failed with {response.status_code} "
+                f"{response.reason} -- {response.text[:200]}"
+            )
+        if response.headers.get("OCI-Subject") is None:
+            # The registry did not index the subject: it predates the Referrers API, so the
+            # fallback tag carries the index instead.
+            self._append_to_fallback(reference, manifest, digest, len(payload))
+        return digest
+
+    async def referrers(self, reference: str, subject: OciDigest, artifact_type: str | None = None) -> list[Descriptor]:
+        """
+        Discover referrers through the Referrers API, falling back to the tag scheme.
+
+        Args:
+            reference (str): Repository reference.
+            subject (OciDigest): The referred manifest's digest.
+            artifact_type (str | None): Narrow to one artifact type.
+
+        Returns:
+            list[Descriptor]: One descriptor per referrer, possibly empty.
+        """
+        host, _, repository = reference.partition("/")
+        url = f"{self.registry.prefix}://{host}/v2/{repository}/referrers/{subject}"
+        if artifact_type is not None:
+            url += f"?artifactType={artifact_type}"
+        try:
+            response = self.registry.do_request(url, "GET", headers={"Accept": IMAGE_INDEX_MEDIA_TYPE})
+        except Exception as error:
+            raise DistributionError(f"cannot query referrers of {subject.short} at {reference}: {error}") from error
+        if response.status_code == HTTP_NOT_FOUND:
+            return self._fallback_referrers(reference, subject, artifact_type)
+        if response.status_code not in OK_STATUSES:
+            raise DistributionError(
+                f"querying referrers of {subject.short} at {reference} failed with {response.status_code}"
+            )
+        try:
+            listing = response.json()
+        except ValueError as error:
+            raise DistributionError(
+                f"the referrers listing for {subject.short} at {reference} is not JSON: {error}"
+            ) from error
+        return self._parse_referrer_entries(listing, artifact_type, subject)
+
+    @staticmethod
+    def _parse_referrer_entries(listing: object, artifact_type: str | None, subject: OciDigest) -> list[Descriptor]:
+        """Read a referrers listing tolerantly: filter first, parse second, skip what fails.
+
+        A listing is shared space -- other tools attach their own referrers, whose descriptors
+        legally carry fields this model does not (``platform``, ``urls``, ``data``) -- so an
+        entry is only parsed once it claims the artifact type asked for, and one unreadable
+        entry never hides the others. The API's own filter is advisory: a registry that ignored
+        it sets no annotation, and the client filters regardless, as the spec instructs.
+        """
+        entries = listing.get("manifests", []) if isinstance(listing, dict) else None
+        if not isinstance(entries, list):
+            logging.getLogger(__name__).warning(
+                "the referrers listing for %s does not carry a manifests array; treating it as empty",
+                subject.short,
+            )
+            return []
+        found: list[Descriptor] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if artifact_type is not None and entry.get("artifactType") != artifact_type:
+                continue
+            try:
+                found.append(Descriptor.model_validate(entry))
+            except ValidationError:
+                logging.getLogger(__name__).warning("skipping an unreadable referrer of %s", subject.short)
+        return found
+
+    async def pull_referrer(self, reference: str, digest: OciDigest) -> SignatureManifest:
+        """
+        Fetch one signature manifest by digest.
+
+        Args:
+            reference (str): Repository reference.
+            digest (OciDigest): The signature manifest's digest.
+
+        Returns:
+            SignatureManifest: The parsed manifest.
+
+        Raises:
+            DistributionError: If the fetch fails or what arrives is not a signature manifest.
+        """
+        try:
+            response = self.registry.do_request(
+                self._manifest_url(reference, str(digest)),
+                "GET",
+                headers={"Accept": MANIFEST_MEDIA_TYPE},
+            )
+        except Exception as error:
+            raise DistributionError(f"cannot fetch signature manifest {digest.short}: {error}") from error
+        if response.status_code not in OK_STATUSES:
+            raise DistributionError(f"fetching signature manifest {digest.short} failed with {response.status_code}")
+        return parse_signature_manifest(response.content)
+
+    def _manifest_url(self, reference: str, name: str) -> str:
+        """The manifests endpoint for a tag or a digest, built without a Container's tag parsing."""
+        host, _, repository = reference.partition("/")
+        return f"{self.registry.prefix}://{host}/v2/{repository}/manifests/{name}"
+
+    def _fallback_tag(self, subject: OciDigest) -> str:
+        return f"{REFERRERS_TAG_PREFIX}{subject.hex}"
+
+    def _fallback_referrers(self, reference: str, subject: OciDigest, artifact_type: str | None) -> list[Descriptor]:
+        """Read the ``sha256-<hex>`` index a pre-Referrers registry holds instead."""
+        return self._parse_referrer_entries(
+            {"manifests": self._fallback_raw_entries(reference, subject)}, artifact_type, subject
+        )
+
+    def _fallback_raw_entries(self, reference: str, subject: OciDigest) -> list[dict[str, Any]]:
+        """The fallback index's entries as the registry holds them, so a rewrite drops nothing."""
+        response = self._request_manifest(reference, self._fallback_tag(subject))
+        if response.status_code == HTTP_NOT_FOUND:
+            return []
+        if response.status_code not in OK_STATUSES:
+            raise DistributionError(
+                f"reading the referrers fallback tag for {subject.short} failed with {response.status_code}"
+            )
+        try:
+            listing = response.json()
+        except ValueError as error:
+            raise DistributionError(
+                f"the referrers fallback index for {subject.short} at {reference} is not JSON: {error}"
+            ) from error
+        entries = listing.get("manifests", []) if isinstance(listing, dict) else None
+        if not isinstance(entries, list):
+            return []
+        return [entry for entry in entries if isinstance(entry, dict)]
+
+    def _append_to_fallback(self, reference: str, manifest: SignatureManifest, digest: OciDigest, size: int) -> None:
+        """Read-modify-write the fallback index so pre-Referrers registries still list signatures.
+
+        The existing entries are carried as raw documents, not re-parsed descriptors: the tag is
+        shared space, and rewriting a foreign entry through this client's model would silently
+        drop the fields it does not know.
+        """
+        existing = self._fallback_raw_entries(reference, manifest.subject.digest)
+        if any(entry.get("digest") == str(digest) for entry in existing):
+            return
+        entries = [
+            *existing,
+            {
+                "mediaType": MANIFEST_MEDIA_TYPE,
+                "artifactType": SIGNATURE_MEDIA_TYPE,
+                "digest": str(digest),
+                "size": size,
+                "annotations": dict(manifest.annotations),
+            },
+        ]
+        payload = canonicalize(
+            {
+                "schemaVersion": 2,
+                "mediaType": IMAGE_INDEX_MEDIA_TYPE,
+                "manifests": entries,
+            }
+        )
+        self._authorize_write(reference)
+        response = self.registry.do_request(
+            self._manifest_url(reference, self._fallback_tag(manifest.subject.digest)),
+            "PUT",
+            headers={"Content-Type": IMAGE_INDEX_MEDIA_TYPE},
+            data=payload,
+        )
+        if response.status_code not in OK_STATUSES:
+            raise DistributionError(
+                f"writing the referrers fallback tag at {reference} failed with {response.status_code}"
+            )
 
     def _as_file(self, descriptor: Descriptor, store: BlockStore) -> Any:
         """ORAS uploads a path. For a layout store that path already exists; otherwise, stage one."""

@@ -42,6 +42,7 @@
               "guides/query",
               "guides/retention",
               "guides/distribution",
+              "guides/authenticity",
               "guides/reconciliation",
               "guides/conformance"
             ]

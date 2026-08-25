@@ -14,6 +14,11 @@ whole file must be downloaded (paper Section 7.2).
 from __future__ import annotations
 
 from boltzmann.blocks.memory_type import MemoryType
+from boltzmann.constants import (  # noqa: F401 - re-exported: this is where transport callers look
+    EMPTY_CONFIG_BYTES,
+    EMPTY_CONFIG_DIGEST,
+    EMPTY_CONFIG_MEDIA_TYPE,
+)
 
 ARTIFACT_TYPE = "application/vnd.gaussia.boltzmann.brain.v1+json"
 """``artifactType`` of a published brain manifest."""
@@ -145,3 +150,43 @@ this a push of a projection back to the same tag would look like a divergence wh
 
 ANNOTATION_INDEX_KIND = "ai.gaussia.boltzmann.index-kind"
 """Which kind of index a travelling index layer carries, so a consumer knows what it received."""
+
+
+SIGNATURE_MEDIA_TYPE = "application/vnd.gaussia.boltzmann.signature.v1+json"
+"""Media type of a signature record blob, and the ``artifactType`` of the manifest that carries it.
+
+A signature is never a layer of the brain manifest: adding a countersignature would change the
+manifest, and therefore the brain's digest, so a brain would change identity because someone
+agreed with it. It is the single layer of its **own** manifest, whose ``subject`` names the brain
+-- the OCI Referrers arrangement, which is how signature attestations already accumulate around
+artifacts without touching them (paper Section 8.8). Do not "fix" this back into a layer.
+"""
+
+# The OCI empty-blob literals live in :mod:`boltzmann.constants` -- the signature record store
+# also needs them, and the kernel must not depend on this layer -- and are re-exported here,
+# which is where a distribution caller expects to find them.
+
+ANNOTATION_TRUST_ROOT = "ai.gaussia.boltzmann.trust-root"
+"""Digest of the trust root carried inside the config blob.
+
+The information was always in the artifact -- reachable only by fetching the config -- and
+declaring it on the manifest is what lets a consumer compare it against a pin *before*
+transferring anything (paper Section 8.8), exactly as ANNOTATION_SCHEMA_VERSIONS lets a client
+refuse a brain it cannot read before it moves a byte.
+"""
+
+ANNOTATION_SIGNATURE_KEY = "ai.gaussia.boltzmann.signature-key"
+"""Fingerprint of the key behind a signature manifest, so registry tooling can list signers
+without fetching a blob. An index for humans and dashboards; verification never reads it."""
+
+ANNOTATION_SIGNATURE_SNAPSHOT = "ai.gaussia.boltzmann.signature-snapshot"
+"""The snapshot digest a signature manifest's record covers, for the same browsing purpose."""
+
+REFERRERS_TAG_PREFIX = "sha256-"
+"""Tag scheme of the referrers fallback: an index at ``sha256-<hex>`` lists the referrers of the
+manifest with that digest, for registries that predate the Referrers API. Registry support for
+the API has been uneven, and a signature that cannot be published is a feature that does not
+exist -- so the fallback is implemented, not merely tolerated."""
+
+IMAGE_INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json"
+"""Media type of an OCI image index, which is what the referrers API and its fallback both return."""

@@ -32,6 +32,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from boltzmann.authenticity.authenticator import Authorship
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.exceptions import MembershipError
 from boltzmann.identity.digest import BlockId, MerkleRoot
@@ -98,6 +99,12 @@ class EvidenceBundle(BaseModel):
         verified_against (dict[MemoryType, MerkleRoot]): The module roots membership was
             checked against, so the claim can be re-checked independently.
         truncated (bool): Whether matches were dropped to respect the result limit.
+        authorship (Authorship | None): Who assembled the brain this evidence came from, and
+            whether that key was authorized -- the second of the two verifications, reported
+            separately from ``verified``, which reports the first (paper Section 9.3). Never
+            folded together: a bundle that collapses them cannot express "intact, and signed by
+            an authorized key" as distinct from "intact, provenance unknown". ``None`` only when
+            the producer predates authenticity; a conforming implementation populates it.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -105,6 +112,7 @@ class EvidenceBundle(BaseModel):
     matches: list[Match] = Field(default_factory=list)
     verified_against: dict[MemoryType, MerkleRoot] = Field(default_factory=dict)
     truncated: bool = False
+    authorship: Authorship | None = None
 
     def __len__(self) -> int:
         return len(self.matches)

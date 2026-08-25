@@ -67,6 +67,20 @@ conformance = [
     "pytest>=8.0.0",
 ]
 
+# Checking *who* assembled a brain, over SSHSIG signatures (paper Section 8). An extra rather
+# than a dependency, because the protocol makes integrity unconditional and authenticity a
+# separately claimable role: a consumer offline, with no configuration and no trust in anyone,
+# must still be able to recompute the whole hash structure, and a compiled cryptographic
+# library on the install path would make that conditional on a wheel existing for their
+# platform. The split is possible because the format is mostly framing: the SSH wire codec,
+# the armor, the SHA-256 fingerprint, the record schema, and the fingerprint-versus-embedded-key
+# check the paper requires are all standard library. The extra buys exactly one operation --
+# the Ed25519 verify -- and nothing else. The floor is a support floor, not a feature floor:
+# every primitive used here predates cryptography 3.0.
+authenticity = [
+    "cryptography>=42.0.0",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",

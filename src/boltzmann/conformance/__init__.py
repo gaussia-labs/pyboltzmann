@@ -21,6 +21,7 @@ from boltzmann.conformance import golden
 # ``test_golden_vectors.py`` pin.
 _PYTEST_BACKED = frozenset(
     {
+        "AuthenticityConformance",
         "BlockStoreConformance",
         "BrainReaderConformance",
         "CompositionConformance",
@@ -56,6 +57,7 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "AuthenticityConformance",
     "BlockStoreConformance",
     "BrainReaderConformance",
     "CompositionConformance",

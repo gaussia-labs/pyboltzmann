@@ -198,3 +198,166 @@ class ResolutionRefusedError(ReconciliationError):
     is absent from the composition cannot be audited against its source, and nothing downstream would notice
     -- so admitting one is refused, and the refusal names the operation that fixes the cause instead.
     """
+
+
+class GovernanceConflictError(ReconciliationError):
+    """Exception raised when the histories being reconciled carry different trust roots.
+
+    The one conflict reconciliation must refuse outright rather than surface as a candidate:
+    unioning two key lists grants the union of both sides' permissions, which defeats the quorum
+    rule (paper Section 8.5). The reconciliation is refused and the change of authority is
+    resolved as an explicit governance act -- a trust-root revision -- never as a merge.
+    """
+
+
+# --- Authenticity ---------------------------------------------------------------
+
+
+class AuthenticityError(ProtocolError):
+    """Base exception for authorship and trust (paper Section 8).
+
+    Deliberately separate from every integrity failure: integrity is recomputed from bytes and
+    needs no configuration, while authenticity is judged against a trust root. A caller that
+    cannot tell the two apart reports "corrupt" where it means "unauthorized", and the paper
+    forbids collapsing them into one verdict.
+    """
+
+
+class SignatureFormatError(AuthenticityError):
+    """Exception raised when an armored signature, an SSHSIG blob, or SSH wire framing cannot be read.
+
+    Distinct from :class:`SignatureInvalidError` because the two call for opposite responses: a
+    malformed record is a parse failure its producer can fix, while an invalid signature is a
+    claim that did not hold. Reporting a truncated blob as a forgery accuses the wrong party.
+    """
+
+
+class SignatureInvalidError(AuthenticityError):
+    """Exception raised when a signature does not verify over the bytes it claims to cover.
+
+    The one authenticity failure that means forgery or corruption: the mathematics failed. Every
+    sibling here describes a signature that is real but inapplicable -- wrong namespace, wrong
+    key, wrong position -- and folding them into this class would turn routine administrative
+    facts into accusations.
+    """
+
+
+class NamespaceMismatchError(AuthenticityError):
+    """Exception raised when a signature was made under a namespace other than the protocol's.
+
+    The namespace is what stops cross-protocol replay: a signature a contributor produced for a
+    Git commit must not be presentable as a Boltzmann one (paper Section 8.3). Distinct from
+    :class:`SignatureInvalidError` because this signature is genuine -- it was simply made for
+    something else, and telling a contributor their key is broken when they signed a Git commit
+    is a false diagnosis.
+    """
+
+
+class KeyMismatchError(AuthenticityError):
+    """Exception raised when a record's named fingerprint and its embedded public key disagree.
+
+    SSHSIG carries the public key inside the signature blob, so the record's ``key`` field is an
+    index rather than an authority, and a record whose two identities disagree must be rejected
+    (paper Section 8.3). Distinct because it is the one rejection that needs no cryptography at
+    all: it names a record that is internally inconsistent, not one that is merely unauthorized,
+    and it must therefore keep working on an install without the ``[authenticity]`` extra.
+    """
+
+
+class UnsupportedKeyTypeError(AuthenticityError):
+    """Exception raised when a key or signature uses an algorithm this client does not implement.
+
+    A well-formed signature this client cannot check is not an invalid one: the brain may be
+    perfectly signed and this SDK simply too narrow. Reporting it as
+    :class:`SignatureInvalidError` would reject a legitimately signed brain as forged, which is
+    a worse failure than naming the limit.
+    """
+
+
+class UnsignedBrainError(AuthenticityError):
+    """Exception raised when a signature was required and none is present.
+
+    Distinct because absence and failure demand different responses: an unsigned brain is the
+    zero-configuration case the protocol explicitly permits (paper Section 8.1), and whether it
+    is acceptable is the verification policy's decision -- not a fact about any signature.
+    """
+
+
+class UnauthorizedKeyError(AuthenticityError):
+    """Exception raised when the signing key is absent from the trust root in force at a position.
+
+    The signature is genuine; the authority is not. This is the failure that defeats the
+    self-admission attack (paper Section 8.9, Case 2): an attacker can write any key list they
+    like, but the trust root in force at their snapshot is the one its parent names, and their
+    key is not in it.
+    """
+
+
+class InsufficientScopeError(AuthenticityError):
+    """Exception raised when a key is authorized, but not for the change its snapshot made.
+
+    The required scope set is computed from the snapshot's difference against its first parent,
+    never taken from what the signature claims (paper Section 8.5). Distinct from
+    :class:`UnauthorizedKeyError` because the remedies differ: an unlisted key needs admission,
+    a listed one needs a scope grant -- and the second is a far smaller governance act.
+    """
+
+
+class RetiredKeyError(AuthenticityError):
+    """Exception raised when a key was authorized once and is not at this position.
+
+    Signatures the key made at earlier positions remain valid: retirement can never invalidate a
+    signature that was valid before it, which is what makes an ordinary departure harmless
+    (paper Section 8.6). A caller that cannot tell this from :class:`UnauthorizedKeyError` will
+    invalidate stretches of history for an administrative reason.
+    """
+
+
+class CompromisedKeyError(AuthenticityError):
+    """Exception raised when a key's signatures are withdrawn from a recorded chain position onward.
+
+    The only construct in the protocol that invalidates a previously valid signature, and the
+    paper requires it reported as such rather than as an ordinary authorization failure (paper
+    Section 8.6): "signed by a retired key, still valid" and "signed by a compromised key, no
+    longer trusted" are different facts about the same snapshot, and collapsing them either
+    breaks history or hides an attack.
+    """
+
+
+class QuorumFailureError(AuthenticityError):
+    """Exception raised when a trust-root revision lacks the required ``govern`` signatures.
+
+    A revision must carry at least ``govern_quorum`` valid signatures from distinct keys holding
+    ``govern`` in the trust root as it stood *before* the change (paper Section 8.5). Evaluating
+    against the previous revision is the half that is easy to lose -- and the half that stops
+    the key list from authorizing itself.
+    """
+
+
+class TrustRootMismatchError(AuthenticityError):
+    """Exception raised when a brain's trust root does not match the digest a consumer pinned.
+
+    The pin lives in consumer-side state and never in the artifact -- a pin the artifact could
+    supply would be a pin the attacker supplies (paper Section 8.8). Distinct because it is the
+    one failure that compares against something outside the brain, so it can reject an artifact
+    whose every internal check passes.
+    """
+
+
+class VerificationUnavailableError(AuthenticityError):
+    """Exception raised when checking a signature needs the ``[authenticity]`` extra.
+
+    "I could not check" is a different fact from "it failed", and a caller that cannot tell them
+    apart treats a missing dependency as a forgery -- or worse, an attacker's uninstall becomes
+    one. Every structural check (framing, fingerprints, authorization, quorum arithmetic) works
+    without the extra; only the Ed25519 mathematics raises this.
+    """
+
+
+class SignerUnavailableError(AuthenticityError):
+    """Exception raised when no signing backend can produce a signature.
+
+    A signing-side failure that says nothing about any signature: no agent is listening on
+    ``SSH_AUTH_SOCK``, the agent refused, or it does not hold the requested key. The private key
+    never enters the protocol (paper Section 8.3), so the SDK cannot fall back to reading one.
+    """
