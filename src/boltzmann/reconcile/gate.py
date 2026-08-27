@@ -390,6 +390,9 @@ def _judge_derived(
         return BlockVerdict(block=block_id, memory_type=memory_type, status=ValidationStatus.REJECTED, issues=issues)
 
     block = store.get_block(block_id)
+    structural = _catalog_structure_verdict(block, block_id, memory_type, modules)
+    if structural is not None:
+        return structural
     citations = _citations(block, block_id, ledger)
     if not citations:
         return BlockVerdict(
@@ -433,6 +436,49 @@ def _judge_derived(
         issues=issues,
         conflicts_with=_conflicts(candidate, modules, issues),
         missing_evidence=_diagnose(citations, modules, ledger),
+    )
+
+
+def _catalog_structure_verdict(
+    block: Block,
+    block_id: BlockId,
+    memory_type: MemoryType,
+    modules: dict[MemoryType, Module],
+) -> BlockVerdict | None:
+    """Judge portable catalog taxonomy, whose structure deliberately cites no canonical evidence."""
+    from boltzmann.catalog import (
+        ClassificationRequest,
+        PlacementDeclaration,
+        declaration_from_block,
+        validate_declarations,
+    )
+
+    declaration = declaration_from_block(block)
+    if declaration is None or isinstance(declaration, PlacementDeclaration):
+        return None
+    verdicts, _blocks, _placements = validate_declarations(
+        ClassificationRequest(declarations=[declaration]),
+        modules,
+        ignore_blocks={block_id},
+    )
+    verdict = verdicts[0]
+    issues = list(verdict.issues)
+    if declaration.block_id != block_id:
+        issues.append(
+            ValidationIssue(
+                code=CANONICAL_VERSION_CODE,
+                detail=(
+                    f"catalog block {block_id.short} re-types to {declaration.block_id.short}; its schema version "
+                    "is not the oldest registered version that accepts its payload"
+                ),
+            )
+        )
+    return BlockVerdict(
+        block=block_id,
+        memory_type=memory_type,
+        status=_verdict(issues),
+        issues=issues,
+        conflicts_with=verdict.conflicts_with,
     )
 
 

@@ -23,7 +23,7 @@ from typing import Any, ClassVar, cast
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.content import require_media_type
 from boltzmann.blocks.memory_type import MemoryType
-from boltzmann.blocks.semantic import SemanticBlock
+from boltzmann.blocks.semantic import SemanticBlock, SemanticBlockV3, SemanticKind
 from boltzmann.exceptions import BlockSchemaError, ProtocolError
 from boltzmann.identity.digest import BlockId
 from boltzmann.ingest.proposer import Candidate
@@ -119,7 +119,7 @@ def _claim_index(modules: dict[MemoryType, Module]) -> dict[tuple[str, str | Non
             if not module.store.is_resolvable(block_id):
                 continue
             held = module.get(block_id)
-            if isinstance(held, SemanticBlock):
+            if isinstance(held, SemanticBlock) and not _is_catalog_semantic(held):
                 index.setdefault((held.label, held.subject, held.kind.value), []).append(block_id)
 
     if cache is not None:
@@ -551,6 +551,52 @@ class ContradictionValidator:
         return issues
 
 
+class CatalogCandidateValidator:
+    """Allow models to propose placements, while reserving taxonomy design for the SDK API."""
+
+    code: ClassVar[str] = "catalog-declaration-not-allowed"
+
+    def check(
+        self,
+        candidate: Candidate,
+        task: ProcessingTask,
+        modules: dict[MemoryType, Module],
+    ) -> list[ValidationIssue]:
+        """Validate catalog-shaped semantic proposals against the reconstructed catalog."""
+        from boltzmann.catalog import ClassificationRequest, PlacementDeclaration, validate_declarations
+
+        try:
+            block = build_block(candidate)
+        except (BlockSchemaError, ValueError):
+            return []
+        if not isinstance(block, SemanticBlockV3):
+            return []
+        if block.kind in {SemanticKind.SCHEME, SemanticKind.CLASS}:
+            return [
+                ValidationIssue(
+                    code=self.code,
+                    detail="models may propose catalog placements, but schemes and classes require Brain.classify()",
+                )
+            ]
+        if block.kind is not SemanticKind.RELATION or not block.relations:
+            return []
+        predicates = {relation.predicate: relation.target for relation in block.relations}
+        if set(predicates) == {"broader", "narrower"}:
+            return [
+                ValidationIssue(
+                    code=self.code,
+                    detail="models may propose catalog placements, but hierarchy requires Brain.classify()",
+                )
+            ]
+        if set(predicates) != {"classified_as"} or not block.evidence:
+            return []
+        request = ClassificationRequest(
+            declarations=[PlacementDeclaration(source=block.evidence[0], class_id=predicates["classified_as"])]
+        )
+        verdicts, _blocks, _placements = validate_declarations(request, modules, ignore_blocks={block.block_id})
+        return verdicts[0].issues
+
+
 def conflicts_for(candidate: Candidate, modules: dict[MemoryType, Module]) -> list[BlockId]:
     """
     The held blocks a proposal contradicts, so a reviewer can see both sides.
@@ -579,6 +625,8 @@ def _scan_for_conflicts(candidate: Candidate, modules: dict[MemoryType, Module])
         return []
     if not isinstance(proposed, SemanticBlock):
         return []
+    if _is_catalog_semantic(proposed):
+        return []
 
     stating_the_same = _claim_index(modules).get((proposed.label, proposed.subject, proposed.kind.value), [])
     return sorted(
@@ -591,11 +639,23 @@ def _same_claim(held: object, proposed: SemanticBlock) -> bool:
     """Whether two semantic blocks make the same claim in different words."""
     return (
         isinstance(held, SemanticBlock)
+        and proposed.label is not None
+        and proposed.statement is not None
         and held.label == proposed.label
         and held.subject == proposed.subject
         and held.kind is proposed.kind
         and held.statement != proposed.statement
     )
+
+
+def _is_catalog_semantic(block: SemanticBlock) -> bool:
+    """Whether a v3 block carries catalog structure rather than an ordinary claim."""
+    if not isinstance(block, SemanticBlockV3):
+        return False
+    if block.kind in {SemanticKind.SCHEME, SemanticKind.CLASS}:
+        return True
+    predicates = {relation.predicate for relation in block.relations or []}
+    return predicates in ({"classified_as"}, {"broader", "narrower"})
 
 
 class UndecidedValidator:
@@ -644,11 +704,12 @@ DEFAULT_VALIDATORS = (
     DuplicateValidator(),
     RelationValidator(),
     ContentValidator(),
+    CatalogCandidateValidator(),
     ContradictionValidator(),
 )
 """The checks Section 8.3 assigns to the protocol, in the order they are cheapest to fail."""
 
-CONTRADICTION_CODES = frozenset({ContradictionValidator.code})
+CONTRADICTION_CODES = frozenset({ContradictionValidator.code, "catalog-exclusive-conflict", "catalog-scheme-conflict"})
 """Issue codes that mean ``CONTRADICTED`` rather than ``REJECTED``."""
 
 REVIEW_CODES = frozenset({UndecidedValidator.code})

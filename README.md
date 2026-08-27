@@ -11,8 +11,8 @@ Knowledge Architecture*](https://github.com/gaussia-labs/papers) (Gaussia, 2026)
 ## What this is
 
 A **client** for a Boltzmann brain. You open a directory, call methods, and they
-work against an OCI artifact. `Brain` implements the whole protocol — 23 of 23
-operations across the four contracts.
+work against an OCI artifact. `Brain` implements the complete protocol, including
+hierarchical catalog navigation.
 
 ```python
 brain = Brain.open("./my-brain", actor=curator)
@@ -112,7 +112,8 @@ is the source of truth, and it is published as the Boltzmann SDK section of the
 | [Memory types](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/memory-types.mdx) | The five typed blocks and the rules each obeys |
 | [Identity](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/identity.mdx) | JCS, the three levels of hashes, the values a payload refuses |
 | [Merkle DAGs](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/merkle.mdx) | RFC 9162 over sorted leaves, and inclusion proofs |
-| [Interfaces](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/interfaces.mdx) | The protocol surface, and the four things you plug in |
+| [Catalog](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/catalog.mdx) | Hierarchical classes and virtual paths over canonical sources |
+| [Interfaces](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/concepts/interfaces.mdx) | The protocol surface, and the things you plug in |
 | [Ingestion](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/guides/ingestion.mdx) | Preserve the source, delegate the interpretation, validate |
 | [Query](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/guides/query.mdx) | Evidence Bundles, filters, and supplying a planner |
 | [Retention](https://github.com/gaussia-labs/pyboltzmann/blob/master/docs/guides/retention.mdx) | Drop, supersede, demote, prune, redact |

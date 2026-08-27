@@ -14,11 +14,12 @@ The surface is split because *read* and *extend* are separable, and most consume
 
 * :class:`BrainReader` -- discovery, resolution, verification, query.
 * :class:`BrainWriter` -- ingestion: register, delegate, validate, commit.
+* :class:`BrainCatalog` -- catalog declarations, browsing, and faceted paths.
 * :class:`BrainRetention` -- drop, supersede, prune, redact.
 * :class:`BrainDistribution` -- pack, push, pull, fetch.
 * :class:`BrainReconciliation` -- merge, rebase, squash, and resolving what did not apply.
 * :class:`BrainAuthenticity` -- sign, authenticate, pin, rotate, revoke.
-* :class:`BoltzmannProtocol` -- all six, for an implementation that offers everything.
+* :class:`BoltzmannProtocol` -- all seven, for an implementation that offers everything.
 
 A read-only client that satisfies :class:`BrainReader` is conforming. It does not have to pretend to
 support writes it will refuse.
@@ -44,6 +45,13 @@ from boltzmann.authenticity.signers import Signer
 from boltzmann.authenticity.trust_root import TrustRoot
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
+from boltzmann.catalog import (
+    CatalogBrowseResult,
+    CatalogDeclaration,
+    CatalogPathView,
+    ClassificationRequest,
+    ClassificationResult,
+)
 from boltzmann.distribution.manifest import BrainManifest
 from boltzmann.distribution.registry import FetchResult, RegistryClient
 from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
@@ -856,8 +864,35 @@ class BrainAuthenticity(Protocol):
 
 
 @runtime_checkable
+class BrainCatalog(Protocol):
+    """Optional catalog extension, separated so existing readers and writers remain conforming."""
+
+    def classify(
+        self,
+        request: ClassificationRequest | Sequence[CatalogDeclaration],
+    ) -> ClassificationResult:
+        """Validate and atomically commit catalog declarations and placements."""
+        ...
+
+    def browse(self, classes: BlockId | Sequence[BlockId]) -> CatalogBrowseResult:
+        """Browse sources below one catalog class or a faceted class intersection."""
+        ...
+
+    def catalog_path(self, schemes: Sequence[str]) -> CatalogPathView:
+        """Build a virtual slash-separated view over ordered catalog schemes."""
+        ...
+
+
+@runtime_checkable
 class BoltzmannProtocol(
-    BrainReader, BrainWriter, BrainRetention, BrainDistribution, BrainReconciliation, BrainAuthenticity, Protocol
+    BrainReader,
+    BrainWriter,
+    BrainCatalog,
+    BrainRetention,
+    BrainDistribution,
+    BrainReconciliation,
+    BrainAuthenticity,
+    Protocol,
 ):
     """An implementation that offers the whole protocol.
 

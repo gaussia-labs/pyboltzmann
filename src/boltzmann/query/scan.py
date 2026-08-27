@@ -36,6 +36,8 @@ rather than only in a derived index:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.canonical import CanonicalBlock
 from boltzmann.blocks.episodic import EpisodicBlock
@@ -48,6 +50,9 @@ from boltzmann.module.ledger import Ledger
 from boltzmann.module.module import Module
 from boltzmann.query.evidence import EvidenceBundle, Match, SourceRef
 from boltzmann.query.request import Query, QueryFilters, RetrievalMode
+
+if TYPE_CHECKING:
+    from boltzmann.catalog import Catalog
 
 SCORE_PRECISION = 2
 """Decimal places in the coverage score. A string, because a wire format should not carry a float."""
@@ -104,7 +109,7 @@ def searchable_text(block: Block) -> list[str]:
         list[str]: Its text-bearing fields.
     """
     if isinstance(block, SemanticBlock):
-        return [block.label, block.statement, block.subject or "", *(block.aliases or [])]
+        return [block.label or "", block.statement or "", block.subject or "", *(block.aliases or [])]
     if isinstance(block, ProceduralBlock):
         return [
             block.label,
@@ -140,8 +145,15 @@ def _evidence_of(block: Block) -> list[BlockId]:
     return list(getattr(block, "evidence", None) or [])
 
 
-def _passes_filters(block: Block, filters: QueryFilters) -> bool:
+def _passes_filters(
+    block_id: BlockId,
+    block: Block,
+    filters: QueryFilters,
+    catalog: Catalog | None,
+) -> bool:
     """Whether a block survives the narrowing conditions the query declared."""
+    from boltzmann.catalog import evidence_sources
+
     if filters.subject is not None and _subject_of(block) != filters.subject:
         return False
 
@@ -150,6 +162,14 @@ def _passes_filters(block: Block, filters: QueryFilters) -> bool:
 
     if filters.evidence and not set(filters.evidence) & set(_evidence_of(block)):
         return False
+
+    if filters.classes:
+        assert catalog is not None
+        matching_sources = evidence_sources(block_id, block)
+        for class_id in filters.classes:
+            matching_sources &= catalog.sources_for(class_id)
+        if not matching_sources:
+            return False
 
     if filters.since is not None or filters.until is not None:
         occurred = getattr(block, "occurred_at", None)
@@ -242,11 +262,14 @@ def scan(query: Query, modules: dict[MemoryType, Module]) -> EvidenceBundle:
         by membership in the installed snapshot; a block that fails either is left out rather than
         returned unverified.
     """
+    from boltzmann.catalog import Catalog
+
     view = Ledger.of(modules)
     searched = _modules_to_search(query, modules)
+    catalog = Catalog(modules) if query.filters.classes else None
 
     if query.hints.mode is RetrievalMode.EXACT:
-        candidates = _exact(query, searched)
+        candidates = _exact(query, searched, catalog)
     else:
         terms = content_terms(query.text)
         candidates = {
@@ -254,7 +277,7 @@ def scan(query: Query, modules: dict[MemoryType, Module]) -> EvidenceBundle:
             for memory_type, module in searched.items()
             for block_id in module.block_ids
             if module.store.is_resolvable(block_id)
-            and _passes_filters(module.get(block_id), query.filters)
+            and _passes_filters(block_id, module.get(block_id), query.filters, catalog)
             and (coverage := _coverage(terms, module.get(block_id))) > 0
         }
         candidates = _expand(candidates, searched, query.hints.expand_depth)
@@ -285,13 +308,16 @@ def _modules_to_search(query: Query, modules: dict[MemoryType, Module]) -> dict[
     return {kind: modules[kind] for kind in query.filters.memory_types if kind in modules}
 
 
-def _exact(query: Query, modules: dict[MemoryType, Module]) -> dict[BlockId, float]:
+def _exact(query: Query, modules: dict[MemoryType, Module], catalog: Catalog | None) -> dict[BlockId, float]:
     """Resolve the query text as an identity. Not a ranked guess, so the score carries no gradation."""
     try:
         block_id = BlockId.parse(query.text)
     except (DigestFormatError, DigestKindError):
         return {}
-    return {block_id: 1.0} if any(block_id in module for module in modules.values()) else {}
+    for module in modules.values():
+        if block_id in module and module.store.is_resolvable(block_id):
+            return {block_id: 1.0} if _passes_filters(block_id, module.get(block_id), query.filters, catalog) else {}
+    return {}
 
 
 def _to_match(

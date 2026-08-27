@@ -121,7 +121,9 @@ class TestThePayloadIsConstrained:
 
     def test_the_resolved_payload_states_its_required_fields(self) -> None:
         schema = candidates_schema()
-        assert schema["$defs"][_semantic_def()]["required"] == ["kind", "label", "statement"]
+        definition = schema["$defs"][_semantic_def()]
+        assert definition["required"] == ["kind"]
+        assert ["label", "statement"] in [branch.get("required") for branch in definition["oneOf"]]
 
     def test_content_is_offered_and_not_required(self) -> None:
         """A newer schema may add an optional field; it must not become mandatory to propose one."""
@@ -137,10 +139,28 @@ class TestThePayloadIsConstrained:
             "formula",
             "relation",
             "constraint",
+            "scheme",
+            "class",
         ]
 
     def test_a_well_formed_proposal_validates(self, validator: Draft202012Validator) -> None:
         assert validator.is_valid(proposal(semantic_candidate()))
+
+    def test_a_model_schema_offers_catalog_placements_but_not_taxonomy(self, validator: Draft202012Validator) -> None:
+        target = BlockId.of(b"catalog class")
+        placement = Candidate(
+            memory_type=MemoryType.SEMANTIC,
+            evidence=[SOURCE],
+            payload={"kind": "relation", "relations": [{"predicate": "classified_as", "target": str(target)}]},
+        )
+        assert validator.is_valid(proposal(placement))
+
+        scheme = Candidate(
+            memory_type=MemoryType.SEMANTIC,
+            evidence=[SOURCE],
+            payload={"kind": "scheme", "scheme": "topic", "exclusive": False},
+        )
+        assert not validator.is_valid(proposal(scheme))
 
     @pytest.mark.parametrize(
         ("mutation", "why"),

@@ -199,4 +199,25 @@ def _definitions(allowed: Iterable[MemoryType]) -> dict[str, Any]:
     # The candidate variants are inlined above, so their generated forms would only confuse a reader.
     for redundant in ("Candidate", "CandidateSet"):
         definitions.pop(redundant, None)
+    _restrict_catalog_candidates(definitions)
     return definitions
+
+
+def _restrict_catalog_candidates(definitions: dict[str, Any]) -> None:
+    """Offer models catalog placements, but keep taxonomy declarations on ``Brain.classify``."""
+    latest = _latest(MemoryType.SEMANTIC)
+    definition = definitions.get(latest.__name__)
+    if not isinstance(definition, dict) or "oneOf" not in definition:
+        return
+
+    allowed = []
+    for branch in definition["oneOf"]:
+        properties = branch.get("properties", {})
+        kind = properties.get("kind", {})
+        if kind.get("const") in {"scheme", "class"}:
+            continue
+        relations = properties.get("relations", {})
+        if relations.get("maxItems") == 2:
+            continue
+        allowed.append(branch)
+    definition["oneOf"] = allowed

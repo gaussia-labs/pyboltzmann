@@ -14,9 +14,11 @@ learned, sub-symbolic representations live only in the derived vector index
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import ClassVar
+from typing import Any, ClassVar, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, GetJsonSchemaHandler, model_validator
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import CoreSchema
 
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.content import NamesContent
@@ -32,6 +34,8 @@ class SemanticKind(StrEnum):
     FORMULA = "formula"
     RELATION = "relation"
     CONSTRAINT = "constraint"
+    SCHEME = "scheme"
+    CLASS = "class"
 
 
 class Relation(BaseModel):
@@ -79,6 +83,12 @@ class SemanticBlock(Block):
     relations: list[Relation] | None = None
     aliases: list[str] | None = None
 
+    @model_validator(mode="after")
+    def _catalog_kinds_need_v3(self) -> Self:
+        if self.SCHEMA_VERSION < 3 and self.kind in {SemanticKind.SCHEME, SemanticKind.CLASS}:
+            raise ValueError("catalog semantic kinds require schema version 3")
+        return self
+
 
 class SemanticBlockV2(NamesContent, SemanticBlock):
     """
@@ -104,3 +114,219 @@ class SemanticBlockV2(NamesContent, SemanticBlock):
     """
 
     SCHEMA_VERSION: ClassVar[int] = 2
+
+
+class SemanticBlockV3(SemanticBlockV2):
+    """Semantic schema extended with the catalog blocks from paper Section 6.7.
+
+    Older semantic knowledge still selects v1 or v2 through ``Block.build``. Version 3 is used only
+    when the payload has one of the catalog shapes that those schemas cannot express: a scheme, a
+    class, a placement, or an independent hierarchy relation.
+
+    ``label`` and ``statement`` become conditionally required. They remain mandatory for the five
+    original semantic kinds, while catalog structure carries only the fields that determine it. In
+    particular a class has no parent field: moving it changes a relation block, not the class identity.
+    """
+
+    SCHEMA_VERSION: ClassVar[int] = 3
+
+    label: str | None = Field(default=None, min_length=1)  # type: ignore[assignment]
+    statement: str | None = Field(default=None, min_length=1)  # type: ignore[assignment]
+    scheme: str | None = Field(default=None, min_length=1)
+    exclusive: bool | None = None
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        core_schema: CoreSchema,
+        handler: GetJsonSchemaHandler,
+    ) -> JsonSchemaValue:
+        """Describe the same conditional shapes the runtime validator enforces."""
+        schema = handler(core_schema)
+        catalog_fields = [{"required": [name]} for name in ("scheme", "exclusive")]
+        claim_fields = [{"required": [name]} for name in ("label", "statement")]
+        metadata_fields = [{"required": [name]} for name in ("subject", "aliases", "content")]
+        catalog_predicates = ["classified_as", "broader", "narrower"]
+        schema["oneOf"] = [
+            {
+                "properties": {
+                    "kind": {"enum": ["concept", "fact", "formula", "constraint"]},
+                },
+                "required": ["label", "statement"],
+                "not": {"anyOf": catalog_fields},
+            },
+            {
+                "properties": {"kind": {"const": "relation"}},
+                "required": ["label", "statement"],
+                "not": {
+                    "anyOf": [
+                        *catalog_fields,
+                        {
+                            "properties": {
+                                "relations": {
+                                    "contains": {
+                                        "properties": {"predicate": {"enum": catalog_predicates}},
+                                        "required": ["predicate"],
+                                    }
+                                }
+                            },
+                            "required": ["relations"],
+                        },
+                    ]
+                },
+            },
+            {
+                "properties": {"kind": {"const": "scheme"}},
+                "required": ["scheme", "exclusive"],
+                "not": {
+                    "anyOf": [*claim_fields, *metadata_fields, {"required": ["evidence"]}, {"required": ["relations"]}]
+                },
+            },
+            {
+                "properties": {"kind": {"const": "class"}},
+                "required": ["scheme", "label"],
+                "not": {
+                    "anyOf": [
+                        {"required": ["statement"]},
+                        {"required": ["exclusive"]},
+                        *metadata_fields,
+                        {"required": ["evidence"]},
+                        {"required": ["relations"]},
+                    ]
+                },
+            },
+            {
+                "properties": {
+                    "kind": {"const": "relation"},
+                    "relations": {
+                        "minItems": 1,
+                        "maxItems": 1,
+                        "prefixItems": [
+                            {
+                                "properties": {"predicate": {"const": "classified_as"}},
+                                "required": ["predicate", "target"],
+                            }
+                        ],
+                    },
+                },
+                "required": ["relations"],
+                "not": {"anyOf": [*claim_fields, *catalog_fields, *metadata_fields]},
+            },
+            {
+                "properties": {
+                    "kind": {"const": "relation"},
+                    "relations": {
+                        "minItems": 2,
+                        "maxItems": 2,
+                        "prefixItems": [
+                            {
+                                "properties": {"predicate": {"const": "broader"}},
+                                "required": ["predicate", "target"],
+                            },
+                            {
+                                "properties": {"predicate": {"const": "narrower"}},
+                                "required": ["predicate", "target"],
+                            },
+                        ],
+                    },
+                },
+                "required": ["relations"],
+                "not": {
+                    "anyOf": [
+                        *claim_fields,
+                        *catalog_fields,
+                        *metadata_fields,
+                        {"required": ["evidence"]},
+                    ]
+                },
+            },
+        ]
+        return schema
+
+    @model_validator(mode="after")
+    def _catalog_shape(self) -> Self:
+        legacy = {
+            SemanticKind.CONCEPT,
+            SemanticKind.FACT,
+            SemanticKind.FORMULA,
+            SemanticKind.CONSTRAINT,
+        }
+        if self.kind in legacy:
+            self._require("label", self.label)
+            self._require("statement", self.statement)
+            self._forbid_catalog_fields()
+            return self
+
+        if self.kind is SemanticKind.SCHEME:
+            self._require("scheme", self.scheme)
+            if self.exclusive is None:
+                raise ValueError("a catalog scheme must declare whether it is exclusive")
+            self._forbid("label", self.label)
+            self._forbid("statement", self.statement)
+            self._forbid("evidence", self.evidence)
+            self._forbid("relations", self.relations)
+            self._forbid("aliases", self.aliases)
+            self._forbid("subject", self.subject)
+            self._forbid("content", self.content)
+            return self
+
+        if self.kind is SemanticKind.CLASS:
+            self._require("scheme", self.scheme)
+            self._require("label", self.label)
+            self._forbid("exclusive", self.exclusive)
+            self._forbid("statement", self.statement)
+            self._forbid("evidence", self.evidence)
+            self._forbid("relations", self.relations)
+            self._forbid("aliases", self.aliases)
+            self._forbid("subject", self.subject)
+            self._forbid("content", self.content)
+            return self
+
+        if self.kind is SemanticKind.RELATION:
+            self._forbid_catalog_fields()
+            predicates = [relation.predicate for relation in self.relations or []]
+            if predicates == ["classified_as"]:
+                if not self.evidence or len(self.evidence) != 1:
+                    raise ValueError("a catalog placement must cite exactly one canonical block as evidence")
+                self._forbid("label", self.label)
+                self._forbid("statement", self.statement)
+                self._forbid("aliases", self.aliases)
+                self._forbid("subject", self.subject)
+                self._forbid("content", self.content)
+                return self
+            if predicates == ["broader", "narrower"]:
+                self._forbid("evidence", self.evidence)
+                self._forbid("label", self.label)
+                self._forbid("statement", self.statement)
+                self._forbid("aliases", self.aliases)
+                self._forbid("subject", self.subject)
+                self._forbid("content", self.content)
+                targets = {relation.target for relation in self.relations or []}
+                if len(targets) != 2:
+                    raise ValueError("a catalog hierarchy must name two distinct class endpoints")
+                return self
+
+            if set(predicates) & {"classified_as", "broader", "narrower"}:
+                raise ValueError("catalog relation predicates must use a complete catalog relation shape")
+
+            # The original, general relation block remains available under v3 for completeness, although
+            # oldest-that-fits normally writes it as v1 or v2.
+            self._require("label", self.label)
+            self._require("statement", self.statement)
+            return self
+
+        raise ValueError(f"unsupported semantic kind {self.kind.value!r}")
+
+    def _forbid_catalog_fields(self) -> None:
+        self._forbid("scheme", self.scheme)
+        self._forbid("exclusive", self.exclusive)
+
+    @staticmethod
+    def _require(name: str, value: Any) -> None:
+        if value is None or value == "":
+            raise ValueError(f"{name} is required for this semantic kind")
+
+    @staticmethod
+    def _forbid(name: str, value: Any) -> None:
+        if value is not None:
+            raise ValueError(f"{name} is not allowed for this semantic kind")

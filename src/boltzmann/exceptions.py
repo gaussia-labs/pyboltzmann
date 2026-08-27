@@ -133,6 +133,10 @@ class QueryError(ProtocolError):
     """Exception raised when a query cannot be planned or executed."""
 
 
+class CatalogError(ProtocolError):
+    """Exception raised when catalog structure or navigation is invalid."""
+
+
 class DistributionError(ProtocolError):
     """Exception raised when publishing to or installing from a registry fails."""
 

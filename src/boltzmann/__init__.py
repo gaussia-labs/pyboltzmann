@@ -19,7 +19,7 @@ DAG that pins the exact composition of a version, and the indices needed to quer
    Ed25519 mathematics rides in the optional ``[authenticity]`` extra; everything structural works
    without it, and "could not check" is never reported as either verdict.
 4. **The interfaces an implementation satisfies**, declared: ``BrainReader``, ``BrainWriter``,
-   ``BrainRetention``, ``BrainDistribution``, ``BrainAuthenticity``, plus ``BlockStore``, ``Index``,
+   ``BrainCatalog``, ``BrainRetention``, ``BrainDistribution``, ``BrainAuthenticity``, plus ``BlockStore``, ``Index``,
    ``QueryPlanner``, ``Validator``, ``CandidateProposer``, ``RegistryClient``, ``MerkleLayout``,
    ``NormalizationPipeline``.
 
@@ -71,14 +71,30 @@ from boltzmann.blocks import (
     RemovalMechanism,
     SemanticBlock,
     SemanticBlockV2,
+    SemanticBlockV3,
     SemanticKind,
     Step,
     require_media_type,
 )
 from boltzmann.brain import Brain, BrainState
+from boltzmann.catalog import (
+    Catalog,
+    CatalogBrowseResult,
+    CatalogDeclaration,
+    CatalogDirectory,
+    CatalogNode,
+    CatalogPathView,
+    CatalogVerdict,
+    ClassDeclaration,
+    ClassificationRequest,
+    ClassificationResult,
+    HierarchyDeclaration,
+    PlacementDeclaration,
+    SchemeDeclaration,
+)
 from boltzmann.constants import SNAPSHOT_NAMESPACE
 from boltzmann.distribution import FetchResult
-from boltzmann.exceptions import BoltzmannError
+from boltzmann.exceptions import BoltzmannError, CatalogError
 from boltzmann.identity import BlockId, MerkleRoot, OciDigest
 from boltzmann.identity.time import utc_timestamp
 from boltzmann.indices import ContentReader, Index, IndexKind
@@ -100,6 +116,7 @@ from boltzmann.protocol import (
     PROTOCOL_VERSION,
     BoltzmannProtocol,
     BrainAuthenticity,
+    BrainCatalog,
     BrainDistribution,
     BrainReader,
     BrainReconciliation,
@@ -155,6 +172,7 @@ __all__ = [
     "BoltzmannProtocol",
     "Brain",
     "BrainAuthenticity",
+    "BrainCatalog",
     "BrainDistribution",
     "BrainReader",
     "BrainReconciliation",
@@ -165,7 +183,18 @@ __all__ = [
     "CandidateProposer",
     "CandidateSet",
     "CanonicalBlock",
+    "Catalog",
+    "CatalogBrowseResult",
+    "CatalogDeclaration",
+    "CatalogDirectory",
+    "CatalogError",
+    "CatalogNode",
+    "CatalogPathView",
+    "CatalogVerdict",
     "CascadePlan",
+    "ClassDeclaration",
+    "ClassificationRequest",
+    "ClassificationResult",
     "CommitResult",
     "Composition",
     "ContentReader",
@@ -177,6 +206,7 @@ __all__ = [
     "EvidenceBundle",
     "FetchResult",
     "InclusionProof",
+    "HierarchyDeclaration",
     "IncomingReport",
     "Index",
     "IndexKind",
@@ -197,6 +227,7 @@ __all__ = [
     "OciLayoutStore",
     "PROTOCOL_VERSION",
     "PinSource",
+    "PlacementDeclaration",
     "ProceduralBlock",
     "ProceduralBlockV2",
     "ProcessingTask",
@@ -229,8 +260,10 @@ __all__ = [
     "RotationResult",
     "SNAPSHOT_NAMESPACE",
     "Scope",
+    "SchemeDeclaration",
     "SemanticBlock",
     "SemanticBlockV2",
+    "SemanticBlockV3",
     "SemanticKind",
     "SignatureRecord",
     "Signer",
