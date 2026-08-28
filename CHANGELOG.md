@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.8.0-b.1 (2026-08-28)
+
+### Features
+
+- **distribution**: Bind travelling indexes to snapshots
+  ([`f0646a2`](https://github.com/gaussia-labs/pyboltzmann/commit/f0646a274fe16f1ea1a41bc30d524b8896ee9cb4))
+
+
 ## v0.7.1-b.1 (2026-08-28)
 
 ### Bug Fixes
