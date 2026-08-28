@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.8.0-b.2 (2026-08-28)
+
+### Bug Fixes
+
+- **identity**: Reject ambiguous wire documents
+  ([`a2aebec`](https://github.com/gaussia-labs/pyboltzmann/commit/a2aebecb0d035f6c95130c42b813d694c2c124cd))
+
+
 ## v0.8.0-b.1 (2026-08-28)
 
 ### Features
