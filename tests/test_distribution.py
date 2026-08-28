@@ -1082,7 +1082,7 @@ class TestSignedDistribution:
         await consumer.pull(registry, REFERENCE, "v1", verification=VerificationPolicy(unsigned=UnsignedPolicy.REFUSE))
         assert consumer.signatures(publisher.snapshot().digest), "the source head's records travelled"
 
-    async def test_an_anchor_that_lies_is_refused(
+    async def test_a_lying_source_annotation_cannot_override_the_projection_binding(
         self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
     ) -> None:
         from boltzmann.distribution.media_types import ANNOTATION_SOURCE_SNAPSHOT
@@ -1096,8 +1096,8 @@ class TestSignedDistribution:
         publisher.sign(party)
         await publisher.push(registry, REFERENCE, "v1", modules=[MemoryType.CANONICAL])
 
-        # A tampered artifact: same projection, but the annotation now names an ancestor whose
-        # canonical module is not what the projection carries.
+        # The annotation is a pre-download hint only. The projection document remains bound to
+        # the real source, so changing the hint cannot change verification authority.
         manifest = await registry.resolve(REFERENCE, "v1")
         doctored = manifest.model_copy(
             update={"annotations": {**manifest.annotations, ANNOTATION_SOURCE_SNAPSHOT: str(earlier)}}
@@ -1105,7 +1105,37 @@ class TestSignedDistribution:
         await registry.push(REFERENCE, "v1", doctored, publisher.store)
 
         consumer = Brain.open(tmp_path / "consumer", actor=SAM)
-        with pytest.raises(DistributionError, match="anchor that lies"):
+        await consumer.pull(registry, REFERENCE, "v1")
+        assert consumer.root_of(MemoryType.CANONICAL) == publisher.root_of(MemoryType.CANONICAL)
+
+    async def test_a_projection_whose_bound_source_does_not_match_is_refused(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> None:
+        from boltzmann.distribution.manifest import Descriptor
+        from boltzmann.distribution.media_types import PROJECTION_MEDIA_TYPE
+        from boltzmann.distribution.projection import Projection
+
+        party = self._party(0x9E)
+        publisher = self._governed(tmp_path / "publisher", party)
+        publisher.ingest(b"%PDF-1.7 Lecture 07", request_, llm("Fourier"))
+        earlier = publisher.snapshot().digest
+        publisher.ingest(b"%PDF-1.7 Lecture 08", request_, llm("Laplace"))
+        publisher.sign(party)
+        await publisher.push(registry, REFERENCE, "v1", modules=[MemoryType.CANONICAL])
+
+        manifest = await registry.resolve(REFERENCE, "v1")
+        projection = Projection.from_document(publisher.store.get_bytes(manifest.config.digest))
+        forged = projection.model_copy(update={"source": earlier})
+        raw = forged.canonical_bytes()
+        config = Descriptor(
+            media_type=PROJECTION_MEDIA_TYPE,
+            digest=publisher.store.put_bytes(raw),
+            size=len(raw),
+        )
+        await registry.push(REFERENCE, "v1", manifest.model_copy(update={"config": config}), publisher.store)
+
+        consumer = Brain.open(tmp_path / "consumer", actor=SAM)
+        with pytest.raises(DistributionError, match="not a verbatim subset"):
             await consumer.pull(registry, REFERENCE, "v1")
 
     async def test_a_record_outside_the_artifacts_ancestry_is_not_kept(

@@ -28,6 +28,7 @@ import json
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -109,11 +110,13 @@ from boltzmann.distribution.media_types import (
     CONFIG_MEDIA_TYPE,
     EMPTY_CONFIG_BYTES,
     MANIFEST_MEDIA_TYPE,
+    PROJECTION_MEDIA_TYPE,
     REF_NAME_ANNOTATION,
     SIGNATURE_MEDIA_TYPE,
     VECTOR_INDEX_MEDIA_TYPE,
 )
 from boltzmann.distribution.registry import FetchResult, InstallPlan, RegistryClient, RegistryReferrers
+from boltzmann.distribution.projection import Projection
 from boltzmann.exceptions import (
     AuthenticityError,
     BlockError,
@@ -269,6 +272,24 @@ class Origin(BaseModel):
     tag: str = Field(min_length=1)
     snapshot: OciDigest
     partial: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedConfig:
+    """A config document resolved to the snapshot that gives it authority."""
+
+    document: Snapshot | Projection
+    source: Snapshot
+
+    @property
+    def modules(self) -> dict[MemoryType, ModuleRef]:
+        """Module references the artifact actually exposes."""
+        return self.document.modules
+
+    @property
+    def is_projection(self) -> bool:
+        """Whether installation is a partial view rather than the source snapshot itself."""
+        return isinstance(self.document, Projection) or self.document.digest != self.source.digest
 
 
 REMOTES_POINTER = "remotes"
@@ -1994,12 +2015,26 @@ class Brain:
         """
         for artifact in published_artifacts(self.store):
             manifest = artifact.manifest
-            if manifest is None or manifest.config.digest != self._snapshot.digest:
+            if manifest is None:
+                continue
+            if manifest.config.digest == self._snapshot.digest:
+                bound_modules = self._snapshot.modules
+            elif manifest.config.media_type == PROJECTION_MEDIA_TYPE:
+                try:
+                    projection = Projection.from_document(self.store.get_bytes(manifest.config.digest))
+                except (BlockError, DistributionError):
+                    continue
+                if projection.source not in self._snapshot.parents or any(
+                    projection.modules.get(kind) != reference for kind, reference in self._snapshot.modules.items()
+                ):
+                    continue
+                bound_modules = self._snapshot.modules
+            else:
                 continue  # Unreadable, or a manifest for some other version of this brain.
 
             for memory_type in self.indices:
                 try:
-                    layer = self._validated_vector_index(manifest, self._snapshot, memory_type)
+                    layer = self._validated_vector_index(manifest, bound_modules, memory_type)
                     if layer is None or not self.store.is_resolvable(layer.digest):
                         continue
                     self._load_index(memory_type, layer)
@@ -3500,21 +3535,22 @@ class Brain:
         if history is not None:
             layers.append(history)
 
-        projected = self._projection(published)
-        config_bytes = projected.canonical_bytes()
+        config_document = self._projection(published)
+        config_bytes = config_document.canonical_bytes()
         config = Descriptor(
-            media_type=CONFIG_MEDIA_TYPE,
+            media_type=(PROJECTION_MEDIA_TYPE if isinstance(config_document, Projection) else CONFIG_MEDIA_TYPE),
             digest=self.store.put_bytes(config_bytes),
             size=len(config_bytes),
         )
         manifest = build_manifest(
-            projected,
+            self._snapshot,
             config,
             layers,
             annotations={
                 ANNOTATION_SOURCE_SNAPSHOT: str(self._snapshot.digest),
                 ANNOTATION_SCHEMA_VERSIONS: declare_schema_versions(schema_versions),
             },
+            published=config_document.modules.values(),
         )
         manifest_bytes = manifest.to_bytes()
         manifest_digest = self.store.put_bytes(manifest_bytes)
@@ -3634,12 +3670,21 @@ class Brain:
         anything the local store merely happens to hold: a hostile listing must not get to
         attach records to unrelated local snapshots and poison their per-snapshot caps.
         """
-        allowed: set[OciDigest] = {manifest.config.digest}
-        starts = [manifest.config.digest]
-        declared = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
-        if declared is not None:
-            with suppress(IdentityError):
-                starts.append(OciDigest.parse(declared))
+        if manifest.config.media_type == PROJECTION_MEDIA_TYPE:
+            try:
+                source = Projection.from_document(self.store.get_bytes(manifest.config.digest)).source
+            except (BlockError, DistributionError):
+                return set()
+            allowed: set[OciDigest] = {source}
+            starts = [source]
+        else:
+            # Legacy reduced-snapshot projections used the annotation as their only binding.
+            allowed = {manifest.config.digest}
+            starts = [manifest.config.digest]
+            declared = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
+            if declared is not None:
+                with suppress(IdentityError):
+                    starts.append(OciDigest.parse(declared))
         for digest in starts:
             document = load_snapshot(self.store, digest)
             if document is None:
@@ -3732,14 +3777,14 @@ class Brain:
         manifest = await client.resolve(reference, tag)
         if not self.store.is_resolvable(manifest.config.digest):
             await client.pull_blob(reference, manifest.config.digest, self.store)
-        remote = self._read_remote_snapshot(manifest.config.digest)
         history = manifest.history
         if history is not None:
             if not self.store.is_resolvable(history.digest):
                 await client.pull_blob(reference, history.digest, self.store)
             unpack_history(self.store.get_bytes(history.digest), self.store)
+        resolved = self._resolve_config(manifest)
         await self._merge_signatures(client, reference, manifest)
-        subject = self._resolve_source_anchor(remote, manifest) or remote
+        subject = resolved.source
         report = Authenticator(self.store).authenticate(subject, current=subject.trust_root)
         if report.has(FindingKind.TRUST_ROOT_MISMATCH):
             raise TrustRootMismatchError(
@@ -3781,6 +3826,49 @@ class Brain:
                 f"{error}; if the artifact was published by a newer SDK, upgrade pyboltzmann"
             ) from error
 
+    def _resolve_config(self, manifest: BrainManifest) -> _ResolvedConfig:
+        """Resolve a snapshot or projection config to the snapshot that authorizes it.
+
+        The caller has already fetched and unpacked the history layer. A projection's ``source``
+        field is the binding; the manifest annotation is deliberately ignored here because it is
+        only a registry-controlled transfer hint.
+        """
+        if manifest.config.media_type == CONFIG_MEDIA_TYPE:
+            document = self._read_remote_snapshot(manifest.config.digest)
+            # Compatibility with v0.7 subset artifacts, whose config was a reduced snapshot and
+            # whose only source binding was the annotation. New producers never take this path.
+            source = self._resolve_legacy_source_anchor(document, manifest) or document
+            return _ResolvedConfig(document=document, source=source)
+        if manifest.config.media_type != PROJECTION_MEDIA_TYPE:
+            raise DistributionError(
+                f"artifact config has unsupported media type {manifest.config.media_type!r}; expected "
+                f"{CONFIG_MEDIA_TYPE!r} or {PROJECTION_MEDIA_TYPE!r}"
+            )
+
+        projection = Projection.from_document(self.store.get_bytes(manifest.config.digest))
+        projected_source = load_snapshot(self.store, projection.source)
+        if projected_source is None:
+            raise DistributionError(
+                f"projection {projection.digest.short} binds source snapshot {projection.source.short}, "
+                "but that snapshot is not resolvable from the artifact's history layer"
+            )
+        mismatched = [
+            memory_type.value
+            for memory_type, reference in projection.modules.items()
+            if projected_source.modules.get(memory_type) != reference
+        ]
+        if mismatched:
+            raise DistributionError(
+                f"projection {projection.digest.short} is not a verbatim subset of source "
+                f"{projected_source.digest.short}; mismatched module references: {', '.join(sorted(mismatched))}"
+            )
+        if projection.boltzmann != projected_source.boltzmann:
+            raise DistributionError(
+                f"projection protocol version {projection.boltzmann} disagrees with source snapshot "
+                f"version {projected_source.boltzmann}"
+            )
+        return _ResolvedConfig(document=projection, source=projected_source)
+
     def _modules_to_publish(self, modules: Iterable[MemoryType] | None) -> list[MemoryType]:
         """Which modules an artifact will carry, refusing a subset that would strand a citation."""
         if modules is None:
@@ -3804,25 +3892,20 @@ class Brain:
             )
         return wanted
 
-    def _projection(self, published: list[MemoryType]) -> Snapshot:
+    def _projection(self, published: list[MemoryType]) -> Snapshot | Projection:
         """
-        The snapshot an artifact carries.
+        The snapshot or projection document an artifact carries.
 
-        For a complete publish this is the brain's own snapshot. For a subset it is a projection of it --
-        the same roots, fewer modules -- with no parent, because a projection is not a version in this
-        brain's history and chaining it would put a document nobody can resolve into the consumer's chain.
+        For a complete publish this is the brain's own snapshot. A subset uses a distinct projection
+        document: it binds the source digest and copies retained module references verbatim, without
+        pretending the view has its own lineage, authority, timestamp, or signatures.
         """
         if set(published) == set(self._snapshot.installed):
             return self._snapshot
-        # The trust root travels with every projection: a partial install must still be
-        # verifiable, which is the whole argument for why it is not a sixth module -- there is no
-        # install that does not fetch the snapshot, so there must be no snapshot that omits it.
-        return Snapshot(
+        return Projection(
             boltzmann=self._snapshot.boltzmann,
+            source=self._snapshot.digest,
             modules={kind: self._snapshot.modules[kind] for kind in published},
-            created_at=self._snapshot.created_at,
-            labels=self._snapshot.labels,
-            trust_root=self._snapshot.trust_root,
         )
 
     def _pack_history(self) -> Descriptor | None:
@@ -4062,53 +4145,52 @@ class Brain:
                 ``allow_rollback`` is false.
         """
         await self._require_pin_holds(client, reference, tag)
-        manifest, remote, references, _ = await self._retrieve(client, reference, tag, modules)
-        anchor = self._resolve_source_anchor(remote, manifest)
+        manifest, resolved, references, _ = await self._retrieve(client, reference, tag, modules)
+        source = resolved.source
         self._guard_pull_rollback(
-            anchor if anchor is not None else remote,
+            source,
             reference=reference,
             tag=tag,
             allow=allow_rollback,
         )
         await self._merge_signatures(client, reference, manifest)
-        self._apply_verification_policy(remote, verification, reference=reference, anchor=anchor)
+        self._apply_verification_policy(source, verification, reference=reference)
         wanted = [reference_.memory_type for reference_ in references]
 
         for memory_type in wanted:
             # The one derived structure a model-agnostic client cannot rebuild, so it travels.
-            index_layer = self._validated_vector_index(manifest, remote, memory_type, warn_legacy=False)
+            index_layer = self._validated_vector_index(manifest, resolved.modules, memory_type, warn_legacy=False)
             if index_layer is not None and not ignore_vector_indices:
                 if not self.store.is_resolvable(index_layer.digest):
                     await client.pull_blob(reference, index_layer.digest, self.store)
                 self._load_index(memory_type, index_layer)
 
         complete = set(wanted) == set(manifest.modules)
-        if complete:
+        if complete and not resolved.is_projection:
             # Adopt the remote document verbatim. Rebuilding an equivalent one would give it a fresh
             # ``created_at`` and therefore a different digest, and the fast-forward check compares
             # digests -- so a push back to the same tag would look like a divergence when nothing
             # diverged at all.
-            installed = remote
+            assert isinstance(resolved.document, Snapshot)
+            installed = resolved.document
         else:
             # Chained to the version it was taken from, not parentless. A partial install *succeeds* that
             # version -- same roots, fewer modules -- and a snapshot that recorded no parent would leave a
             # consumer holding knowledge with no recorded origin, unable to say what it was installed from
             # and unable to be reconciled with the history it came from (paper Section 12.8).
-            source = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
-            published = OciDigest.parse(source) if source else manifest.config.digest
             installed = Snapshot(
-                boltzmann=remote.boltzmann,
+                boltzmann=source.boltzmann,
                 modules={reference_.memory_type: reference_ for reference_ in references},
-                parents=[published] if self.store.is_resolvable(published) else [],
-                labels=remote.labels,
-                trust_root=remote.trust_root,
+                parents=[source.digest],
+                labels=source.labels,
+                trust_root=source.trust_root,
             )
 
         origin = Origin(
             reference=reference,
             tag=tag,
-            snapshot=manifest.config.digest,
-            partial=not complete,
+            snapshot=source.digest,
+            partial=resolved.is_projection or not complete,
         )
         advanced = self._advance(installed, origin=origin)
 
@@ -4163,8 +4245,8 @@ class Brain:
             raise RollbackError(f"{detail}; refused. Pass allow_rollback=True to override explicitly")
         logging.getLogger(__name__).warning("%s; ROLLBACK override accepted", detail)
 
-    def _resolve_source_anchor(self, remote: Snapshot, manifest: BrainManifest) -> Snapshot | None:
-        """The signed source a subset artifact is a projection of, validated fail-closed.
+    def _resolve_legacy_source_anchor(self, remote: Snapshot, manifest: BrainManifest) -> Snapshot | None:
+        """Resolve the signed source of a legacy reduced-snapshot projection.
 
         A projection is parentless and nobody signs it; what its module roots commit to is
         byte-identical content the source head attests. The annotation names the source, the
@@ -4214,7 +4296,6 @@ class Brain:
         verification: VerificationPolicy | None,
         *,
         reference: str,
-        anchor: Snapshot | None = None,
     ) -> None:
         """The install-time gate the verification policy configures (paper Section 8.10).
 
@@ -4226,13 +4307,11 @@ class Brain:
         Anything else unauthorized installs with a warning: what is not configurable is whether
         the result is reported, and the report is a call away either way.
 
-        A subset artifact is judged through its ``anchor`` -- the signed source it is a
-        validated projection of -- because the projection itself is parentless and unsigned by
-        design; its module roots are commitments the source attests, and the layers were
-        already verified against those roots.
+        A subset artifact passes its resolved source here, not the projection document: the view
+        is unsigned by design and its module roots are commitments the source attests.
         """
         policy = verification if verification is not None else VerificationPolicy()
-        judged = anchor if anchor is not None else remote
+        judged = remote
         records = for_snapshot(self.store, judged.digest)
         if not records:
             previously = self._read_remotes().seen_signed.get(reference)
@@ -4278,7 +4357,7 @@ class Brain:
         reference: str,
         tag: str,
         modules: Iterable[MemoryType] | None = None,
-    ) -> tuple[BrainManifest, Snapshot, list[ModuleRef], dict[MemoryType, list[BlockId]]]:
+    ) -> tuple[BrainManifest, _ResolvedConfig, list[ModuleRef], dict[MemoryType, list[BlockId]]]:
         """Download a published history's modules into the store, verifying each against the snapshot
         that names it.
 
@@ -4287,8 +4366,8 @@ class Brain:
         happens *after* the bytes land.
 
         Returns:
-            tuple: The manifest, the remote snapshot, the module references retrieved in the order they
-            were asked for, and the blocks each module's layer actually contributed to this store.
+            tuple: The manifest, its resolved config and source snapshot, the module references
+            retrieved in the requested order, and the blocks each module layer contributed.
         """
         manifest = await client.resolve(reference, tag)
         wanted = list(modules) if modules is not None else manifest.modules
@@ -4302,10 +4381,6 @@ class Brain:
 
         if not self.store.is_resolvable(manifest.config.digest):
             await client.pull_blob(reference, manifest.config.digest, self.store)
-        remote = self._read_remote_snapshot(manifest.config.digest)
-
-        for memory_type in wanted:
-            self._validated_vector_index(manifest, remote, memory_type)
 
         # Before the modules, because it is what makes the retrieved snapshot's parents resolvable, and a
         # caller that fetched a history in order to reconcile against it needs that whether or not the
@@ -4315,6 +4390,10 @@ class Brain:
             if not self.store.is_resolvable(history.digest):
                 await client.pull_blob(reference, history.digest, self.store)
             unpack_history(self.store.get_bytes(history.digest), self.store)
+
+        resolved = self._resolve_config(manifest)
+        for memory_type in wanted:
+            self._validated_vector_index(manifest, resolved.modules, memory_type)
 
         references: list[ModuleRef] = []
         incoming: dict[MemoryType, list[BlockId]] = {}
@@ -4326,14 +4405,14 @@ class Brain:
 
             # The manifest's layers and its config blob are two separate registry-supplied documents,
             # and nothing forces a registry to keep them consistent. Indexing straight into
-            # ``remote.modules`` turned that into a bare KeyError, which is neither documented here nor
+            # the resolved config turned that into a bare KeyError, which is neither documented here nor
             # actionable by a caller.
-            expected = remote.modules.get(memory_type)
+            expected = resolved.modules.get(memory_type)
             if expected is None:
-                named = ", ".join(kind.value for kind in remote.installed) or "none"
+                named = ", ".join(kind.value for kind in resolved.modules) or "none"
                 raise DistributionError(
-                    f"the artifact carries a {memory_type.value} layer but its snapshot names no root for "
-                    f"it; the snapshot names: {named}. The manifest and its config disagree, so there is "
+                    f"the artifact carries a {memory_type.value} layer but its config names no root for "
+                    f"it; the config names: {named}. The manifest and its config disagree, so there is "
                     f"nothing to verify the layer against."
                 )
 
@@ -4343,7 +4422,7 @@ class Brain:
             if composition.root != expected.root:
                 raise DistributionError(
                     f"the {memory_type.value} layer unpacks to root {composition.root.short} but the "
-                    f"artifact's snapshot names {expected.root.short}"
+                    f"artifact's config names {expected.root.short}"
                 )
             references.append(expected)
 
@@ -4353,19 +4432,19 @@ class Brain:
             held = self._module_or_empty(memory_type)
             incoming[memory_type] = [block_id for block_id in composition.block_ids if block_id not in held]
 
-        return manifest, remote, references, incoming
+        return manifest, resolved, references, incoming
 
     def _validated_vector_index(
         self,
         manifest: BrainManifest,
-        snapshot: Snapshot,
+        modules: Mapping[MemoryType, ModuleRef],
         memory_type: MemoryType,
         *,
         warn_legacy: bool = True,
     ) -> Descriptor | None:
         """Resolve only an index layer whose payload digest the signed snapshot names."""
         layers = [layer for layer in manifest.layers if layer.is_vector_index and layer.memory_type is memory_type]
-        reference = snapshot.modules.get(memory_type)
+        reference = modules.get(memory_type)
         expected = reference.index_digest if reference is not None else None
         if expected is None:
             if layers and warn_legacy:
@@ -4427,7 +4506,7 @@ class Brain:
                 schema this client does not implement, or a layer does not verify against the snapshot
                 that names it.
         """
-        manifest, remote, references, incoming = await self._retrieve(client, reference, tag, modules)
+        manifest, resolved, references, incoming = await self._retrieve(client, reference, tag, modules)
         # A contribution is a *signed* snapshot in someone else's repository; its records travel
         # with it, or the maintainer would judge attribution it cannot see.
         await self._merge_signatures(client, reference, manifest)
@@ -4436,8 +4515,8 @@ class Brain:
         return FetchResult(
             reference=reference,
             tag=tag,
-            snapshot=remote,
-            digest=manifest.config.digest,
+            snapshot=resolved.source,
+            digest=resolved.source.digest,
             modules=[reference_.memory_type for reference_ in references],
             incoming=incoming,
         )
@@ -4532,7 +4611,18 @@ class Brain:
         except ReferenceNotFoundError:
             return  # Nothing is published here, so nothing can be narrowed.
 
-        omitted = [kind.value for kind in manifest.modules if not self._snapshot.has_module(kind)]
+        remote_modules = manifest.modules
+        if manifest.config.media_type == PROJECTION_MEDIA_TYPE:
+            if not self.store.is_resolvable(manifest.config.digest):
+                await client.pull_blob(reference, manifest.config.digest, self.store)
+            history = manifest.history
+            if history is not None:
+                if not self.store.is_resolvable(history.digest):
+                    await client.pull_blob(reference, history.digest, self.store)
+                unpack_history(self.store.get_bytes(history.digest), self.store)
+            remote_modules = self._resolve_config(manifest).source.installed
+
+        omitted = [kind.value for kind in remote_modules if not self._snapshot.has_module(kind)]
         if omitted:
             installed = ", ".join(kind.value for kind in self._snapshot.installed) or "none"
             raise DistributionError(
@@ -4552,10 +4642,15 @@ class Brain:
         # one that treats "I could not tell" as "nothing is there" would let an expired credential or a
         # failing registry turn into a push over somebody else's version.
 
-        # A projection's config is not a version in anyone's history, so the manifest records the full
-        # snapshot it came from and that is what the ancestry has to contain.
-        source = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
-        remote = OciDigest.parse(source) if source else manifest.config.digest
+        # A projection's config is not a version in anyone's history. Its document binds the source;
+        # the annotation is only the compatibility path for v0.7 reduced-snapshot projections.
+        if manifest.config.media_type == PROJECTION_MEDIA_TYPE:
+            if not self.store.is_resolvable(manifest.config.digest):
+                await client.pull_blob(reference, manifest.config.digest, self.store)
+            remote = Projection.from_document(self.store.get_bytes(manifest.config.digest)).source
+        else:
+            source = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
+            remote = OciDigest.parse(source) if source else manifest.config.digest
         # Reachability over every parent, not the first-parent chain: a history this brain merged is
         # contained in it, and publishing over it drops nothing.
         if remote in self.reachable_history():

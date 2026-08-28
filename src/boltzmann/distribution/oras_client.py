@@ -10,7 +10,7 @@ push time.
 
 Blob-level methods are used rather than ORAS's file-oriented ``push``/``pull``, because the artifact
 this SDK publishes has its own manifest shape: one layer per module, each annotated with the module's
-internal Merkle root, and a config blob that is the snapshot document.
+internal Merkle root, and a config blob that is either a snapshot or a selective projection.
 """
 
 from __future__ import annotations
