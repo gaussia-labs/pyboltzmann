@@ -71,14 +71,29 @@ from boltzmann.blocks import (
     RemovalMechanism,
     SemanticBlock,
     SemanticBlockV2,
+    SemanticBlockV3,
     SemanticKind,
     Step,
     require_media_type,
 )
 from boltzmann.brain import Brain, BrainState
+from boltzmann.catalog import (
+    Catalog,
+    CatalogBrowseResult,
+    CatalogDeclaration,
+    CatalogDirectory,
+    CatalogNode,
+    CatalogPathView,
+    ClassDeclaration,
+    ClassificationRequest,
+    HierarchyDeclaration,
+    PlacementDeclaration,
+    SchemeDeclaration,
+)
+from boltzmann.catalog_validation import CatalogVerdict, ClassificationResult
 from boltzmann.constants import SNAPSHOT_NAMESPACE
 from boltzmann.distribution import FetchResult
-from boltzmann.exceptions import BoltzmannError
+from boltzmann.exceptions import BoltzmannError, CatalogError
 from boltzmann.identity import BlockId, MerkleRoot, OciDigest
 from boltzmann.identity.time import utc_timestamp
 from boltzmann.indices import ContentReader, Index, IndexKind
@@ -165,7 +180,18 @@ __all__ = [
     "CandidateProposer",
     "CandidateSet",
     "CanonicalBlock",
+    "Catalog",
+    "CatalogBrowseResult",
+    "CatalogDeclaration",
+    "CatalogDirectory",
+    "CatalogError",
+    "CatalogNode",
+    "CatalogPathView",
+    "CatalogVerdict",
     "CascadePlan",
+    "ClassDeclaration",
+    "ClassificationRequest",
+    "ClassificationResult",
     "CommitResult",
     "Composition",
     "ContentReader",
@@ -177,6 +203,7 @@ __all__ = [
     "EvidenceBundle",
     "FetchResult",
     "InclusionProof",
+    "HierarchyDeclaration",
     "IncomingReport",
     "Index",
     "IndexKind",
@@ -197,6 +224,7 @@ __all__ = [
     "OciLayoutStore",
     "PROTOCOL_VERSION",
     "PinSource",
+    "PlacementDeclaration",
     "ProceduralBlock",
     "ProceduralBlockV2",
     "ProcessingTask",
@@ -229,8 +257,10 @@ __all__ = [
     "RotationResult",
     "SNAPSHOT_NAMESPACE",
     "Scope",
+    "SchemeDeclaration",
     "SemanticBlock",
     "SemanticBlockV2",
+    "SemanticBlockV3",
     "SemanticKind",
     "SignatureRecord",
     "Signer",

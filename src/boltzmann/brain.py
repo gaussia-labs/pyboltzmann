@@ -18,6 +18,10 @@ last. A failure part-way through leaves orphan blobs that a prune reclaims, and 
 still current. There is no state in which a root names a block the store does not hold.
 """
 
+# Catalog validation speaks the ingestion verdict vocabulary, so its import intentionally follows
+# ingestion package initialization below.  Keeping that dependency direction avoids an import cycle.
+# ruff: noqa: I001
+
 from __future__ import annotations
 
 import json
@@ -69,6 +73,13 @@ from boltzmann.blocks.provenance import (
     RemovalMechanism,
     RemovalRecord,
     SupersessionRecord,
+)
+from boltzmann.catalog import (
+    Catalog,
+    CatalogBrowseResult,
+    CatalogDeclaration,
+    CatalogPathView,
+    ClassificationRequest,
 )
 from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.distribution.layers import pack_history, pack_module, unpack_history, unpack_layer
@@ -130,6 +141,7 @@ from boltzmann.ingest.register import RegistrationRequest, RegistrationResult
 from boltzmann.ingest.schema import candidates_schema as _candidates_schema
 from boltzmann.ingest.task import PROPOSABLE_MEMORY_TYPES, ProcessingTask, TaskOperation
 from boltzmann.ingest.validation import ValidationReport, ValidationStatus, Validator, validate
+from boltzmann.catalog_validation import ClassificationResult, validate_declarations
 from boltzmann.merkle.proof import InclusionProof
 from boltzmann.merkle.tree import sorted_leaves
 from boltzmann.module.composition import Composition
@@ -1372,6 +1384,57 @@ class Brain:
         # query already paid for -- and invalidated by anything that could change the answer,
         # which is the head or the record set.
         return bundle.model_copy(update={"authorship": self._authorship()})
+
+    # --- Catalog --------------------------------------------------------------
+
+    def classify(
+        self,
+        request: ClassificationRequest | Sequence[CatalogDeclaration],
+    ) -> ClassificationResult:
+        """Declare catalog structure or place canonical sources in catalog classes.
+
+        Declarations are checked sequentially, so one atomic request may declare a scheme, its
+        classes, their hierarchy, and placements that refer to those new classes. Invalid declarations
+        receive verdicts and are omitted; every validated declaration is committed in one snapshot.
+
+        Args:
+            request (ClassificationRequest | Sequence[CatalogDeclaration]): Catalog declarations.
+
+        Returns:
+            ClassificationResult: One verdict per declaration and the commit they produced.
+        """
+        typed = (
+            request if isinstance(request, ClassificationRequest) else ClassificationRequest(declarations=list(request))
+        )
+        verdicts, blocks, placements = validate_declarations(typed, self.modules())
+        if not blocks:
+            return ClassificationResult(verdicts=verdicts, commit=CommitResult(snapshot=self._snapshot))
+
+        now = utc_timestamp()
+        producer = Producer(kind=ProducerKind.ACTOR, id=self.actor.id)
+        provenance = [
+            ProvenanceBlock(
+                record=DerivationRecord(
+                    block=placement.block_id,
+                    derived_from=[placement.source],
+                    producer=producer,
+                    actor=self.actor,
+                    at=now,
+                    task="catalog-placement",
+                )
+            )
+            for placement in placements
+        ]
+        commit = self._write(blocks={MemoryType.SEMANTIC: list(blocks)}, provenance=provenance)
+        return ClassificationResult(verdicts=verdicts, commit=commit)
+
+    def browse(self, classes: BlockId | Sequence[BlockId]) -> CatalogBrowseResult:
+        """Browse canonical sources classified in one class or a faceted intersection."""
+        return Catalog(self.modules()).browse(classes)
+
+    def catalog_path(self, schemes: Sequence[str]) -> CatalogPathView:
+        """Build a virtual slash-separated view using the given scheme order."""
+        return CatalogPathView(self, schemes)
 
     # --- Ingestion: register --------------------------------------------------
 

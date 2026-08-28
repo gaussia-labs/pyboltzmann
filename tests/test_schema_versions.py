@@ -166,8 +166,8 @@ class TestWhichVersionABlockIsWrittenAs:
         """Deliberate: the removal ledger must stay readable by every client, of every version."""
         assert Block.schemas(MemoryType.PROVENANCE) == (Block.registry()[(MemoryType.PROVENANCE, 1)],)
 
-    def test_an_invalid_payload_reports_the_newest_schema_error(self) -> None:
-        """Falling back through versions must not bury the diagnosis in the oldest one's vocabulary.
+    def test_an_invalid_payload_reports_the_closest_schema_error(self) -> None:
+        """Sibling schema shapes must report the family the payload was trying to use.
 
         A payload naming malformed content is invalid everywhere, but only v2 has a ``content``
         field to complain about. If the reported failure were v1's it would read "extra inputs are
@@ -179,24 +179,24 @@ class TestWhichVersionABlockIsWrittenAs:
         assert SemanticBlockV2.__name__ in detail
         assert "extra_forbidden" not in detail
 
-    def test_registering_a_third_version_does_not_move_what_a_plain_payload_resolves_to(self) -> None:
+    def test_registering_a_fourth_version_does_not_move_what_a_plain_payload_resolves_to(self) -> None:
         """The policy in one test: adding a schema is additive, never retroactive.
 
         Declaring a class is normally a session-wide hazard, since ``__init_subclass__`` writes into
         a module global with no removal API. The autouse fixture in ``conftest`` is what makes it
-        safe to do here, so this can assert on a real third version rather than on a stand-in.
+        safe to do here, so this can assert on a real fourth version rather than on a stand-in.
         """
 
-        class SemanticBlockV3(SemanticBlockV2):
-            SCHEMA_VERSION = 3
+        class SemanticBlockV4(SemanticBlockV2):
+            SCHEMA_VERSION = 4
             provenance_note: str | None = None
 
-        assert len(Block.schemas(MemoryType.SEMANTIC)) == 3
+        assert len(Block.schemas(MemoryType.SEMANTIC)) == 4
 
         assert type(Block.build(MemoryType.SEMANTIC, _payload())) is SemanticBlock
         reference = ContentRef(blob=OciDigest.of(DIAGRAM), media_type="image/png", size=len(DIAGRAM))
         assert type(Block.build(MemoryType.SEMANTIC, _payload(content=reference))) is SemanticBlockV2
-        assert type(Block.build(MemoryType.SEMANTIC, {**_payload(), "provenance_note": "n"})) is SemanticBlockV3
+        assert type(Block.build(MemoryType.SEMANTIC, {**_payload(), "provenance_note": "n"})) is SemanticBlockV4
 
 
 class TestWhatAReferenceDeclares:
@@ -417,6 +417,7 @@ class TestAnOlderSdkMeetsANewerBrain:
         await _brain(tmp_path / "a", plain=2).push(registry, REFERENCE, "v1")
 
         old_client(MemoryType.SEMANTIC, 2)
+        old_client(MemoryType.SEMANTIC, 3)
         target = Brain.open(tmp_path / "b", actor=SAM)
         await target.pull(registry, REFERENCE, "v1")
         assert target.verify()
@@ -428,6 +429,7 @@ class TestAnOlderSdkMeetsANewerBrain:
         await _brain(tmp_path / "a", plain=0, naming=2).push(registry, REFERENCE, "v1")
 
         old_client(MemoryType.SEMANTIC, 2)
+        old_client(MemoryType.SEMANTIC, 3)
         target = Brain.open(tmp_path / "b", actor=SAM)
         with pytest.raises(DistributionError, match="schema version 2") as caught:
             await target.pull(registry, REFERENCE, "v1")
@@ -444,6 +446,7 @@ class TestAnOlderSdkMeetsANewerBrain:
         await _brain(tmp_path / "a", plain=0, naming=2).push(registry, REFERENCE, "v1")
 
         old_client(MemoryType.SEMANTIC, 2)
+        old_client(MemoryType.SEMANTIC, 3)
         target = Brain.open(tmp_path / "b", actor=SAM)
         pulled: list[str] = []
         original = registry.pull_blob
@@ -466,6 +469,7 @@ class TestAnOlderSdkMeetsANewerBrain:
         await source.push(registry, REFERENCE, "v1")
 
         old_client(MemoryType.SEMANTIC, 2)
+        old_client(MemoryType.SEMANTIC, 3)
         target = Brain.open(tmp_path / "b", actor=SAM)
         await target.pull(registry, REFERENCE, "v1", modules=[MemoryType.CANONICAL])
 
@@ -480,6 +484,7 @@ class TestAnOlderSdkMeetsANewerBrain:
         stored = SemanticBlockV2.model_validate(_payload(content=reference)).canonical_bytes()
 
         old_client(MemoryType.SEMANTIC, 2)
+        old_client(MemoryType.SEMANTIC, 3)
         with pytest.raises(BlockSchemaError, match="upgrade boltzmann") as caught:
             Block.decode(stored)
         assert "this client knows [1]" in str(caught.value)

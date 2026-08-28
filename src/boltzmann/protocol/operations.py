@@ -14,11 +14,13 @@ The surface is split because *read* and *extend* are separable, and most consume
 
 * :class:`BrainReader` -- discovery, resolution, verification, query.
 * :class:`BrainWriter` -- ingestion: register, delegate, validate, commit.
+Catalog browsing belongs to :class:`BrainReader`; catalog classification belongs to
+:class:`BrainWriter`, matching the operation table in paper Section 6.7.
 * :class:`BrainRetention` -- drop, supersede, prune, redact.
 * :class:`BrainDistribution` -- pack, push, pull, fetch.
 * :class:`BrainReconciliation` -- merge, rebase, squash, and resolving what did not apply.
 * :class:`BrainAuthenticity` -- sign, authenticate, pin, rotate, revoke.
-* :class:`BoltzmannProtocol` -- all six, for an implementation that offers everything.
+* :class:`BoltzmannProtocol` -- all six contracts, for an implementation that offers everything.
 
 A read-only client that satisfies :class:`BrainReader` is conforming. It does not have to pretend to
 support writes it will refuse.
@@ -44,6 +46,13 @@ from boltzmann.authenticity.signers import Signer
 from boltzmann.authenticity.trust_root import TrustRoot
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
+from boltzmann.catalog import (
+    CatalogBrowseResult,
+    CatalogDeclaration,
+    CatalogPathView,
+    ClassificationRequest,
+)
+from boltzmann.catalog_validation import ClassificationResult
 from boltzmann.distribution.manifest import BrainManifest
 from boltzmann.distribution.registry import FetchResult, RegistryClient
 from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
@@ -204,6 +213,14 @@ class BrainReader(Protocol):
         """
         ...
 
+    def browse(self, classes: BlockId | Sequence[BlockId]) -> CatalogBrowseResult:
+        """Browse a class or faceted class intersection, including descendant placements."""
+        ...
+
+    def catalog_path(self, schemes: Sequence[str]) -> CatalogPathView:
+        """Build a virtual slash-separated read view over ordered catalog schemes."""
+        ...
+
 
 @runtime_checkable
 class BrainWriter(Protocol):
@@ -283,6 +300,13 @@ class BrainWriter(Protocol):
         Returns:
             CommitResult: The new snapshot and the new roots.
         """
+        ...
+
+    def classify(
+        self,
+        request: ClassificationRequest | Sequence[CatalogDeclaration],
+    ) -> ClassificationResult:
+        """Validate and atomically commit catalog declarations and canonical placements."""
         ...
 
 
@@ -857,7 +881,13 @@ class BrainAuthenticity(Protocol):
 
 @runtime_checkable
 class BoltzmannProtocol(
-    BrainReader, BrainWriter, BrainRetention, BrainDistribution, BrainReconciliation, BrainAuthenticity, Protocol
+    BrainReader,
+    BrainWriter,
+    BrainRetention,
+    BrainDistribution,
+    BrainReconciliation,
+    BrainAuthenticity,
+    Protocol,
 ):
     """An implementation that offers the whole protocol.
 
