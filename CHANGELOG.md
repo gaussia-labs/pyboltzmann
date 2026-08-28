@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.7.0 (2026-08-28)
+
+### Continuous Integration
+
+- Use the GitHub Actions bot for release commits
+  ([`1559450`](https://github.com/gaussia-labs/pyboltzmann/commit/15594503ed4d7c3a249d2aaa601b1d11483881e1))
+
+
 ## v0.7.0-b.2 (2026-08-28)
 
 ### Bug Fixes
