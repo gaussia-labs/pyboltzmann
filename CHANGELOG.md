@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.7.1-b.1 (2026-08-28)
+
+### Bug Fixes
+
+- **reconcile**: Refuse multiple best common ancestors
+  ([`29a58dd`](https://github.com/gaussia-labs/pyboltzmann/commit/29a58dd19af7e2c12c5007deb4c6171bdb17be72))
+
+
 ## v0.7.0 (2026-08-28)
 
 ### Continuous Integration
