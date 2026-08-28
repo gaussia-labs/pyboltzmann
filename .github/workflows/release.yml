@@ -84,10 +84,12 @@ jobs:
         id: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GIT_COMMIT_AUTHOR: github-actions <actions@github.com>
+          GIT_COMMIT_AUTHOR: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
         run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
+          # Use GitHub's canonical Actions bot identity so release commits link to the bot account
+          # instead of the unrelated generic `actions-user` profile.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           export PATH="/tmp/psr/bin:$PATH"
           semantic-release -v version
 
