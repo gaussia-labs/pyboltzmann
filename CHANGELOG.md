@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.8.0-b.3 (2026-08-28)
+
+### Bug Fixes
+
+- **authenticity**: Enforce SSHSIG and key security floors
+  ([`24b3dfe`](https://github.com/gaussia-labs/pyboltzmann/commit/24b3dfe7c9a8673cecf6b40074275e4d8de09c68))
+
+
 ## v0.8.0-b.2 (2026-08-28)
 
 ### Bug Fixes
