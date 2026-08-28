@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.8.0-b.5 (2026-08-28)
+
+### Features
+
+- **distribution**: Add typed projection configs
+  ([`c0f279b`](https://github.com/gaussia-labs/pyboltzmann/commit/c0f279bbb2c7ddd68486682fd3bf6bea68ff81cc))
+
+
 ## v0.8.0-b.4 (2026-08-28)
 
 ### Bug Fixes
