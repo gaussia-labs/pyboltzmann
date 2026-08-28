@@ -1,6 +1,19 @@
 # CHANGELOG
 
 
+## v0.7.0-b.2 (2026-08-28)
+
+### Bug Fixes
+
+- Harden catalog integration
+  ([`a8a721a`](https://github.com/gaussia-labs/pyboltzmann/commit/a8a721a975b158f48067468691470c83301bd4f5))
+
+### Features
+
+- **catalog**: Add hierarchical catalog navigation
+  ([`c01a306`](https://github.com/gaussia-labs/pyboltzmann/commit/c01a30623347098255ac525c396e12803b5ff759))
+
+
 ## v0.7.0-b.1 (2026-08-25)
 
 ### Bug Fixes
