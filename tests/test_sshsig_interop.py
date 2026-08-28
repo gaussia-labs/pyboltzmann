@@ -17,7 +17,7 @@ import pytest
 
 from boltzmann.authenticity import SshPublicKey, SshSignature, rfc4253_signature, sign, verify
 from boltzmann.constants import SNAPSHOT_NAMESPACE
-from boltzmann.exceptions import SignatureInvalidError
+from boltzmann.exceptions import SignatureFormatError, SignatureInvalidError
 
 requires_ssh_keygen = pytest.mark.skipif(
     shutil.which("ssh-keygen") is None,
@@ -135,15 +135,14 @@ class TestTheirsUnderUs:
         assert signature.hash_algorithm == "sha512"
         assert verify(signature, MESSAGE).matches(public)
 
-    def test_an_openssh_sha256_signature_also_verifies(self, keypair: tuple) -> None:
-        key_path, public, _ = keypair
+    def test_an_openssh_sha256_signature_is_rejected_by_protocol_policy(self, keypair: tuple) -> None:
+        key_path, _, _ = keypair
         result = _ssh_keygen(
             "-Y", "sign", "-f", str(key_path), "-n", SNAPSHOT_NAMESPACE, "-O", "hashalg=sha256", stdin=MESSAGE
         )
         assert result.returncode == 0, result.stderr.decode()
-        signature = SshSignature.parse(result.stdout.decode("ascii"))
-        assert signature.hash_algorithm == "sha256"
-        assert verify(signature, MESSAGE).matches(public)
+        with pytest.raises(SignatureFormatError, match="sha256"):
+            SshSignature.parse(result.stdout.decode("ascii"))
 
     def test_an_openssh_signature_over_other_bytes_is_a_forgery_here(self, keypair: tuple) -> None:
         key_path, _, _ = keypair

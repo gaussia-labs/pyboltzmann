@@ -51,6 +51,7 @@ from boltzmann.exceptions import (
     UnsignedBrainError,
     UnsupportedKeyTypeError,
     VerificationUnavailableError,
+    WeakKeyError,
 )
 from boltzmann.identity.digest import OciDigest
 from boltzmann.module.snapshot import Snapshot
@@ -597,7 +598,7 @@ class Authenticator:
             verify_sshsig(parsed, snapshot.canonical_bytes())
         except NamespaceMismatchError as error:
             return verdict(SignatureOutcome.WRONG_NAMESPACE, str(error), embedded=embedded.fingerprint), None, False
-        except UnsupportedKeyTypeError as error:
+        except (UnsupportedKeyTypeError, WeakKeyError) as error:
             return (
                 verdict(SignatureOutcome.UNSUPPORTED_KEY_TYPE, str(error), embedded=embedded.fingerprint),
                 None,
@@ -738,7 +739,13 @@ class Authenticator:
                 if parsed.public_key.fingerprint != record.key:
                     continue
                 verify_sshsig(parsed, message)
-            except (SignatureFormatError, SignatureInvalidError, NamespaceMismatchError, UnsupportedKeyTypeError):
+            except (
+                SignatureFormatError,
+                SignatureInvalidError,
+                NamespaceMismatchError,
+                UnsupportedKeyTypeError,
+                WeakKeyError,
+            ):
                 continue
             except VerificationUnavailableError:
                 return 0

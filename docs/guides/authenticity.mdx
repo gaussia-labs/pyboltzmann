@@ -196,6 +196,14 @@ fact from "failed", and a missing dependency must never read as a forgery — or
   which is the point of never holding the key.
 </Note>
 
+## Verification security floor
+
+Boltzmann signatures pin SSHSIG's message hash to SHA-512. A generic SSHSIG document using SHA-256
+is valid SSH syntax, but it is not a valid Boltzmann signature. Verification also requires canonical
+Ed25519 point encodings, `S` below the group order, the strict cofactorless equation, and a public key
+outside the small-order subgroup. `ssh-dss` is always refused; RSA keys below 3072 bits are refused
+before the SDK reports whether that algorithm is implemented.
+
 ## Golden vectors
 
 Two published files pin this behaviour for any implementation, in any language:

@@ -287,6 +287,16 @@ class UnsupportedKeyTypeError(AuthenticityError):
     """
 
 
+class WeakKeyError(AuthenticityError):
+    """Exception raised when a key is below the protocol's verification security floor.
+
+    Distinct from :class:`UnsupportedKeyTypeError`: an unsupported key may become verifiable in
+    a wider client, while DSA and undersized RSA are deliberately refused even by a client that
+    otherwise implements them. Callers can therefore distinguish missing capability from a
+    security-policy rejection without treating either one as a forged signature.
+    """
+
+
 class UnsignedBrainError(AuthenticityError):
     """Exception raised when a signature was required and none is present.
 

@@ -30,13 +30,18 @@ from pydantic import GetCoreSchemaHandler
 from pydantic_core import core_schema
 
 from boltzmann.authenticity.wire import WireReader, put_string
-from boltzmann.exceptions import SignatureFormatError
+from boltzmann.exceptions import SignatureFormatError, WeakKeyError
 
 ED25519_KEY_TYPE = "ssh-ed25519"
 """The RECOMMENDED key type (paper Section 8.3), and the only one this SDK verifies."""
 
 ED25519_KEY_BYTES = 32
 """Length of a raw Ed25519 public key."""
+
+RSA_KEY_TYPE = "ssh-rsa"
+DSA_KEY_TYPE = "ssh-dss"
+MIN_RSA_BITS = 3072
+"""The verification floor for legacy RSA keys. DSA is refused at every size."""
 
 SUPPORTED_KEY_TYPES = frozenset({ED25519_KEY_TYPE})
 """Key types this version of the SDK can verify signatures from.
@@ -54,6 +59,20 @@ MAX_KEY_BLOB = 1 << 14
 
 _AUTHORIZED_KEY_PATTERN = re.compile(r"^(\S+) ([A-Za-z0-9+/=]+)$")
 """Exactly two fields, one space, standard base64. No options prefix, no comment."""
+
+
+def _positive_mpint(raw: bytes, field: str) -> int:
+    """Decode the canonical positive subset of RFC 4251 ``mpint`` used by RSA keys."""
+    if not raw:
+        raise SignatureFormatError(f"an {field} mpint must not be empty")
+    if raw[0] & 0x80:
+        raise SignatureFormatError(f"an {field} mpint must be positive")
+    if len(raw) > 1 and raw[0] == 0 and not raw[1] & 0x80:
+        raise SignatureFormatError(f"an {field} mpint has a redundant leading zero")
+    value = int.from_bytes(raw, "big")
+    if value == 0:
+        raise SignatureFormatError(f"an {field} mpint must be positive")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +224,33 @@ class SshPublicKey:
         reader = WireReader(self.blob)
         reader.string()
         return reader.string()
+
+    def require_security_floor(self) -> None:
+        """Reject key families and sizes forbidden by the protocol verification policy.
+
+        This check intentionally precedes the SDK's supported-algorithm check. A 2048-bit RSA
+        key is not merely unimplemented here: it must remain rejected if RSA support is added
+        later, and callers need to be able to tell those two cases apart.
+
+        Raises:
+            WeakKeyError: If the key is DSA or RSA smaller than 3072 bits.
+            SignatureFormatError: If an RSA blob does not contain canonical positive mpints.
+        """
+        if self.key_type == DSA_KEY_TYPE:
+            raise WeakKeyError("ssh-dss is below the protocol security floor and is never accepted")
+        if self.key_type != RSA_KEY_TYPE:
+            return
+
+        reader = WireReader(self.blob)
+        reader.string()
+        exponent = _positive_mpint(reader.string(), "RSA public exponent")
+        modulus = _positive_mpint(reader.string(), "RSA modulus")
+        reader.finish()
+        if exponent < 3 or exponent % 2 == 0:
+            raise SignatureFormatError("an RSA public exponent must be an odd integer of at least 3")
+        bits = modulus.bit_length()
+        if bits < MIN_RSA_BITS:
+            raise WeakKeyError(f"{bits}-bit RSA is below the protocol security floor of {MIN_RSA_BITS} bits")
 
     def matches(self, other: SshPublicKey) -> bool:
         """
