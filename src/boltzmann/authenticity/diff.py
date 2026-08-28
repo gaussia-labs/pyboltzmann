@@ -13,13 +13,10 @@ is certainly required) from ``possible`` (everything that might be). A key is ju
 authorized only against ``possible``: a verifier that quietly computed a smaller requirement
 from a truncated history would be exploitable by shipping a truncated history.
 
-**The one uncomputable cell.** The paper says ``redact`` is required when "blocks became
-tombstoned" -- but tombstoning changes no root; that is redaction's defining property. A pure
-redaction produces an *empty* snapshot diff, so no function of two snapshot documents can detect
-it. The only in-band evidence is the provenance record the redaction wrote, which is why this
-module reads added provenance blocks -- and why a verifier without the provenance module reports
-``redact`` as undetermined, never as not required. A redaction performed without writing its
-record is undetectable by any verifier, which restates Principle 8 rather than weakening it.
+**Redaction is signed state.** Tombstoning changes no Merkle root, so each module reference carries
+the destroyed identities its composition still names. Growth of that set is the directly computable
+``redact`` trigger. Added provenance remains a compatibility path for snapshots written before the
+field existed; unreadable legacy evidence stays fail-closed.
 """
 
 from __future__ import annotations
@@ -163,6 +160,10 @@ def required_scopes(evidence: ScopeEvidence) -> RequiredScopes:
     for memory_type in {**parent_modules, **child.modules}:
         child_ref = child.modules.get(memory_type)
         parent_ref = parent_modules.get(memory_type)
+        child_tombstones = set(child_ref.tombstones or ()) if child_ref is not None else set()
+        parent_tombstones = set(parent_ref.tombstones or ()) if parent_ref is not None else set()
+        if child_tombstones - parent_tombstones:
+            scopes.add(Scope.REDACT)
         if child_ref is not None and parent_ref is not None and child_ref.root == parent_ref.root:
             continue
         if memory_type is not MemoryType.CANONICAL:
@@ -191,7 +192,7 @@ def required_scopes(evidence: ScopeEvidence) -> RequiredScopes:
                 if delta.removed:
                     scopes.add(Scope.DROP_CANONICAL)
 
-    # redact: only the provenance record betrays it (see the module docstring).
+    # Legacy redact: before ModuleRef carried tombstones, only the provenance record betrayed it.
     child_provenance = child.modules.get(MemoryType.PROVENANCE)
     parent_provenance = parent_modules.get(MemoryType.PROVENANCE)
     provenance_advanced = child_provenance is not None and (

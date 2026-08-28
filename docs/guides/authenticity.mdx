@@ -69,7 +69,8 @@ Three rules do most of the work:
 
 - **Scopes are computed, never believed.** What a snapshot required comes from its difference against its
   first parent — canonical gained blocks → `ingest`, canonical lost blocks → `drop:canonical`, a derived
-  module changed → `commit`, the trust root changed → `govern`, a redaction record appeared → `redact`.
+  module changed → `commit`, the trust root changed → `govern`, a module's signed `tombstones` list grew →
+  `redact`.
   The `scopes` a signature claims aid diagnosis and decide nothing.
 - **The trust root in force is the parent's.** A revision's own signatures answer to the list it is
   *replacing* — which is why a key cannot admit itself (see below).

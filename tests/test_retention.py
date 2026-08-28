@@ -635,6 +635,26 @@ class TestRedaction:
         assert brain.root_of(MemoryType.CANONICAL) == root
         assert brain.prove(source, MemoryType.CANONICAL).verify(root)
 
+    def test_redaction_grows_the_signed_tombstone_set_in_one_successor(self) -> None:
+        brain, source = self.make()
+        before = brain.snapshot()
+
+        result = brain.redact(source, MemoryType.CANONICAL, reason="GDPR art. 17")
+
+        reference = result.snapshot.modules[MemoryType.CANONICAL]
+        assert reference.tombstones == [source]
+        assert reference.root == before.modules[MemoryType.CANONICAL].root
+        assert result.snapshot.parents == [before.digest]
+        assert result.snapshot.digest != before.digest
+
+    def test_a_later_write_preserves_tombstones_the_composition_still_names(self) -> None:
+        brain, source = self.make()
+        brain.redact(source, MemoryType.CANONICAL, reason="GDPR art. 17")
+
+        brain.register(b"%PDF-1.7 public data", REQUEST)
+
+        assert brain.snapshot().modules[MemoryType.CANONICAL].tombstones == [source]
+
     def test_the_observed_bytes_are_destroyed_too(self) -> None:
         """Redacting the descriptor and leaving the source readable would redact nothing."""
         brain, source = self.make()

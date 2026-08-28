@@ -96,12 +96,12 @@ def required_blobs(module: Module) -> list[Digest]:
         list[Digest]: The block envelopes, plus the content the blocks name but do not carry. Sorted, so
         the answer does not depend on iteration order.
     """
-    needed: list[Digest] = list(module.composition.block_ids)
+    needed: list[Digest] = [block_id for block_id in module.composition.block_ids if block_id not in module.tombstones]
 
     # Asked of every module, not only canonical: a block of any type may name its content, and content
     # this misses is a published layer whose pointers lead nowhere.
     for block_id in module.composition.block_ids:
-        if not module.store.is_resolvable(block_id):
+        if block_id in module.tombstones or not module.store.is_resolvable(block_id):
             continue
         needed.extend(module.get(block_id).content_digests)
 
@@ -298,7 +298,13 @@ def _inflate(data: bytes, limit: int) -> bytes:
     return inflated.getvalue()
 
 
-def unpack_layer(data: bytes, store: BlockStore, max_size: int | None = None) -> Composition:
+def unpack_layer(
+    data: bytes,
+    store: BlockStore,
+    max_size: int | None = None,
+    *,
+    tombstones: Iterable[BlockId] = (),
+) -> Composition:
     """
     Unpack a layer into a store and recover the composition it carries.
 
@@ -316,6 +322,8 @@ def unpack_layer(data: bytes, store: BlockStore, max_size: int | None = None) ->
         data (bytes): The layer blob.
         store (BlockStore): Where to write the unpacked blobs.
         max_size (int | None): Most bytes the layer may decompress to. Defaults to the ratio bound.
+        tombstones (Iterable[BlockId]): Signed identities intentionally omitted because their bytes
+            were destroyed. They are restored into the receiving store's tombstone sidecar.
 
     Returns:
         Composition: The composition the layer carries.
@@ -357,6 +365,13 @@ def unpack_layer(data: bytes, store: BlockStore, max_size: int | None = None) ->
             )
 
     composition = Composition.from_document(document)
+    destroyed = set(tombstones)
+    outside = destroyed - set(composition.block_ids)
+    if outside:
+        named = ", ".join(sorted(block.short for block in outside))
+        raise DistributionError(f"layer declares tombstones outside its composition: {named}")
+    for block_id in destroyed:
+        store.tombstone(block_id, "declared by the signed module reference")
     missing = [block_id.short for block_id in composition.block_ids if not store.has(block_id)]
     if missing:
         raise DistributionError(f"layer's composition names blocks the layer did not carry: {', '.join(missing)}")

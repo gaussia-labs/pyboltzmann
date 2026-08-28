@@ -110,6 +110,10 @@ class MembershipError(SnapshotError):
     """Exception raised when a block does not belong to the installed snapshot."""
 
 
+class RemovalInvariantError(SnapshotError):
+    """Exception raised when an absent block has no reachable removal record."""
+
+
 # --- Protocol operations ------------------------------------------------------
 
 

@@ -8,6 +8,7 @@ from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.semantic import SemanticBlock, SemanticKind
 from boltzmann.exceptions import (
     AppendOnlyViolationError,
+    BlockTombstonedError,
     MembershipError,
     MemoryTypeError,
     ModuleError,
@@ -121,6 +122,22 @@ class TestModule:
         assert module.verify()
         assert module.resolvable()[blocks[0].block_id] is False
         assert module.inclusion_proof(blocks[0].block_id).verify(module.root)
+
+    def test_a_signed_tombstone_hides_bytes_even_when_the_store_still_has_them(
+        self, store: MemoryBlockStore, blocks: list[SemanticBlock]
+    ) -> None:
+        target = blocks[0].block_id
+        module = Module(
+            MemoryType.SEMANTIC,
+            store,
+            Composition(MemoryType.SEMANTIC, [target]),
+            tombstones=[target],
+        )
+
+        assert store.is_resolvable(target)
+        assert module.resolvable()[target] is False
+        with pytest.raises(BlockTombstonedError):
+            module.get(target)
 
     def test_deriving_shares_the_store(self, store: MemoryBlockStore, blocks: list[SemanticBlock]) -> None:
         module = Module(MemoryType.SEMANTIC, store, Composition(MemoryType.SEMANTIC, [b.block_id for b in blocks]))
@@ -284,6 +301,30 @@ class TestSnapshot:
             embedding_model="qwen3-embedding@1.0",
         )
         assert reference.index_digest is None
+
+    def test_tombstones_are_canonical_block_identities(self) -> None:
+        later = BlockId.of(b"later")
+        earlier = BlockId.of(b"earlier")
+        reference = ModuleRef(
+            memory_type=MemoryType.SEMANTIC,
+            root=MerkleRoot.of(b"semantic"),
+            composition=OciDigest.of(b"semantic leaves"),
+            block_count=2,
+            tombstones=[later, earlier, later],
+        )
+        assert reference.tombstones == sorted({later, earlier}, key=lambda value: value.raw)
+
+    def test_an_empty_tombstone_set_keeps_legacy_snapshot_bytes(self) -> None:
+        snapshot = self.build(MemoryType.SEMANTIC)
+        assert b"tombstones" not in snapshot.canonical_bytes()
+
+    def test_newly_persisted_module_refs_emit_even_an_empty_tombstone_set(self) -> None:
+        store = MemoryBlockStore()
+        reference = Module(MemoryType.SEMANTIC, store).persist()
+        snapshot = Snapshot.of([reference])
+
+        assert reference.tombstones == []
+        assert b'"tombstones":[]' in snapshot.canonical_bytes()
 
 
 class TestSnapshotTrustRoot:
