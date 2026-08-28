@@ -175,6 +175,15 @@ class NoCommonAncestorError(ReconciliationError):
     """
 
 
+class MultipleMergeBasesError(ReconciliationError):
+    """Exception raised when reconciliation has more than one best common ancestor.
+
+    A criss-cross history can have several incomparable common ancestors. Choosing whichever one a
+    traversal happens to encounter first makes the three-way merge depend on parent order, so the
+    protocol requires the histories to be reconciled until a later merge has one unambiguous base.
+    """
+
+
 class ReconciliationHaltedError(ReconciliationError):
     """Exception raised when a reconciliation stopped because something did not apply cleanly.
 
