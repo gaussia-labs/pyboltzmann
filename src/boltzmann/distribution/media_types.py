@@ -31,9 +31,9 @@ MODULE_MEDIA_TYPE_TEMPLATE = "application/vnd.gaussia.boltzmann.module.{memory_t
 
 gzip rather than zstd because it is in the standard library, and a protocol SDK that needed a
 compression dependency to read a published brain would be trading portability for a few percent.
-Both the tar and the gzip stream are written deterministically (see
-:mod:`boltzmann.distribution.layers`), so two clients packing the same module produce byte-identical
-layers -- without that, push deduplication would silently stop working.
+Packing is deterministic within this implementation (see :mod:`boltzmann.distribution.layers`), and
+an unchanged composition reuses its existing layer digest. Cross-implementation byte identity is not
+required: conforming gzip encoders may choose different streams for the same module contents.
 """
 
 VECTOR_INDEX_MEDIA_TYPE = "application/vnd.gaussia.boltzmann.index.vector.v1+bin"
