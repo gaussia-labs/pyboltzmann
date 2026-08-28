@@ -58,6 +58,8 @@ def reachable_from(snapshot: Snapshot, store: BlockStore) -> set[str]:
 
     for reference in snapshot.modules.values():
         keep.add(reference.composition.hex)
+        if reference.index_digest is not None:
+            keep.add(reference.index_digest.hex)
         composition = _read_composition(reference.composition, store)
         if composition is None:
             continue

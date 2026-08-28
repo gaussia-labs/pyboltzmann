@@ -1877,7 +1877,8 @@ class Brain:
             if memory_type in excluded:
                 module = module.without_blocks(excluded[memory_type])
             self._rebuild_indices(module)
-            reference = module.persist(embedding_model=self._embedding_model(memory_type))
+            embedding_model, index_digest = self._travelling_index_binding(memory_type)
+            reference = module.persist(embedding_model=embedding_model, index_digest=index_digest)
             references.append(reference)
             roots[memory_type] = reference.root
             if memory_type is not MemoryType.PROVENANCE:
@@ -1994,25 +1995,33 @@ class Brain:
                 continue  # Unreadable, or a manifest for some other version of this brain.
 
             for memory_type in self.indices:
-                layer = manifest.vector_index_for(memory_type)
-                if layer is None or not self.store.is_resolvable(layer.digest):
-                    continue
                 try:
+                    layer = self._validated_vector_index(manifest, self._snapshot, memory_type)
+                    if layer is None or not self.store.is_resolvable(layer.digest):
+                        continue
                     self._load_index(memory_type, layer)
-                except DistributionError:
-                    # Most likely an index built by a model this client no longer uses. Refusing it is
-                    # right; refusing to *open the brain* over it is not. Opening is not a request to
-                    # install anything, so the layer is skipped and the module simply has no vector index
-                    # -- which ``travelling_indices`` reports, and a repack replaces.
+                except DistributionError as error:
+                    # Opening is not a request to install anything, so an unusable layer must not strand
+                    # the brain. It is skipped, but never loaded merely because a mutable local manifest
+                    # names it: the signed snapshot remains the authority over the payload digest.
+                    logging.getLogger(__name__).warning(
+                        "ignoring the %s travelling index while opening this brain: %s",
+                        memory_type.value,
+                        error,
+                    )
                     continue
             return
 
-    def _embedding_model(self, memory_type: MemoryType) -> str | None:
-        for index in self.indices.get(memory_type, []):
-            if index.model_tag is not None:
-                return index.model_tag
-        reference = self._snapshot.modules.get(memory_type)
-        return reference.embedding_model if reference else None
+    def _travelling_index_binding(self, memory_type: MemoryType) -> tuple[str | None, OciDigest | None]:
+        """Persist the exact travelling-index payload built for a new module reference."""
+        travelling = [index for index in self.indices.get(memory_type, []) if not index.rebuildable]
+        if not travelling or memory_type not in self._vouched:
+            return None, None
+        index = travelling[0]
+        if not isinstance(index, TravellingIndex) or index.model_tag is None:
+            return None, None
+        payload = index.dump()
+        return index.model_tag, self.store.put_bytes(payload)
 
     # --- Retention -------------------------------------------------------------
 
@@ -3410,7 +3419,8 @@ class Brain:
                 self._index_map(memory_type),
             )
             self._rebuild_indices(module)
-            references.append(module.persist(embedding_model=self._embedding_model(memory_type)))
+            embedding_model, index_digest = self._travelling_index_binding(memory_type)
+            references.append(module.persist(embedding_model=embedding_model, index_digest=index_digest))
             roots[memory_type] = references[-1].root
 
         for memory_type, reference in carried.items():
@@ -3854,30 +3864,31 @@ class Brain:
         travelling index, which is true.
         """
         travelling = [index for index in self.indices.get(memory_type, []) if not index.rebuildable]
-        if not travelling or memory_type not in self._vouched:
-            return None
-
-        index = travelling[0]
-        if not isinstance(index, TravellingIndex):
+        if travelling and memory_type in self._vouched and not isinstance(travelling[0], TravellingIndex):
+            index = travelling[0]
             raise DistributionError(
                 f"the {index.kind.value} index for {memory_type.value} reports rebuildable=False but "
                 f"cannot dump: an index that no client can rebuild has to be publishable, or the module "
                 f"arrives without it and nothing can regenerate it"
             )
-
-        payload = index.dump()
+        if reference.index_digest is None:
+            return None
+        if not self.store.is_resolvable(reference.index_digest):
+            raise DistributionError(
+                f"the {memory_type.value} snapshot binds travelling index {reference.index_digest.short}, "
+                "but its payload is not resolvable in this store"
+            )
+        payload = self.store.get_bytes(reference.index_digest)
+        assert reference.embedding_model is not None
         annotations = {
             ANNOTATION_MEMORY_TYPE: memory_type.value,
-            ANNOTATION_INDEX_KIND: index.kind.value,
+            ANNOTATION_INDEX_KIND: IndexKind.VECTOR.value,
+            ANNOTATION_EMBEDDING_MODEL: reference.embedding_model,
         }
-        if index.model_tag is not None:
-            annotations[ANNOTATION_EMBEDDING_MODEL] = index.model_tag
-        elif reference.embedding_model is not None:
-            annotations[ANNOTATION_EMBEDDING_MODEL] = reference.embedding_model
 
         return Descriptor(
             media_type=VECTOR_INDEX_MEDIA_TYPE,
-            digest=self.store.put_bytes(payload),
+            digest=reference.index_digest,
             size=len(payload),
             annotations=annotations,
         )
@@ -4052,7 +4063,7 @@ class Brain:
 
         for memory_type in wanted:
             # The one derived structure a model-agnostic client cannot rebuild, so it travels.
-            index_layer = manifest.vector_index_for(memory_type)
+            index_layer = self._validated_vector_index(manifest, remote, memory_type, warn_legacy=False)
             if index_layer is not None and not ignore_vector_indices:
                 if not self.store.is_resolvable(index_layer.digest):
                     await client.pull_blob(reference, index_layer.digest, self.store)
@@ -4242,6 +4253,9 @@ class Brain:
             await client.pull_blob(reference, manifest.config.digest, self.store)
         remote = self._read_remote_snapshot(manifest.config.digest)
 
+        for memory_type in wanted:
+            self._validated_vector_index(manifest, remote, memory_type)
+
         # Before the modules, because it is what makes the retrieved snapshot's parents resolvable, and a
         # caller that fetched a history in order to reconcile against it needs that whether or not the
         # module layers turn out to verify.
@@ -4289,6 +4303,38 @@ class Brain:
             incoming[memory_type] = [block_id for block_id in composition.block_ids if block_id not in held]
 
         return manifest, remote, references, incoming
+
+    def _validated_vector_index(
+        self,
+        manifest: BrainManifest,
+        snapshot: Snapshot,
+        memory_type: MemoryType,
+        *,
+        warn_legacy: bool = True,
+    ) -> Descriptor | None:
+        """Resolve only an index layer whose payload digest the signed snapshot names."""
+        layers = [layer for layer in manifest.layers if layer.is_vector_index and layer.memory_type is memory_type]
+        reference = snapshot.modules.get(memory_type)
+        expected = reference.index_digest if reference is not None else None
+        if expected is None:
+            if layers and warn_legacy:
+                logging.getLogger(__name__).warning(
+                    "ignoring the %s vector index: the snapshot does not bind its payload digest",
+                    memory_type.value,
+                )
+            return None
+        if len(layers) != 1:
+            raise DistributionError(
+                f"the signed snapshot names {memory_type.value} index {expected.short}, but the "
+                f"manifest carries {len(layers)} matching index layers; exactly one is required"
+            )
+        layer = layers[0]
+        if layer.digest != expected:
+            raise DistributionError(
+                f"the signed snapshot names {memory_type.value} index {expected.short}, but the "
+                f"artifact manifest substituted {layer.digest.short}"
+            )
+        return layer
 
     async def fetch(
         self,

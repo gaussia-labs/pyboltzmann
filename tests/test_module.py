@@ -248,6 +248,26 @@ class TestSnapshot:
                 block_count=1,
             )
 
+    def test_a_bound_index_names_the_model_that_produced_it(self) -> None:
+        with pytest.raises(ValidationError, match="must also name its embedding_model"):
+            ModuleRef(
+                memory_type=MemoryType.SEMANTIC,
+                root=MerkleRoot.of(b"semantic"),
+                composition=OciDigest.of(b"semantic leaves"),
+                block_count=1,
+                index_digest=OciDigest.of(b"vectors"),
+            )
+
+    def test_a_legacy_unbound_embedding_model_remains_readable(self) -> None:
+        reference = ModuleRef(
+            memory_type=MemoryType.SEMANTIC,
+            root=MerkleRoot.of(b"semantic"),
+            composition=OciDigest.of(b"semantic leaves"),
+            block_count=1,
+            embedding_model="qwen3-embedding@1.0",
+        )
+        assert reference.index_digest is None
+
 
 class TestSnapshotTrustRoot:
     """The trust root travels on every derivation, and a brain without one keeps its old digests."""

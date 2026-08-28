@@ -43,6 +43,8 @@ class ModuleRef(BaseModel):
             vector index, when one travels with it. The vector index is the one
             derived structure a model-agnostic client cannot rebuild on its own
             (paper Section 6.3).
+        index_digest (OciDigest | None): Digest of the travelling index payload. This places the
+            index inside the signed snapshot bytes instead of trusting the registry manifest.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -53,6 +55,18 @@ class ModuleRef(BaseModel):
     block_count: int = Field(ge=0)
     layout: str = LAYOUT_NAME
     embedding_model: str | None = None
+    index_digest: OciDigest | None = None
+
+    @model_validator(mode="after")
+    def _require_a_model_for_a_bound_index(self) -> Self:
+        """A digest without the model that produced its vectors is not usable safely.
+
+        The reverse is accepted for compatibility with v0.7.0 snapshots. Those legacy references
+        remain readable, but their unbound index layers are never trusted or loaded.
+        """
+        if self.index_digest is not None and self.embedding_model is None:
+            raise ValueError("a module reference with index_digest must also name its embedding_model")
+        return self
 
 
 class Snapshot(BaseModel):

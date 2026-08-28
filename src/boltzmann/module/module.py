@@ -19,7 +19,7 @@ from collections.abc import Iterable, Iterator
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.exceptions import MembershipError, MemoryTypeError
-from boltzmann.identity.digest import BlockId, MerkleRoot
+from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
 from boltzmann.indices.base import Index
 from boltzmann.merkle.diff import CompositionDiff
 from boltzmann.merkle.proof import InclusionProof
@@ -79,7 +79,11 @@ class Module:
         """The composition in canonical leaf order."""
         return self.composition.block_ids
 
-    def persist(self, embedding_model: str | None = None) -> ModuleRef:
+    def persist(
+        self,
+        embedding_model: str | None = None,
+        index_digest: OciDigest | None = None,
+    ) -> ModuleRef:
         """
         Write this version's composition document and describe it for a snapshot.
 
@@ -90,6 +94,7 @@ class Module:
         Args:
             embedding_model (str | None): Model and version behind the vector index, when one
                 travels with the module.
+            index_digest (OciDigest | None): Content address of that index's exact serialized payload.
 
         Returns:
             ModuleRef: The snapshot entry for this module.
@@ -101,6 +106,7 @@ class Module:
             block_count=len(self.composition),
             layout=self.composition.layout,
             embedding_model=embedding_model,
+            index_digest=index_digest,
         )
 
     def __len__(self) -> int:
