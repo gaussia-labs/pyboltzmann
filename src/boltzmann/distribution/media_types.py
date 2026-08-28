@@ -26,6 +26,9 @@ ARTIFACT_TYPE = "application/vnd.gaussia.boltzmann.brain.v1+json"
 CONFIG_MEDIA_TYPE = "application/vnd.gaussia.boltzmann.snapshot.v1+json"
 """Media type of the config blob, which is the snapshot document itself."""
 
+PROJECTION_MEDIA_TYPE = "application/vnd.gaussia.boltzmann.projection.v1+json"
+"""Media type of a selective artifact's projection config document."""
+
 MODULE_MEDIA_TYPE_TEMPLATE = "application/vnd.gaussia.boltzmann.module.{memory_type}.v1.tar+gzip"
 """Media type of one module layer. One layer per module keeps selective installation possible.
 
@@ -142,9 +145,8 @@ REF_NAME_ANNOTATION = "org.opencontainers.image.ref.name"
 ANNOTATION_SOURCE_SNAPSHOT = "ai.gaussia.boltzmann.source-snapshot"
 """The publisher's full snapshot an artifact was projected from.
 
-Equal to the config digest for a complete publish. When a subset of modules is published the config
-carries a reduced snapshot, which by construction is not in the publisher's own history -- so without
-this a push of a projection back to the same tag would look like a divergence when nothing diverged.
+An unauthenticated pre-download hint. For a complete publish it equals the config digest; for a
+projection the authoritative binding is the ``source`` digest inside the projection document.
 """
 
 

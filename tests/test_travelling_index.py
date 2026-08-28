@@ -22,7 +22,9 @@ from boltzmann.distribution.media_types import (
     ANNOTATION_EMBEDDING_MODEL,
     ANNOTATION_INDEX_KIND,
     ANNOTATION_SOURCE_SNAPSHOT,
+    PROJECTION_MEDIA_TYPE,
 )
+from boltzmann.distribution.projection import Projection
 from boltzmann.exceptions import DistributionError
 from boltzmann.identity.digest import BlockId
 from boltzmann.indices.base import AbstractIndex, Index, IndexKind, TravellingIndex
@@ -386,16 +388,17 @@ class TestSelectivePublish:
         with pytest.raises(DistributionError, match="no modules"):
             brain.pack(tag="v1", modules=[])
 
-    def test_the_config_carries_only_the_published_modules(self, tmp_path: Path) -> None:
-        """A consumer's full pull adopts this document, so it has to describe what is actually there."""
-        from boltzmann.module.snapshot import Snapshot
-
+    def test_the_config_is_a_typed_projection_of_verbatim_module_references(self, tmp_path: Path) -> None:
         brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         seed(brain)
         manifest = brain.pack(tag="lite", modules=[MemoryType.CANONICAL, MemoryType.SEMANTIC])
-        projected = Snapshot.model_validate_json(brain.store.get_bytes(manifest.config.digest))
+        projected = Projection.from_document(brain.store.get_bytes(manifest.config.digest))
+        assert manifest.config.media_type == PROJECTION_MEDIA_TYPE
+        assert projected.source == brain.snapshot().digest
         assert projected.installed == [MemoryType.CANONICAL, MemoryType.SEMANTIC]
-        assert projected.parents == []
+        assert projected.modules == {
+            kind: brain.snapshot().modules[kind] for kind in (MemoryType.CANONICAL, MemoryType.SEMANTIC)
+        }
 
     def test_a_projection_records_the_snapshot_it_came_from(self, tmp_path: Path) -> None:
         """A projection is in nobody's history, so the divergence check needs the real source."""
@@ -410,6 +413,7 @@ class TestSelectivePublish:
         seed(brain)
         manifest = brain.pack(tag="v1")
         assert manifest.config.digest == brain.snapshot().digest
+        assert manifest.config.media_type != PROJECTION_MEDIA_TYPE
         assert manifest.annotations[ANNOTATION_SOURCE_SNAPSHOT] == str(brain.snapshot().digest)
 
     async def test_a_projection_can_be_pushed_and_installed(
@@ -425,6 +429,50 @@ class TestSelectivePublish:
         assert target.verify()
         assert target.root_of(MemoryType.SEMANTIC) == source.root_of(MemoryType.SEMANTIC)
 
+    async def test_a_projection_without_its_bound_source_history_is_refused(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        source = Brain.open(tmp_path / "a", actor=CURATOR)
+        seed(source)
+        manifest = source.pack(tag="lite", modules=[MemoryType.CANONICAL, MemoryType.SEMANTIC])
+        without_history = manifest.model_copy(
+            update={"layers": [layer for layer in manifest.layers if not layer.is_history]}
+        )
+        await registry.push(REFERENCE, "lite", without_history, source.store)
+
+        target = Brain.open(tmp_path / "b", actor=CURATOR)
+        with pytest.raises(DistributionError, match="not resolvable from the artifact's history"):
+            await target.pull(registry, REFERENCE, "lite")
+
+    async def test_a_legacy_reduced_snapshot_projection_remains_readable(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        from boltzmann.distribution.media_types import CONFIG_MEDIA_TYPE
+        from boltzmann.module.snapshot import Snapshot
+
+        source = Brain.open(tmp_path / "a", actor=CURATOR)
+        seed(source)
+        manifest = source.pack(tag="lite", modules=[MemoryType.CANONICAL, MemoryType.SEMANTIC])
+        legacy = Snapshot(
+            boltzmann=source.snapshot().boltzmann,
+            modules={kind: source.snapshot().modules[kind] for kind in (MemoryType.CANONICAL, MemoryType.SEMANTIC)},
+            created_at=source.snapshot().created_at,
+            labels=source.snapshot().labels,
+            trust_root=source.snapshot().trust_root,
+        )
+        raw = legacy.canonical_bytes()
+        config = Descriptor(
+            media_type=CONFIG_MEDIA_TYPE,
+            digest=source.store.put_bytes(raw),
+            size=len(raw),
+        )
+        legacy_manifest = manifest.model_copy(update={"config": config})
+        await registry.push(REFERENCE, "lite", legacy_manifest, source.store)
+
+        target = Brain.open(tmp_path / "b", actor=CURATOR)
+        await target.pull(registry, REFERENCE, "lite")
+        assert target.snapshot().installed == [MemoryType.CANONICAL, MemoryType.SEMANTIC]
+
     async def test_pushing_a_projection_twice_is_a_fast_forward(
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:
@@ -434,6 +482,19 @@ class TestSelectivePublish:
         subset = [MemoryType.CANONICAL, MemoryType.SEMANTIC]
         await brain.push(registry, REFERENCE, "lite", modules=subset)
         await brain.push(registry, REFERENCE, "lite", modules=subset)
+
+    async def test_a_projection_install_cannot_be_published_back_without_its_source_modules(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        source = Brain.open(tmp_path / "a", actor=CURATOR)
+        seed(source)
+        subset = [MemoryType.CANONICAL, MemoryType.SEMANTIC]
+        await source.push(registry, REFERENCE, "lite", modules=subset)
+
+        target = Brain.open(tmp_path / "b", actor=CURATOR)
+        await target.pull(registry, REFERENCE, "lite")
+        with pytest.raises(DistributionError, match="which this snapshot does not name"):
+            await target.push(registry, REFERENCE, "lite")
 
     async def test_a_projection_and_the_full_brain_can_share_a_repository(
         self, tmp_path: Path, registry: LocalLayoutRegistry

@@ -17,12 +17,14 @@ from boltzmann.distribution.media_types import (
     CONFIG_MEDIA_TYPE,
     HISTORY_MEDIA_TYPE,
     MANIFEST_MEDIA_TYPE,
+    PROJECTION_MEDIA_TYPE,
     REF_NAME_ANNOTATION,
     VECTOR_INDEX_MEDIA_TYPE,
     memory_type_of,
     module_media_type,
 )
 from boltzmann.distribution.oras_client import OrasRegistryClient
+from boltzmann.distribution.projection import Projection
 from boltzmann.distribution.registry import FetchResult, InstallPlan, RegistryClient
 
 __all__ = [
@@ -31,6 +33,7 @@ __all__ = [
     "CONFIG_MEDIA_TYPE",
     "HISTORY_MEDIA_TYPE",
     "MANIFEST_MEDIA_TYPE",
+    "PROJECTION_MEDIA_TYPE",
     "REF_NAME_ANNOTATION",
     "VECTOR_INDEX_MEDIA_TYPE",
     "BrainManifest",
@@ -39,6 +42,7 @@ __all__ = [
     "InstallPlan",
     "LocalLayoutRegistry",
     "OrasRegistryClient",
+    "Projection",
     "RegistryClient",
     "build_manifest",
     "declare_schema_versions",
