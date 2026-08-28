@@ -127,6 +127,23 @@ snapshot = await consumer.pull(
 What you install carries the digest that was published, and the layers you already hold are reused by
 digest rather than transferred again.
 
+### Rollback protection
+
+A moving tag can be rewritten to an older snapshot. When the served head is a strict ancestor of the head
+already held, `pull` raises `RollbackError` with a `ROLLBACK` report and leaves the current head unchanged.
+Returning to that version must be explicit:
+
+```python
+snapshot = await consumer.pull(
+    registry, "ghcr.io/org/brain", "v1",
+    allow_rollback=True,
+)
+```
+
+The override always logs a `ROLLBACK` warning. If local pruning removed the ancestry needed to decide the
+relationship, the pull continues with a `ROLLBACK_UNCHECKED` warning; uncertainty is reported but is not
+treated as proof that the registry moved backwards.
+
 ### Ignore incompatible vector indices
 
 A vector index can only be loaded by a consumer using the same representation space. When an artifact was

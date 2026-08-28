@@ -480,6 +480,8 @@ class BrainDistribution(Protocol):
         reference: str,
         tag: str,
         modules: Iterable[MemoryType] | None = None,
+        *,
+        allow_rollback: bool = False,
     ) -> Snapshot:
         """
         Fetch a published brain into the local layout, selectively.
@@ -492,6 +494,8 @@ class BrainDistribution(Protocol):
             reference (str): Repository reference.
             tag (str): Which version to install.
             modules (Iterable[MemoryType] | None): Which modules are wanted. Defaults to all of them.
+            allow_rollback (bool): Explicitly install a served head that is a strict ancestor of
+                the head already held. Defaults to refusal and must remain reportable when enabled.
 
         Returns:
             Snapshot: The newly installed state.

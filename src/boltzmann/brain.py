@@ -40,7 +40,14 @@ from boltzmann.authenticity.authenticator import (
     AuthorshipState,
     FindingKind,
 )
-from boltzmann.authenticity.chain import SnapshotRole, load_snapshot, locate, observed_revisions, walk_first_parents
+from boltzmann.authenticity.chain import (
+    SnapshotRole,
+    descends_from,
+    load_snapshot,
+    locate,
+    observed_revisions,
+    walk_first_parents,
+)
 from boltzmann.authenticity.diff import gather_evidence, required_scopes
 from boltzmann.authenticity.governance import RotationPlan, RotationResult
 from boltzmann.authenticity.keys import SshPublicKey
@@ -125,6 +132,7 @@ from boltzmann.exceptions import (
     ReconciliationHaltedError,
     ReferenceNotFoundError,
     ResolutionRefusedError,
+    RollbackError,
     SnapshotError,
     TrustRootMismatchError,
     UnauthorizedKeyError,
@@ -4014,6 +4022,7 @@ class Brain:
         *,
         ignore_vector_indices: bool = False,
         verification: VerificationPolicy | None = None,
+        allow_rollback: bool = False,
     ) -> Snapshot:
         """
         Fetch a published brain into this local layout, selectively.
@@ -4040,6 +4049,8 @@ class Brain:
                 warning on first contact and refused when this brain was previously seen signed,
                 and a head whose only valid signatures are ``propose``-scoped is refused. What is
                 never configurable is the reporting.
+            allow_rollback (bool): Install a served head that is a strict ancestor of the head
+                already held. Defaults to refusal. An override always emits a ``ROLLBACK`` warning.
 
         Returns:
             Snapshot: The newly installed state.
@@ -4047,13 +4058,20 @@ class Brain:
         Raises:
             DistributionError: If a wanted module is not in the artifact, a wanted module uses a block
                 schema this client does not implement, or a layer does not verify.
+            RollbackError: If the served head is a strict ancestor of the local head and
+                ``allow_rollback`` is false.
         """
         await self._require_pin_holds(client, reference, tag)
         manifest, remote, references, _ = await self._retrieve(client, reference, tag, modules)
-        await self._merge_signatures(client, reference, manifest)
-        self._apply_verification_policy(
-            remote, verification, reference=reference, anchor=self._resolve_source_anchor(remote, manifest)
+        anchor = self._resolve_source_anchor(remote, manifest)
+        self._guard_pull_rollback(
+            anchor if anchor is not None else remote,
+            reference=reference,
+            tag=tag,
+            allow=allow_rollback,
         )
+        await self._merge_signatures(client, reference, manifest)
+        self._apply_verification_policy(remote, verification, reference=reference, anchor=anchor)
         wanted = [reference_.memory_type for reference_ in references]
 
         for memory_type in wanted:
@@ -4106,6 +4124,44 @@ class Brain:
         # that hold the version it had before the pull -- or nothing at all.
         self.rebuild_indices(wanted)
         return advanced
+
+    def _guard_pull_rollback(
+        self,
+        served: Snapshot,
+        *,
+        reference: str,
+        tag: str,
+        allow: bool,
+    ) -> None:
+        """Refuse a strict ancestor of the held head, or report an explicit override.
+
+        A missing local parent makes the ancestry question undecidable. The protocol permits a
+        warning in that pruned-history case but does not permit treating uncertainty as proof of a
+        rollback, so the pull continues with a distinguishable ``ROLLBACK_UNCHECKED`` report.
+        """
+        if self._state is None or served.digest == self._snapshot.digest:
+            return
+        relation = descends_from(self.store, self._snapshot, served.digest)
+        if relation is None:
+            logging.getLogger(__name__).warning(
+                "ROLLBACK_UNCHECKED: cannot determine whether %s:%s at %s predates held head %s "
+                "because local ancestry is pruned",
+                reference,
+                tag,
+                served.digest.short,
+                self._snapshot.digest.short,
+            )
+            return
+        if not relation:
+            return
+
+        detail = (
+            f"ROLLBACK: {reference}:{tag} serves {served.digest.short}, a strict ancestor of "
+            f"held head {self._snapshot.digest.short}"
+        )
+        if not allow:
+            raise RollbackError(f"{detail}; refused. Pass allow_rollback=True to override explicitly")
+        logging.getLogger(__name__).warning("%s; ROLLBACK override accepted", detail)
 
     def _resolve_source_anchor(self, remote: Snapshot, manifest: BrainManifest) -> Snapshot | None:
         """The signed source a subset artifact is a projection of, validated fail-closed.
