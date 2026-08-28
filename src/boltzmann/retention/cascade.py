@@ -23,7 +23,6 @@ from collections.abc import Iterable
 
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.procedural import ProceduralBlock
-from boltzmann.blocks.semantic import SemanticBlock
 from boltzmann.identity.digest import BlockId
 from boltzmann.module.ledger import Ledger
 from boltzmann.module.module import Module
@@ -81,8 +80,8 @@ def structural_dependents(
 
 def _references(block: object) -> set[BlockId]:
     """Every block a block points at structurally, as opposed to cites as evidence."""
-    if isinstance(block, SemanticBlock):
-        return {relation.target for relation in block.relations or []}
+    if getattr(block, "MEMORY_TYPE", None) is MemoryType.SEMANTIC:
+        return {relation.target for relation in getattr(block, "relations", None) or []}
     if isinstance(block, ProceduralBlock):
         return {used for step in block.steps for used in step.uses or []}
     return set()

@@ -8,9 +8,9 @@ only checked the shape of the schema document would pass while the schema reject
 import pytest
 from jsonschema import Draft202012Validator
 
-from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind
+from boltzmann.blocks.semantic import SemanticBlockV2, SemanticBlockV3
 from boltzmann.brain import Brain
 from boltzmann.constants import CANDIDATES_SCHEMA, EVIDENCE_BUNDLE_SCHEMA, PROCESSING_TASK_SCHEMA
 from boltzmann.exceptions import BlockSchemaError
@@ -45,12 +45,6 @@ def proposal(*candidates: Candidate) -> dict:
 
 def semantic_candidate(**overrides: object) -> Candidate:
     return Candidate(memory_type=MemoryType.SEMANTIC, evidence=[SOURCE], payload=semantic_payload(**overrides))
-
-
-def _semantic_def() -> str:
-    """The ``$defs`` key of the semantic schema the emitted document advertises."""
-    versions = sorted(version for kind, version in Block.registry() if kind is MemoryType.SEMANTIC)
-    return Block.registry()[(MemoryType.SEMANTIC, versions[-1])].__name__
 
 
 @pytest.fixture
@@ -113,21 +107,24 @@ class TestThePayloadIsConstrained:
     def test_the_payload_is_no_longer_an_open_object(self) -> None:
         """``Candidate.payload`` is dict[str, Any] in Python, which alone tells a model nothing."""
         variant = _variant_for(candidates_schema(), MemoryType.SEMANTIC)
-        # Named after whichever class is advertised rather than after a literal, because the schema
-        # tracks the newest registered version and pinning the name here would turn every future
-        # schema bump into a test failure that says nothing about the property being checked.
-        assert variant["properties"]["payload"] == {"$ref": f"#/$defs/{_semantic_def()}"}
+        assert variant["properties"]["payload"] == {
+            "oneOf": [
+                {"$ref": f"#/$defs/{SemanticBlockV2.__name__}"},
+                {"$ref": f"#/$defs/{SemanticBlockV3.__name__}"},
+            ]
+        }
         assert variant["properties"]["memory_type"] == {"const": "semantic", "type": "string"}
 
     def test_the_resolved_payload_states_its_required_fields(self) -> None:
         schema = candidates_schema()
-        definition = schema["$defs"][_semantic_def()]
-        assert definition["required"] == ["kind"]
-        assert ["label", "statement"] in [branch.get("required") for branch in definition["oneOf"]]
+        ordinary = schema["$defs"][SemanticBlockV2.__name__]
+        catalog = schema["$defs"][SemanticBlockV3.__name__]
+        assert {"kind", "label", "statement"} <= set(ordinary["required"])
+        assert catalog["oneOf"] == [catalog["oneOf"][0]]  # candidate schema retains placement only
 
     def test_content_is_offered_and_not_required(self) -> None:
         """A newer schema may add an optional field; it must not become mandatory to propose one."""
-        definition = candidates_schema()["$defs"][_semantic_def()]
+        definition = candidates_schema()["$defs"][SemanticBlockV2.__name__]
         assert "content" in definition["properties"]
         assert "content" not in definition["required"]
 
@@ -183,7 +180,13 @@ class TestThePayloadIsConstrained:
     def test_a_block_schema_exists_for_every_memory_type(self, memory_type: MemoryType) -> None:
         schema = block_schema(memory_type)
         Draft202012Validator.check_schema(schema)
-        assert schema["additionalProperties"] is False
+        if memory_type is MemoryType.SEMANTIC:
+            assert all(
+                schema["$defs"][name]["additionalProperties"] is False
+                for name in ("SemanticBlockV2", "SemanticBlockV3")
+            )
+        else:
+            assert schema["additionalProperties"] is False
 
     def test_an_unregistered_memory_type_is_refused(self) -> None:
         class Fake:

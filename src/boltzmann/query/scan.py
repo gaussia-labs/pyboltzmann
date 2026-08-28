@@ -36,23 +36,19 @@ rather than only in a derived index:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.canonical import CanonicalBlock
 from boltzmann.blocks.episodic import EpisodicBlock
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.procedural import ProceduralBlock
 from boltzmann.blocks.semantic import SemanticBlock
-from boltzmann.exceptions import DigestFormatError, DigestKindError
+from boltzmann.catalog import Catalog, evidence_sources
+from boltzmann.exceptions import CatalogError, DigestFormatError, DigestKindError
 from boltzmann.identity.digest import BlockId
 from boltzmann.module.ledger import Ledger
 from boltzmann.module.module import Module
 from boltzmann.query.evidence import EvidenceBundle, Match, SourceRef
 from boltzmann.query.request import Query, QueryFilters, RetrievalMode
-
-if TYPE_CHECKING:
-    from boltzmann.catalog import Catalog
 
 SCORE_PRECISION = 2
 """Decimal places in the coverage score. A string, because a wire format should not carry a float."""
@@ -149,11 +145,9 @@ def _passes_filters(
     block_id: BlockId,
     block: Block,
     filters: QueryFilters,
-    catalog: Catalog | None,
+    eligible_catalog_sources: frozenset[BlockId] | None,
 ) -> bool:
     """Whether a block survives the narrowing conditions the query declared."""
-    from boltzmann.catalog import evidence_sources
-
     if filters.subject is not None and _subject_of(block) != filters.subject:
         return False
 
@@ -164,11 +158,8 @@ def _passes_filters(
         return False
 
     if filters.classes:
-        assert catalog is not None
-        matching_sources = evidence_sources(block_id, block)
-        for class_id in filters.classes:
-            matching_sources &= catalog.sources_for(class_id)
-        if not matching_sources:
+        assert eligible_catalog_sources is not None
+        if not evidence_sources(block_id, block) & eligible_catalog_sources:
             return False
 
     if filters.since is not None or filters.until is not None:
@@ -221,8 +212,10 @@ def _expand(
     matched: dict[BlockId, float],
     modules: dict[MemoryType, Module],
     depth: int,
+    filters: QueryFilters,
+    eligible_catalog_sources: frozenset[BlockId] | None,
 ) -> dict[BlockId, float]:
-    """Follow declared relations outward, which needs no graph engine because they live on the blocks."""
+    """Follow relations outward while preserving every filter on newly reached blocks."""
     if depth <= 0:
         return matched
 
@@ -235,10 +228,16 @@ def _expand(
                 if block_id not in module or not module.store.is_resolvable(block_id):
                     continue
                 block = module.get(block_id)
-                if not isinstance(block, SemanticBlock) or not block.relations:
+                relations = getattr(block, "relations", None)
+                if not relations:
                     continue
-                for relation in block.relations:
-                    if relation.target not in reachable:
+                for relation in relations:
+                    target = _find_resolvable(relation.target, modules)
+                    if (
+                        target is not None
+                        and relation.target not in reachable
+                        and _passes_filters(relation.target, target, filters, eligible_catalog_sources)
+                    ):
                         discovered.add(relation.target)
         if not discovered:
             break
@@ -262,14 +261,13 @@ def scan(query: Query, modules: dict[MemoryType, Module]) -> EvidenceBundle:
         by membership in the installed snapshot; a block that fails either is left out rather than
         returned unverified.
     """
-    from boltzmann.catalog import Catalog
-
     view = Ledger.of(modules)
     searched = _modules_to_search(query, modules)
     catalog = Catalog(modules) if query.filters.classes else None
+    eligible_catalog_sources = _eligible_catalog_sources(query.filters, catalog)
 
     if query.hints.mode is RetrievalMode.EXACT:
-        candidates = _exact(query, searched, catalog)
+        candidates = _exact(query, searched, eligible_catalog_sources)
     else:
         terms = content_terms(query.text)
         candidates = {
@@ -277,10 +275,10 @@ def scan(query: Query, modules: dict[MemoryType, Module]) -> EvidenceBundle:
             for memory_type, module in searched.items()
             for block_id in module.block_ids
             if module.store.is_resolvable(block_id)
-            and _passes_filters(block_id, module.get(block_id), query.filters, catalog)
+            and _passes_filters(block_id, module.get(block_id), query.filters, eligible_catalog_sources)
             and (coverage := _coverage(terms, module.get(block_id))) > 0
         }
-        candidates = _expand(candidates, searched, query.hints.expand_depth)
+        candidates = _expand(candidates, searched, query.hints.expand_depth, query.filters, eligible_catalog_sources)
 
     if not query.filters.include_superseded:
         # Supersession and demotion both change accessibility rather than membership, so a block held
@@ -308,7 +306,9 @@ def _modules_to_search(query: Query, modules: dict[MemoryType, Module]) -> dict[
     return {kind: modules[kind] for kind in query.filters.memory_types if kind in modules}
 
 
-def _exact(query: Query, modules: dict[MemoryType, Module], catalog: Catalog | None) -> dict[BlockId, float]:
+def _exact(
+    query: Query, modules: dict[MemoryType, Module], eligible_catalog_sources: frozenset[BlockId] | None
+) -> dict[BlockId, float]:
     """Resolve the query text as an identity. Not a ranked guess, so the score carries no gradation."""
     try:
         block_id = BlockId.parse(query.text)
@@ -316,8 +316,32 @@ def _exact(query: Query, modules: dict[MemoryType, Module], catalog: Catalog | N
         return {}
     for module in modules.values():
         if block_id in module and module.store.is_resolvable(block_id):
-            return {block_id: 1.0} if _passes_filters(block_id, module.get(block_id), query.filters, catalog) else {}
+            return (
+                {block_id: 1.0}
+                if _passes_filters(block_id, module.get(block_id), query.filters, eligible_catalog_sources)
+                else {}
+            )
     return {}
+
+
+def _eligible_catalog_sources(filters: QueryFilters, catalog: Catalog | None) -> frozenset[BlockId] | None:
+    """Compute the class intersection once; unknown or inaccessible classes simply match nothing."""
+    if not filters.classes:
+        return None
+    assert catalog is not None
+    try:
+        source_sets = [catalog.sources_for(class_id) for class_id in filters.classes]
+    except CatalogError:
+        return frozenset()
+    return frozenset(set.intersection(*source_sets) if source_sets else set())
+
+
+def _find_resolvable(block_id: BlockId, modules: dict[MemoryType, Module]) -> Block | None:
+    """Resolve one expansion target from the searched modules."""
+    for module in modules.values():
+        if block_id in module and module.store.is_resolvable(block_id):
+            return module.get(block_id)
+    return None
 
 
 def _to_match(

@@ -29,6 +29,7 @@ from pydantic.json_schema import JsonSchemaMode, models_json_schema
 
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
+from boltzmann.blocks.semantic import SemanticBlockV2, SemanticBlockV3
 from boltzmann.constants import CANDIDATES_SCHEMA, EVIDENCE_BUNDLE_SCHEMA, PROCESSING_TASK_SCHEMA
 from boltzmann.exceptions import BlockSchemaError
 from boltzmann.ingest.proposer import Candidate, CandidateSet
@@ -55,8 +56,21 @@ def block_schema(memory_type: MemoryType) -> dict[str, Any]:
     Raises:
         BlockSchemaError: If no schema is registered for that memory type.
     """
-    block_class = _latest(memory_type)
-    schema = block_class.model_json_schema(ref_template=REF_TEMPLATE)
+    if memory_type is MemoryType.SEMANTIC:
+        _, combined = models_json_schema(
+            [(SemanticBlockV2, "validation"), (SemanticBlockV3, "validation")], ref_template=REF_TEMPLATE
+        )
+        schema = {
+            "title": "Semantic block payload",
+            "oneOf": [
+                {"$ref": REF_TEMPLATE.format(model=SemanticBlockV2.__name__)},
+                {"$ref": REF_TEMPLATE.format(model=SemanticBlockV3.__name__)},
+            ],
+            "$defs": combined.get("$defs", {}),
+        }
+    else:
+        block_class = _latest(memory_type)
+        schema = block_class.model_json_schema(ref_template=REF_TEMPLATE)
     schema["$schema"] = JSON_SCHEMA_DIALECT
     return schema
 
@@ -176,7 +190,7 @@ def _candidate_variants(allowed: Iterable[MemoryType]) -> dict[str, Any]:
         properties = {
             **base.get("properties", {}),
             "memory_type": {"const": memory_type.value, "type": "string"},
-            "payload": {"$ref": REF_TEMPLATE.format(model=_latest(memory_type).__name__)},
+            "payload": _payload_schema(memory_type),
         }
         variants.append(
             {
@@ -193,7 +207,11 @@ def _candidate_variants(allowed: Iterable[MemoryType]) -> dict[str, Any]:
 def _definitions(allowed: Iterable[MemoryType]) -> dict[str, Any]:
     """Shared definitions for every block class referenced, plus the candidate set's own."""
     models: list[tuple[type[BaseModel], JsonSchemaMode]] = [(CandidateSet, "validation")]
-    models.extend((_latest(memory_type), "validation") for memory_type in allowed)
+    for memory_type in allowed:
+        if memory_type is MemoryType.SEMANTIC:
+            models.extend(((SemanticBlockV2, "validation"), (SemanticBlockV3, "validation")))
+        else:
+            models.append((_latest(memory_type), "validation"))
     _, combined = models_json_schema(models, ref_template=REF_TEMPLATE)
     definitions: dict[str, Any] = dict(combined.get("$defs", {}))
     # The candidate variants are inlined above, so their generated forms would only confuse a reader.
@@ -203,10 +221,21 @@ def _definitions(allowed: Iterable[MemoryType]) -> dict[str, Any]:
     return definitions
 
 
+def _payload_schema(memory_type: MemoryType) -> dict[str, Any]:
+    """Reference every current semantic family, or the latest additive schema elsewhere."""
+    if memory_type is MemoryType.SEMANTIC:
+        return {
+            "oneOf": [
+                {"$ref": REF_TEMPLATE.format(model=SemanticBlockV2.__name__)},
+                {"$ref": REF_TEMPLATE.format(model=SemanticBlockV3.__name__)},
+            ]
+        }
+    return {"$ref": REF_TEMPLATE.format(model=_latest(memory_type).__name__)}
+
+
 def _restrict_catalog_candidates(definitions: dict[str, Any]) -> None:
     """Offer models catalog placements, but keep taxonomy declarations on ``Brain.classify``."""
-    latest = _latest(MemoryType.SEMANTIC)
-    definition = definitions.get(latest.__name__)
+    definition = definitions.get(SemanticBlockV3.__name__)
     if not isinstance(definition, dict) or "oneOf" not in definition:
         return
 

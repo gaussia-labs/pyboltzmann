@@ -11,14 +11,16 @@ Its durable facts are semantic blocks:
 - a **hierarchy relation** says that one class is broader than another in the same scheme;
 - a **placement relation** classifies one canonical source as one class.
 
-The SDK rebuilds the convenient catalog view in memory from those blocks. The view itself is not stored and
-does not travel as an OCI layer. This keeps the canonical source unchanged: it is the placement block, not
-the canonical block, that carries the classification.
+The SDK rebuilds the convenient catalog view in memory from those blocks. The view itself is not stored.
+The paper also allows an optional travelling catalog layer; this SDK does not implement that optional
+layer, because its view can be rebuilt from the semantic declarations. This keeps the canonical source
+unchanged: it is the placement block, not the canonical block, that carries the classification.
 
 ## Declare the taxonomy
 
-Taxonomy design is explicit SDK work. A model may propose placements, but cannot create schemes, classes,
-or hierarchy edges.
+Taxonomy design is explicit SDK work. As an SDK policy, the candidate gate lets a model propose placements
+but requires schemes, classes, and hierarchy edges to enter through `Brain.classify`. The protocol itself
+does not require every implementation to make that authorization choice.
 
 ```python
 from boltzmann import (
@@ -55,8 +57,9 @@ Classes must be declared before use; there is deliberately no `mkdir -p` behavio
   different hierarchy relation without changing the identity of the `fourier` class.
 </Note>
 
-Hierarchies are acyclic and stay inside one scheme. A class may have multiple parents. Browsing a parent
-includes sources placed directly in any descendant.
+This SDK additionally requires hierarchies to be acyclic and to stay inside one scheme. Those constraints
+make path navigation deterministic; they are stricter SDK policy, not new protocol invariants. A class may
+have multiple parents. Browsing a parent includes sources placed directly in any descendant.
 
 ## Classify canonical sources
 
@@ -75,6 +78,10 @@ canonical source therefore cascades to its placements, while the reusable taxono
 
 An exclusive scheme allows at most one direct class per source. A second year or type is well-formed but
 conflicts with the held placement, so its verdict is `contradicted` rather than `rejected`.
+
+Placements follow normal accessibility rules. To correct a misfiled source, demote or supersede the old
+placement block and then classify the source in its replacement class. The old statement remains a
+verifiable member of history but no longer participates in the rebuilt catalog.
 
 ## Browse classes
 
@@ -113,7 +120,8 @@ brain.catalog_path(("type", "topic", "year")).browse("examenes/fourier/2025")
 
 `browse` and `iterdir` accept prefixes. `classify` requires every segment. Labels are exact and
 case-sensitive; leading and trailing slashes are ignored; percent-encoded labels are decoded; empty
-internal segments and `.` or `..` are rejected.
+internal segments and `.` or `..` are rejected. Class declarations reject `/`, `.`, and `..` up front so
+every declared label is reachable as exactly one path segment.
 
 ## Filter ordinary queries
 

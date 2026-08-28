@@ -287,17 +287,15 @@ class Block(BaseModel, ABC):
         Raises:
             BlockSchemaError: If no schema is registered for that memory type.
             pydantic.ValidationError: If no registered schema accepts the payload. The
-                error is the **newest** schema's, because it is the one that knows about
-                the most fields and therefore explains the most.
+                error comes from the closest matching shape; ties prefer the newest schema.
         """
         schemas = Block.schemas(memory_type)
-        for block_class in schemas[:-1]:
+        failures: list[PydanticValidationError] = []
+        for block_class in schemas:
             try:
                 return block_class.model_validate(dict(payload))
-            except PydanticValidationError:
-                continue
-        # Unguarded: the newest schema's failure is the one worth reporting. A payload that
-        # is invalid at every version is invalid, and NonDeterministicValueError -- which is
-        # not a pydantic error and so is never caught above -- must escape from the first
-        # schema that sees it, since no later one would accept it either.
-        return schemas[-1].model_validate(dict(payload))
+            except PydanticValidationError as error:
+                failures.append(error)
+        # Schema versions may be sibling shapes rather than an ever-widening inheritance chain.
+        # Report the closest shape; on a tie prefer the newest vocabulary.
+        raise min(enumerate(failures), key=lambda item: (len(item[1].errors()), -item[0]))[1].with_traceback(None)

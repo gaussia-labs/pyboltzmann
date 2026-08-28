@@ -19,7 +19,7 @@ DAG that pins the exact composition of a version, and the indices needed to quer
    Ed25519 mathematics rides in the optional ``[authenticity]`` extra; everything structural works
    without it, and "could not check" is never reported as either verdict.
 4. **The interfaces an implementation satisfies**, declared: ``BrainReader``, ``BrainWriter``,
-   ``BrainCatalog``, ``BrainRetention``, ``BrainDistribution``, ``BrainAuthenticity``, plus ``BlockStore``, ``Index``,
+   ``BrainRetention``, ``BrainDistribution``, ``BrainAuthenticity``, plus ``BlockStore``, ``Index``,
    ``QueryPlanner``, ``Validator``, ``CandidateProposer``, ``RegistryClient``, ``MerkleLayout``,
    ``NormalizationPipeline``.
 
@@ -84,14 +84,13 @@ from boltzmann.catalog import (
     CatalogDirectory,
     CatalogNode,
     CatalogPathView,
-    CatalogVerdict,
     ClassDeclaration,
     ClassificationRequest,
-    ClassificationResult,
     HierarchyDeclaration,
     PlacementDeclaration,
     SchemeDeclaration,
 )
+from boltzmann.catalog_validation import CatalogVerdict, ClassificationResult
 from boltzmann.constants import SNAPSHOT_NAMESPACE
 from boltzmann.distribution import FetchResult
 from boltzmann.exceptions import BoltzmannError, CatalogError
@@ -116,7 +115,6 @@ from boltzmann.protocol import (
     PROTOCOL_VERSION,
     BoltzmannProtocol,
     BrainAuthenticity,
-    BrainCatalog,
     BrainDistribution,
     BrainReader,
     BrainReconciliation,
@@ -172,7 +170,6 @@ __all__ = [
     "BoltzmannProtocol",
     "Brain",
     "BrainAuthenticity",
-    "BrainCatalog",
     "BrainDistribution",
     "BrainReader",
     "BrainReconciliation",

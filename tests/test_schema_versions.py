@@ -43,7 +43,7 @@ from boltzmann.blocks.episodic import EpisodicBlock, EpisodicBlockV2
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.procedural import ProceduralBlock, ProceduralBlockV2
 from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind
-from boltzmann.blocks.semantic import SemanticBlock, SemanticBlockV2, SemanticBlockV3
+from boltzmann.blocks.semantic import SemanticBlock, SemanticBlockV2
 from boltzmann.brain import Brain
 from boltzmann.distribution.local import LocalLayoutRegistry
 from boltzmann.distribution.manifest import require_supported_schemas, schema_versions_of
@@ -166,8 +166,8 @@ class TestWhichVersionABlockIsWrittenAs:
         """Deliberate: the removal ledger must stay readable by every client, of every version."""
         assert Block.schemas(MemoryType.PROVENANCE) == (Block.registry()[(MemoryType.PROVENANCE, 1)],)
 
-    def test_an_invalid_payload_reports_the_newest_schema_error(self) -> None:
-        """Falling back through versions must not bury the diagnosis in the oldest one's vocabulary.
+    def test_an_invalid_payload_reports_the_closest_schema_error(self) -> None:
+        """Sibling schema shapes must report the family the payload was trying to use.
 
         A payload naming malformed content is invalid everywhere, but only v2 has a ``content``
         field to complain about. If the reported failure were v1's it would read "extra inputs are
@@ -176,7 +176,7 @@ class TestWhichVersionABlockIsWrittenAs:
         with pytest.raises(PydanticValidationError) as caught:
             Block.build(MemoryType.SEMANTIC, {**_payload(), "content": "not a reference"})
         detail = str(caught.value)
-        assert SemanticBlockV3.__name__ in detail
+        assert SemanticBlockV2.__name__ in detail
         assert "extra_forbidden" not in detail
 
     def test_registering_a_fourth_version_does_not_move_what_a_plain_payload_resolves_to(self) -> None:
@@ -187,7 +187,7 @@ class TestWhichVersionABlockIsWrittenAs:
         safe to do here, so this can assert on a real fourth version rather than on a stand-in.
         """
 
-        class SemanticBlockV4(SemanticBlockV3):
+        class SemanticBlockV4(SemanticBlockV2):
             SCHEMA_VERSION = 4
             provenance_note: str | None = None
 

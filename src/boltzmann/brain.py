@@ -18,6 +18,10 @@ last. A failure part-way through leaves orphan blobs that a prune reclaims, and 
 still current. There is no state in which a root names a block the store does not hold.
 """
 
+# Catalog validation speaks the ingestion verdict vocabulary, so its import intentionally follows
+# ingestion package initialization below.  Keeping that dependency direction avoids an import cycle.
+# ruff: noqa: I001
+
 from __future__ import annotations
 
 import json
@@ -76,8 +80,6 @@ from boltzmann.catalog import (
     CatalogDeclaration,
     CatalogPathView,
     ClassificationRequest,
-    ClassificationResult,
-    validate_declarations,
 )
 from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.distribution.layers import pack_history, pack_module, unpack_history, unpack_layer
@@ -139,6 +141,7 @@ from boltzmann.ingest.register import RegistrationRequest, RegistrationResult
 from boltzmann.ingest.schema import candidates_schema as _candidates_schema
 from boltzmann.ingest.task import PROPOSABLE_MEMORY_TYPES, ProcessingTask, TaskOperation
 from boltzmann.ingest.validation import ValidationReport, ValidationStatus, Validator, validate
+from boltzmann.catalog_validation import ClassificationResult, validate_declarations
 from boltzmann.merkle.proof import InclusionProof
 from boltzmann.merkle.tree import sorted_leaves
 from boltzmann.module.composition import Composition

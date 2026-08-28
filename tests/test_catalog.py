@@ -10,7 +10,8 @@ from boltzmann import (
     Block,
     BlockId,
     Brain,
-    BrainCatalog,
+    BrainReader,
+    BrainWriter,
     CatalogError,
     ClassDeclaration,
     HierarchyDeclaration,
@@ -19,13 +20,15 @@ from boltzmann import (
     PlacementDeclaration,
     Query,
     QueryFilters,
+    QueryHints,
     RegistrationRequest,
     SchemeDeclaration,
     SemanticBlockV3,
     ValidationStatus,
 )
-from boltzmann.blocks.semantic import Relation, SemanticKind
+from boltzmann.blocks.semantic import Relation, SemanticBlockV2, SemanticKind
 from boltzmann.ingest.proposer import Candidate, CandidateSet
+from boltzmann.module.composition import Composition
 from boltzmann.module.ledger import Ledger
 from boltzmann.reconcile.gate import judge_incoming
 from boltzmann.retention.policy import PERMISSIVE_POLICY
@@ -142,6 +145,17 @@ class TestValidation:
         assert cross.verdicts[0].issues[0].code == "catalog-cross-scheme"
         assert cycle.verdicts[0].issues[0].code == "catalog-cycle"
 
+    def test_a_self_loop_returns_a_verdict_instead_of_crashing(self, brain: Brain) -> None:
+        class_ = ClassDeclaration(scheme="topic", label="fourier")
+        result = brain.classify([HierarchyDeclaration(broader=class_.block_id, narrower=class_.block_id)])
+        assert result.verdicts[0].status is ValidationStatus.REJECTED
+        assert result.verdicts[0].issues[0].code == "catalog-cycle"
+
+    @pytest.mark.parametrize("label", [".", "..", "year/2025"])
+    def test_declared_labels_are_reachable_path_segments(self, label: str) -> None:
+        with pytest.raises(ValueError, match="catalog class labels"):
+            ClassDeclaration(scheme="topic", label=label)
+
     def test_polyhierarchy_is_allowed(self, brain: Brain) -> None:
         scheme = SchemeDeclaration(scheme="topic")
         left = ClassDeclaration(scheme="topic", label="analysis")
@@ -170,6 +184,26 @@ class TestValidation:
         assert result.verdicts[0].status is ValidationStatus.CONTRADICTED
         assert result.verdicts[0].issues[0].code == "catalog-exclusive-conflict"
         assert result.verdicts[0].conflicts_with
+
+    def test_a_v2_shaped_placement_cannot_bypass_exclusivity(self, brain: Brain) -> None:
+        source = register(brain, "exam")
+        scheme = SchemeDeclaration(scheme="year", exclusive=True)
+        first = ClassDeclaration(scheme="year", label="2025")
+        second = ClassDeclaration(scheme="year", label="2026")
+        brain.classify([scheme, first, second, PlacementDeclaration(source=source, class_id=first.block_id)])
+        candidate = Candidate(
+            memory_type=MemoryType.SEMANTIC,
+            evidence=[source],
+            payload={
+                "kind": "relation",
+                "label": "legacy-shaped placement",
+                "statement": "the source is filed under 2026",
+                "relations": [{"predicate": "classified_as", "target": str(second.block_id)}],
+            },
+        )
+        report = brain.validate(CandidateSet(candidates=[candidate]), brain.define_task(source))
+        assert report.results[0].status is ValidationStatus.CONTRADICTED
+        assert report.results[0].conflicts_with
 
     def test_a_placement_requires_canonical_evidence_and_a_class(self, brain: Brain) -> None:
         taxonomy(brain)
@@ -312,6 +346,74 @@ class TestQueryAndLifecycle:
         reopened = Brain(brain.store, actor=CURATOR)
         assert reopened.browse(classes["math"].block_id).sources == [source]
 
+    def test_an_unresolvable_semantic_block_does_not_brick_catalog_views(self, brain: Brain) -> None:
+        classes = taxonomy(brain)
+        source = register(brain, "exam")
+        brain.classify([PlacementDeclaration(source=source, class_id=classes["fourier"].block_id)])
+        candidate = Candidate(
+            memory_type=MemoryType.SEMANTIC,
+            evidence=[source],
+            payload={"kind": "fact", "label": "temporary", "statement": "redacted later"},
+        )
+        commit = brain.commit(brain.validate(CandidateSet(candidates=[candidate]), brain.define_task(source)))
+        brain.store.tombstone(commit.committed[0], "erasure")
+        assert brain.browse(classes["math"].block_id).sources == [source]
+        assert brain.search(Query(filters=QueryFilters(classes=[classes["math"].block_id]))).matches
+
+    def test_demoting_a_misfiled_placement_unlocks_reclassification(self, brain: Brain) -> None:
+        source = register(brain, "exam")
+        scheme = SchemeDeclaration(scheme="year", exclusive=True)
+        wrong = ClassDeclaration(scheme="year", label="2024")
+        right = ClassDeclaration(scheme="year", label="2025")
+        old = PlacementDeclaration(source=source, class_id=wrong.block_id)
+        brain.classify([scheme, wrong, right, old])
+        brain.demote(old.block_id, MemoryType.SEMANTIC, reason="misfiled")
+        corrected = brain.classify([PlacementDeclaration(source=source, class_id=right.block_id)])
+        assert corrected.is_clean
+        assert brain.browse(wrong.block_id).sources == []
+        assert brain.browse(right.block_id).sources == [source]
+
+    def test_an_unknown_or_inaccessible_class_filter_matches_nothing(self, brain: Brain) -> None:
+        missing = BlockId.of(b"class no longer installed")
+        assert brain.search(Query(filters=QueryFilters(classes=[missing]))).matches == []
+
+    def test_relation_expansion_reapplies_catalog_filters(self, brain: Brain) -> None:
+        classes = taxonomy(brain)
+        matching_source = register(brain, "matching")
+        other_source = register(brain, "other")
+        brain.classify([PlacementDeclaration(source=matching_source, class_id=classes["2025"].block_id)])
+        target = SemanticBlockV2(
+            kind=SemanticKind.FACT,
+            label="target",
+            statement="associated but outside the requested year",
+            evidence=[other_source],
+        )
+        target_candidate = Candidate(
+            memory_type=MemoryType.SEMANTIC,
+            evidence=[other_source],
+            payload={"kind": "fact", "label": target.label, "statement": target.statement},
+        )
+        brain.commit(brain.validate(CandidateSet(candidates=[target_candidate]), brain.define_task(other_source)))
+        origin = Candidate(
+            memory_type=MemoryType.SEMANTIC,
+            evidence=[matching_source],
+            payload={
+                "kind": "fact",
+                "label": "origin",
+                "statement": "needle",
+                "relations": [{"predicate": "related_to", "target": str(target.block_id)}],
+            },
+        )
+        brain.commit(brain.validate(CandidateSet(candidates=[origin]), brain.define_task(matching_source)))
+        result = brain.search(
+            Query(
+                text="needle",
+                filters=QueryFilters(classes=[classes["2025"].block_id]),
+                hints=QueryHints(expand_depth=1),
+            )
+        )
+        assert target.block_id not in {match.block_id for match in result.matches}
+
     def test_dropping_evidence_cascades_only_its_placements(self, brain: Brain) -> None:
         classes = taxonomy(brain)
         source = register(brain, "exam")
@@ -361,8 +463,30 @@ class TestQueryAndLifecycle:
 
         assert report.is_clean, [issue.detail for verdict in report.verdicts for issue in verdict.issues]
 
-    def test_brain_implements_the_catalog_extension(self, brain: Brain) -> None:
-        assert isinstance(brain, BrainCatalog)
+    def test_reconciliation_refusals_cascade_to_catalog_dependents(self, brain: Brain) -> None:
+        orphan = ClassDeclaration(scheme="missing", label="orphan")
+        hierarchy = HierarchyDeclaration(
+            broader=orphan.block_id,
+            narrower=ClassDeclaration(scheme="missing", label="child").block_id,
+        )
+        blocks = [orphan.to_block(), hierarchy.to_block()]
+        for block in blocks:
+            brain.store.put_block(block)
+        composition = Composition(MemoryType.SEMANTIC, [block.block_id for block in blocks])
+        report = judge_incoming(
+            incoming={MemoryType.SEMANTIC: composition.block_ids},
+            reconciled={MemoryType.SEMANTIC: composition},
+            store=brain.store,
+            ledger=Ledger(),
+        )
+        by_id = {verdict.block: verdict for verdict in report.verdicts}
+        assert by_id[orphan.block_id].status is ValidationStatus.REJECTED
+        assert by_id[hierarchy.block_id].status is ValidationStatus.REJECTED
+        assert by_id[hierarchy.block_id].issues[0].code == "catalog-unknown-class"
+
+    def test_catalog_operations_follow_reader_writer_roles(self, brain: Brain) -> None:
+        assert isinstance(brain, BrainReader)
+        assert isinstance(brain, BrainWriter)
 
 
 def test_v3_rejects_malformed_catalog_relation_shapes() -> None:

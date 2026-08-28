@@ -36,6 +36,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import SupersessionRecord
+from boltzmann.catalog import declaration_from_block
+from boltzmann.catalog_models import (
+    ClassDeclaration,
+    ClassificationRequest,
+    HierarchyDeclaration,
+    PlacementDeclaration,
+    SchemeDeclaration,
+)
+from boltzmann.catalog_validation import validate_declarations
 from boltzmann.exceptions import BlockError, BlockSchemaError
 from boltzmann.identity.digest import BlockId
 from boltzmann.ingest.proposer import Candidate
@@ -271,11 +280,41 @@ def judge_incoming(
         }
 
     checks = RECONCILE_VALIDATORS if validators is None else validators
-    for memory_type in MemoryType:
-        if memory_type not in PROPOSABLE_MEMORY_TYPES:
-            continue
-        for block_id in incoming.get(memory_type, []):
-            verdicts.append(_judge_derived(block_id, memory_type, store, modules, ledger, checks))
+    derived = [
+        (memory_type, block_id)
+        for memory_type in MemoryType
+        if memory_type in PROPOSABLE_MEMORY_TYPES
+        for block_id in incoming.get(memory_type, [])
+    ]
+    original_order = {pair: index for index, pair in enumerate(derived)}
+
+    def priority(pair: tuple[MemoryType, BlockId]) -> tuple[int, int]:
+        memory_type, block_id = pair
+        if memory_type is not MemoryType.SEMANTIC or not store.is_resolvable(block_id):
+            return (4, original_order[pair])
+        declaration = declaration_from_block(store.get_block(block_id))
+        if isinstance(declaration, SchemeDeclaration):
+            rank = 0
+        elif isinstance(declaration, ClassDeclaration):
+            rank = 1
+        elif isinstance(declaration, HierarchyDeclaration):
+            rank = 2
+        elif isinstance(declaration, PlacementDeclaration):
+            rank = 3
+        else:
+            rank = 4
+        return (rank, original_order[pair])
+
+    judged: dict[tuple[MemoryType, BlockId], BlockVerdict] = {}
+    for memory_type, block_id in sorted(derived, key=priority):
+        verdict = _judge_derived(block_id, memory_type, store, modules, ledger, checks)
+        judged[(memory_type, block_id)] = verdict
+        if not verdict.is_admissible:
+            modules = {
+                kind: Module(kind, store, _without(module.composition, {block_id})) for kind, module in modules.items()
+            }
+
+    verdicts.extend(judged[pair] for pair in derived)
 
     return IncomingReport(verdicts=verdicts)
 
@@ -446,13 +485,6 @@ def _catalog_structure_verdict(
     modules: dict[MemoryType, Module],
 ) -> BlockVerdict | None:
     """Judge portable catalog taxonomy, whose structure deliberately cites no canonical evidence."""
-    from boltzmann.catalog import (
-        ClassificationRequest,
-        PlacementDeclaration,
-        declaration_from_block,
-        validate_declarations,
-    )
-
     declaration = declaration_from_block(block)
     if declaration is None or isinstance(declaration, PlacementDeclaration):
         return None

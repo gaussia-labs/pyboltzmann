@@ -9,7 +9,6 @@ from boltzmann.constants import (
 from boltzmann.protocol.operations import (
     BoltzmannProtocol,
     BrainAuthenticity,
-    BrainCatalog,
     BrainDistribution,
     BrainReader,
     BrainReconciliation,
@@ -24,7 +23,6 @@ __all__ = [
     "PROTOCOL_VERSION",
     "BoltzmannProtocol",
     "BrainAuthenticity",
-    "BrainCatalog",
     "BrainDistribution",
     "BrainReader",
     "BrainReconciliation",
