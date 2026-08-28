@@ -1,0 +1,205 @@
+---
+title: "Authenticity"
+description: "Who assembled a brain: SSHSIG signatures, the trust root that travels inside it, and revocation without clocks."
+---
+
+Everything else in the protocol establishes that a brain is **intact**: anyone recomputes the hash
+structure offline and confirms it is exactly what its identifiers describe. What the hashes cannot say is
+**who assembled it** — internal consistency is cheap to manufacture, and a fabricated brain recomputes
+perfectly. Authenticity is the one assertion the hashes cannot make: a detached SSHSIG signature over the
+snapshot, judged against a key list that travels inside the brain itself.
+
+The two verifications stay separate, always:
+
+```python
+brain.verify()          # integrity: recomputed from bytes, needs nothing and no one
+brain.authenticate()    # authenticity: judged against the trust root in force
+```
+
+<Warning>
+  There is deliberately no combined flag. "Intact, and signed by an authorized key" and "intact,
+  provenance unknown" are different facts, and a consumer that collapses them cannot recover the
+  difference afterwards. `AuthenticationReport.state` is a derived property — no construction can claim
+  `authorized` while carrying a blocking finding.
+</Warning>
+
+## Creating a governed brain
+
+Authority starts at the genesis and nowhere else. Keys are ordinary SSH keys — the private half stays in
+your `ssh-agent`, a hardware token behind one, or a KMS that presents as one; the SDK never reads a
+private key and defines no format for one.
+
+```python
+from boltzmann import AgentSigner, Brain, Scope, SshPublicKey, TrustRoot, TrustedKey
+
+signer = AgentSigner()          # the agent's Ed25519 key, via SSH_AUTH_SOCK
+root = TrustRoot(
+    revision=1,
+    govern_quorum=1,
+    keys=(
+        TrustedKey(
+            key=signer.public_key,
+            scopes=(Scope.INGEST, Scope.COMMIT, Scope.GOVERN),
+            since=1,
+        ),
+    ),
+)
+brain = Brain.init("./brain", actor=curator, trust_root=root, signers=[signer])
+```
+
+A genesis proves nothing by itself — any party can construct an indistinguishable one. What gives it
+meaning happens outside: consumers **pin** the trust root's digest on first contact, and from that moment
+the derivable rules take over. *A genesis is not validated, it is anchored.*
+
+## Signing and verifying
+
+```python
+brain.sign(signer)                       # a detached record beside the snapshot; no identity changes
+report = brain.authenticate()
+
+report.state                             # authorized | unsigned | unauthorized
+report.role                              # genesis | ordinary | revision
+report.required_scopes                   # computed from the diff against the first parent
+report.outcomes()                        # one verdict per signature, by fingerprint
+report.findings                          # everything blocking or diagnostic, named
+report.require_authorized()              # or raise the most specific typed error
+```
+
+Three rules do most of the work:
+
+- **Scopes are computed, never believed.** What a snapshot required comes from its difference against its
+  first parent — canonical gained blocks → `ingest`, canonical lost blocks → `drop:canonical`, a derived
+  module changed → `commit`, the trust root changed → `govern`, a redaction record appeared → `redact`.
+  The `scopes` a signature claims aid diagnosis and decide nothing.
+- **The trust root in force is the parent's.** A revision's own signatures answer to the list it is
+  *replacing* — which is why a key cannot admit itself (see below).
+- **Missing evidence widens the requirement.** A truncated chain or an unreadable composition makes the
+  verdict `insufficient_evidence`, never a smaller demand: a verifier that quietly computed less from a
+  truncated history would be exploitable by shipping a truncated history.
+
+## Admitting a key: the quorum rule
+
+Changing the trust root is a **trust-root revision**: a snapshot that changes the key list and nothing
+else, covered by at least `govern_quorum` signatures from distinct keys holding `govern` in the revision
+*before* the change. A single owner admits a second key in one call:
+
+```python
+revised = TrustRoot(revision=2, govern_quorum=1, keys=(*root.keys, colleague_entry))
+brain.rotate(revised, signers=[signer])
+```
+
+With a quorum of two or more, the signers may not share a machine. The revision document is built
+**once** — it carries `created_at`, so two constructions would sign different bytes — and the exact bytes
+travel by any channel; nothing in them is secret, and each party inspects what it signs:
+
+```python
+plan = brain.plan_rotate(revised)             # A: build once; the head does not move
+record_a = brain.countersign(plan.document, signer_a)
+# ... plan.document travels to B, who inspects and signs the same bytes ...
+record_b = other_brain.countersign(plan.document, signer_b)
+# ... record_b (~300 bytes of JSON) travels back ...
+brain.rotate(plan=plan, records=[record_a, record_b])   # quorum met -> the head advances
+```
+
+`countersign` refuses mechanically what a reviewer would refuse by reading: a parent it cannot see,
+content smuggled into a governance act, a trust root that does not advance, an admission claim the
+observable chain refutes. A failed quorum advances nothing.
+
+**Why a key cannot admit itself.** An attacker installs the public brain, writes their key into the
+list — possibly byte-identical to a legitimate admission — and signs with it. Integrity passes; the
+signature verifies. What fails is the transition: the trust root in force at their snapshot is the one its
+parent names, where their key is absent, and the revision carries none of the `govern` signatures the
+previous list demands. This fails **with no pin at all**, and the rejection propagates: every descendant
+of the forged revision stands on authority that was never granted.
+
+## Retirement and revocation, without clocks
+
+The two look similar and behave oppositely. Both are trust-root revisions under the same quorum:
+
+```python
+brain.revoke(departing_key, signers=[signer])                        # retired from this revision on
+brain.revoke(stolen_key, signers=[signer], compromised_from=digest)  # withdrawn from that position on
+```
+
+- **Retired** (`retired_from`, a revision number): everything the key signed while authorized stays
+  valid. An ordinary departure is harmless, and a verifier reports `retired_key` distinctly — collapsing
+  it into "unauthorized" would invalidate history for an administrative reason.
+- **Compromised** (`compromised_from`, a snapshot digest): every signature at and after that position is
+  withdrawn, even though it was signed while the key was listed. The only construct in the protocol that
+  invalidates a previously valid signature, reported in the report's separate `withdrawn` list.
+
+No clock is consulted anywhere. A timestamp is written by whoever holds the pen — a stolen key backdates
+freely — so validity is **positional**: snapshots are chained by digest, a position cannot be forged
+without changing every descendant, and the question is always *was this key authorized, with this scope,
+at this position in the chain*.
+
+## The pin: the one thing from outside
+
+Trust cannot be manufactured from inside a system. The pin reduces the exposure to a single decision:
+
+```python
+brain.pin()                          # trust on first use: anchor what this brain carries now
+brain.pin(digest_from_the_website)   # or compare out of band, once, and anchor that
+```
+
+A pinned consumer refuses any brain whose trust root neither matches the pin nor descends from it through
+revisions that each satisfied the quorum rule — an approved rotation is the mechanism working, not a
+mismatch. On `pull`, the manifest's `trust-root` annotation is compared **before any module layer is
+transferred**; when it differs, only the small documents move until the custody walk decides.
+
+## Publication: signatures accumulate around the artifact
+
+A signature is never a layer of the brain manifest — countersigning would change the brain's digest, and
+a brain must not change identity because someone agreed with it. Each record is the single layer of its
+**own** manifest, whose `subject` names the brain: in a registry, that is an OCI referrer; in the local
+layout, one more `index.json` entry, which is exactly what an export carries. `push` publishes them,
+`pull` and `fetch` collect them, and a transport that never learned about referrers still moves the brain
+— its consumers simply see it unsigned, and the push says so.
+
+Install-time tolerances are a `VerificationPolicy`, not a hierarchy of flags:
+
+```python
+from boltzmann import UnsignedPolicy, VerificationPolicy
+
+await brain.pull(client, reference, "v1", verification=VerificationPolicy(
+    unsigned=UnsignedPolicy.WARN,     # default: warn on first contact, refuse once seen signed
+    required_signatures=1,
+    allow_propose_head=False,         # a propose-scoped head is never the published state by default
+))
+```
+
+What is never configurable is the reporting: no policy can present an unverified brain as verified.
+
+## The evidence carries its authorship
+
+Every query result reports both verifications, separately:
+
+```python
+bundle = brain.search(query)
+bundle.all_verified          # hashes and membership: the first verification
+bundle.authorship.state      # authorized | unsigned | unauthorized: the second
+bundle.authorship.key        # a fingerprint that authorized it, when one did
+bundle.authorship.pinned     # whether the trust root is anchored by this consumer's pin
+```
+
+## Without the extra
+
+The Ed25519 mathematics lives in the optional extra — `pip install 'pyboltzmann[authenticity]'`. It buys
+exactly one operation. Everything structural works on a plain install: parsing, fingerprints, the trust
+root, quorum arithmetic, and the one rejection the paper requires of every reader — a record whose named
+fingerprint disagrees with the key inside its own signature blob. What a bare install cannot do is reach
+`authorized`: an unchecked signature reports `unverifiable`, because "could not check" is a different
+fact from "failed", and a missing dependency must never read as a forgery — or as a pass.
+
+<Note>
+  Signing through an `AgentSigner` works *without* the extra: the mathematics runs inside the agent,
+  which is the point of never holding the key.
+</Note>
+
+## Golden vectors
+
+Two published files pin this behaviour for any implementation, in any language:
+`sshsig.json` carries the wire format — including the signed-data blob, which is what tells a framing bug
+from a signing bug — and `signatures.json` carries whole chains, published test key pairs, and the
+verdict a verifier MUST reach for each of the paper's worked cases. `AuthenticityConformance` in the
+conformance suite replays them against any store.

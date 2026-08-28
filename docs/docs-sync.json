@@ -21,6 +21,7 @@
           "sdks/boltzmann/concepts/memory-types",
           "sdks/boltzmann/concepts/identity",
           "sdks/boltzmann/concepts/merkle",
+          "sdks/boltzmann/concepts/catalog",
           "sdks/boltzmann/concepts/interfaces"
         ]
       },
@@ -31,6 +32,7 @@
           "sdks/boltzmann/guides/query",
           "sdks/boltzmann/guides/retention",
           "sdks/boltzmann/guides/distribution",
+          "sdks/boltzmann/guides/authenticity",
           "sdks/boltzmann/guides/reconciliation",
           "sdks/boltzmann/guides/conformance"
         ]

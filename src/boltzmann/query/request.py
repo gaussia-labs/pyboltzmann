@@ -58,6 +58,8 @@ class QueryFilters(BaseModel):
         since (Timestamp | None): Earliest time considered, for episodic recency.
         until (Timestamp | None): Latest time considered.
         tags (list[str] | None): Restrict to blocks carrying all of these labels.
+        classes (list[BlockId] | None): Restrict to blocks whose canonical evidence is placed in
+            every requested catalog class. Descendant placements are included.
         include_superseded (bool): Whether blocks a newer one supersedes may be
             returned. Superseded blocks stay in the composition and remain verifiable;
             what changes is accessibility (paper Section 10.4).
@@ -71,6 +73,7 @@ class QueryFilters(BaseModel):
     since: Timestamp | None = None
     until: Timestamp | None = None
     tags: list[str] | None = None
+    classes: list[BlockId] | None = None
     include_superseded: bool = False
     evidence: list[BlockId] | None = None
 

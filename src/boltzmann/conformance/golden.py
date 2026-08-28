@@ -20,6 +20,8 @@ VECTOR_FILES = (
     "merkle_roots.json",
     "inclusion_proofs.json",
     "serialization.json",
+    "sshsig.json",
+    "signatures.json",
 )
 """The published vector files."""
 

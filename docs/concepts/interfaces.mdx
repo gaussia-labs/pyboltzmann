@@ -14,12 +14,13 @@ The surface is split because *read* and *extend* are separable, and most consume
 
 | Contract | Operations |
 | --- | --- |
-| `BrainReader` | `snapshot`, `root_of`, `module`, `open_index`, `resolve`, `prove`, `resolvability`, `verify`, `search` |
-| `BrainWriter` | `register`, `replace`, `define_task`, `validate`, `commit` |
+| `BrainReader` | `snapshot`, `root_of`, `module`, `open_index`, `resolve`, `prove`, `resolvability`, `verify`, `search`, `browse`, `catalog_path` |
+| `BrainWriter` | `register`, `replace`, `define_task`, `validate`, `commit`, `classify` |
 | `BrainRetention` | `drop`, `drop_by_producer`, `supersede`, `demote`, `prune`, `redact` |
 | `BrainDistribution` | `pack`, `push`, `pull`, `fetch` |
 | `BrainReconciliation` | `plan_reconcile`, `reconcile`, `merge`, `rebase`, `squash`, `reconcile_status`, `reconcile_resolve`, `reconcile_accept_removals`, `reconcile_continue`, `reconcile_abort` |
-| `BoltzmannProtocol` | all five |
+| `BrainAuthenticity` | `sign`, `authenticate`, `pin`, `plan_rotate`, `countersign`, `rotate`, `revoke`, `signatures`, `add_signature` |
+| `BoltzmannProtocol` | all six contracts |
 
 Every one is `runtime_checkable`:
 
@@ -186,7 +187,7 @@ The paper states these as rules. Here they are errors, each with a test:
 
 ## Exceptions
 
-Every error derives from `BoltzmannError`, in five families:
+Every error derives from `BoltzmannError`, in six families:
 
 ```python
 from boltzmann import BoltzmannError
@@ -199,3 +200,4 @@ from boltzmann import BoltzmannError
 | `MerkleError` | `InclusionProofError` |
 | `ModuleError` | `MemoryTypeError`, `AppendOnlyViolationError`, `SnapshotError`, `MembershipError` |
 | `ProtocolError` | `ValidationError`, `CommitError`, `RetentionPolicyError`, `QueryError`, `DistributionError`, `ReferenceNotFoundError` |
+| `AuthenticityError` | `SignatureFormatError`, `SignatureInvalidError`, `NamespaceMismatchError`, `KeyMismatchError`, `UnsupportedKeyTypeError`, `UnsignedBrainError`, `UnauthorizedKeyError`, `InsufficientScopeError`, `RetiredKeyError`, `CompromisedKeyError`, `QuorumFailureError`, `TrustRootMismatchError`, `VerificationUnavailableError`, `SignerUnavailableError` |

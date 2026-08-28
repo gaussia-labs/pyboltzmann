@@ -32,7 +32,9 @@ class TestVectorFiles:
         assert vectors["boltzmann"] == PROTOCOL_VERSION
         assert vectors["serialization"] == SERIALIZATION_ID
         assert vectors["hash"] == "sha256"
-        assert vectors["vectors"]
+        # The identity files carry `vectors`; the judgement file carries `cases`. Either way, an
+        # empty published file is a promise with nothing behind it.
+        assert vectors.get("vectors") or vectors.get("cases")
 
     def test_all_files_load(self) -> None:
         assert set(golden.load_all()) == set(golden.VECTOR_FILES)

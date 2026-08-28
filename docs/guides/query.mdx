@@ -25,6 +25,7 @@ Query(
         since=start, until=end,          # a recency window, for episodic memory
         tags=["lecture"],
         evidence=[source_block_id],      # only what cites this source
+        classes=[year_2025_id, fourier_id],  # catalog facets, AND + descendants
         include_superseded=False,
     ),
     hints=QueryHints(
@@ -42,6 +43,10 @@ Three parts, and the split is deliberate:
 | `text` | The terms. May be empty |
 | `filters` | Narrowing conditions over the installed snapshot. **Binding** |
 | `hints` | Advice a planner may follow or ignore |
+
+Catalog class filters are resolved from the semantic catalog and applied to canonical evidence. See
+[Catalog and hierarchical navigation](/sdks/boltzmann/concepts/catalog) for declarations, hierarchy, and
+path views such as `2025/fourier/examenes`.
 
 ```python
 query.is_filter_only    # True when there are no terms, so only the filters narrow it

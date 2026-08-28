@@ -494,7 +494,7 @@ class TestPartialPublish:
         partial = Brain.open(tmp_path / "partial", actor=CONTRIBUTOR, policy=PERMISSIVE_POLICY)
         await partial.pull(registry, UPSTREAM, "v1", modules=[MemoryType.SEMANTIC])
 
-        # Only the module it holds is retrieved, so the others are named by the remote and readable nowhere.
+        # Only the module it holds is retrieved, so the others are named by the remote and openable nowhere.
         fetched = await partial.fetch(registry, UPSTREAM, "v1", modules=[MemoryType.SEMANTIC])
         plan = partial.plan_reconcile(fetched.digest)
 
@@ -1028,3 +1028,27 @@ class TestCascade:
         upstream.reconcile_continue()
 
         assert derived in Ledger.of(upstream.modules()).removed
+
+
+class TestGovernanceConflict:
+    """Two histories carrying different trust roots are never reconciled automatically."""
+
+    def test_a_differing_trust_root_is_refused_as_a_governance_act(self, tmp_path: Path) -> None:
+        from boltzmann.authenticity import Scope, SshPublicKey, TrustedKey, TrustRoot, put_string
+        from boltzmann.exceptions import GovernanceConflictError
+
+        brain = Brain.open(tmp_path / "brain", actor=MAINTAINER, policy=PERMISSIVE_POLICY)
+        brain.ingest(b"%PDF-1.7 Lecture 07", paper(), llm("Fourier"))
+        blob = put_string(b"ssh-ed25519") + put_string(bytes(32))
+        theirs_root = TrustRoot(
+            revision=1,
+            govern_quorum=1,
+            keys=(TrustedKey(key=SshPublicKey.from_blob(blob), scopes=(Scope.GOVERN,), since=1),),
+        )
+        theirs = brain.snapshot().with_trust_root(theirs_root)
+        brain.store.put_bytes(theirs.canonical_bytes())
+
+        with pytest.raises(GovernanceConflictError, match="union of both sides"):
+            brain.plan_reconcile(theirs.digest)
+        with pytest.raises(GovernanceConflictError):
+            brain.merge(theirs.digest, reason="should never get this far")

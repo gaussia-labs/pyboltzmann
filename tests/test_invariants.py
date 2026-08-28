@@ -151,7 +151,9 @@ class TestInvariant5NeverProse:
     """The brain returns data, never a written answer (Section 9.3)."""
 
     def test_the_bundle_has_no_answer_field(self) -> None:
-        assert set(EvidenceBundle.model_fields) == {"matches", "verified_against", "truncated"}
+        # ``authorship`` is the paper's own field (Section 9.3): the second verification,
+        # reported beside the first -- data about provenance, never prose about content.
+        assert set(EvidenceBundle.model_fields) == {"matches", "verified_against", "truncated", "authorship"}
 
     def test_a_match_has_no_answer_field(self) -> None:
         forbidden = {"answer", "text", "response", "summary", "explanation", "prose"}
@@ -301,6 +303,8 @@ class TestProtocolSurface:
             def resolvability(self): ...
             def verify(self): ...
             def search(self, query): ...
+            def browse(self, classes): ...
+            def catalog_path(self, schemes): ...
 
         client = ReadOnly()
         assert isinstance(client, BrainReader)

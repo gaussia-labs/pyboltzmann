@@ -23,7 +23,16 @@ from typing import Any, ClassVar, cast
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.content import require_media_type
 from boltzmann.blocks.memory_type import MemoryType
-from boltzmann.blocks.semantic import SemanticBlock
+from boltzmann.blocks.semantic import SemanticBlock, SemanticBlockV3, SemanticKind
+from boltzmann.catalog import declaration_from_block
+from boltzmann.catalog_core import (
+    CATALOG_CONTRADICTION_CODES,
+    CATALOG_DECLARATION_NOT_ALLOWED,
+    CatalogRelationKind,
+    catalog_relation_kind,
+)
+from boltzmann.catalog_models import ClassificationRequest, HierarchyDeclaration, PlacementDeclaration
+from boltzmann.catalog_validation import validate_declarations
 from boltzmann.exceptions import BlockSchemaError, ProtocolError
 from boltzmann.identity.digest import BlockId
 from boltzmann.ingest.proposer import Candidate
@@ -119,7 +128,7 @@ def _claim_index(modules: dict[MemoryType, Module]) -> dict[tuple[str, str | Non
             if not module.store.is_resolvable(block_id):
                 continue
             held = module.get(block_id)
-            if isinstance(held, SemanticBlock):
+            if isinstance(held, SemanticBlock) and not _is_catalog_semantic(held):
                 index.setdefault((held.label, held.subject, held.kind.value), []).append(block_id)
 
     if cache is not None:
@@ -551,6 +560,46 @@ class ContradictionValidator:
         return issues
 
 
+class CatalogCandidateValidator:
+    """Allow models to propose placements, while reserving taxonomy design for the SDK API."""
+
+    code: ClassVar[str] = CATALOG_DECLARATION_NOT_ALLOWED
+
+    def check(
+        self,
+        candidate: Candidate,
+        task: ProcessingTask,
+        modules: dict[MemoryType, Module],
+    ) -> list[ValidationIssue]:
+        """Validate catalog-shaped semantic proposals against the reconstructed catalog."""
+        try:
+            block = build_block(candidate)
+        except (BlockSchemaError, ValueError):
+            return []
+        declaration = declaration_from_block(block)
+        if declaration is None:
+            return []
+        if isinstance(block, SemanticBlockV3) and block.kind in {SemanticKind.SCHEME, SemanticKind.CLASS}:
+            return [
+                ValidationIssue(
+                    code=self.code,
+                    detail="models may propose catalog placements, but schemes and classes require Brain.classify()",
+                )
+            ]
+        if isinstance(declaration, HierarchyDeclaration):
+            return [
+                ValidationIssue(
+                    code=self.code,
+                    detail="models may propose catalog placements, but hierarchy requires Brain.classify()",
+                )
+            ]
+        if not isinstance(declaration, PlacementDeclaration):
+            return []
+        request = ClassificationRequest(declarations=[declaration])
+        verdicts, _blocks, _placements = validate_declarations(request, modules, ignore_blocks={block.block_id})
+        return verdicts[0].issues
+
+
 def conflicts_for(candidate: Candidate, modules: dict[MemoryType, Module]) -> list[BlockId]:
     """
     The held blocks a proposal contradicts, so a reviewer can see both sides.
@@ -577,6 +626,12 @@ def _scan_for_conflicts(candidate: Candidate, modules: dict[MemoryType, Module])
         proposed = build_block(candidate)
     except (BlockSchemaError, ValueError):
         return []
+    declaration = declaration_from_block(proposed)
+    if declaration is not None:
+        verdicts, _blocks, _placements = validate_declarations(
+            ClassificationRequest(declarations=[declaration]), modules, ignore_blocks={proposed.block_id}
+        )
+        return verdicts[0].conflicts_with
     if not isinstance(proposed, SemanticBlock):
         return []
 
@@ -591,11 +646,23 @@ def _same_claim(held: object, proposed: SemanticBlock) -> bool:
     """Whether two semantic blocks make the same claim in different words."""
     return (
         isinstance(held, SemanticBlock)
+        and proposed.label is not None
+        and proposed.statement is not None
         and held.label == proposed.label
         and held.subject == proposed.subject
         and held.kind is proposed.kind
         and held.statement != proposed.statement
     )
+
+
+def _is_catalog_semantic(block: Block) -> bool:
+    """Whether any semantic schema version carries an exact catalog relation shape."""
+    if isinstance(block, SemanticBlockV3) and block.kind in {SemanticKind.SCHEME, SemanticKind.CLASS}:
+        return True
+    return catalog_relation_kind(getattr(block, "relations", None)) in {
+        CatalogRelationKind.PLACEMENT,
+        CatalogRelationKind.HIERARCHY,
+    }
 
 
 class UndecidedValidator:
@@ -644,11 +711,12 @@ DEFAULT_VALIDATORS = (
     DuplicateValidator(),
     RelationValidator(),
     ContentValidator(),
+    CatalogCandidateValidator(),
     ContradictionValidator(),
 )
 """The checks Section 8.3 assigns to the protocol, in the order they are cheapest to fail."""
 
-CONTRADICTION_CODES = frozenset({ContradictionValidator.code})
+CONTRADICTION_CODES = frozenset({ContradictionValidator.code, *CATALOG_CONTRADICTION_CODES})
 """Issue codes that mean ``CONTRADICTED`` rather than ``REJECTED``."""
 
 REVIEW_CODES = frozenset({UndecidedValidator.code})

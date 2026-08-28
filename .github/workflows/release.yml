@@ -74,11 +74,24 @@ jobs:
       - name: Set up Python
         run: uv python install 3.11
 
+      - name: Install python-semantic-release
+        run: |
+          uv venv --seed /tmp/psr
+          uv pip install --python /tmp/psr/bin/python \
+            "python-semantic-release==9.21.2" "gitpython==3.1.59"
+
       - name: Python Semantic Release
         id: release
-        uses: python-semantic-release/python-semantic-release@v9
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_COMMIT_AUTHOR: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+        run: |
+          # Use GitHub's canonical Actions bot identity so release commits link to the bot account
+          # instead of the unrelated generic `actions-user` profile.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          export PATH="/tmp/psr/bin:$PATH"
+          semantic-release -v version
 
       # Trusted publishing: PyPI verifies the OIDC token this job mints against the
       # publisher registered for the project, so there is no API token to store, leak
@@ -90,10 +103,9 @@ jobs:
 
       - name: Publish to GitHub Releases
         if: steps.release.outputs.released == 'true'
-        uses: python-semantic-release/publish-action@v9
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ steps.release.outputs.tag }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: /tmp/psr/bin/semantic-release -v publish --tag "${{ steps.release.outputs.tag }}"
 
   # A release on master writes a chore(release) commit that only master has. semantic-release reads
   # the current version from the branch it runs on, so until develop is told, its next release is

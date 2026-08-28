@@ -1,6 +1,291 @@
 # CHANGELOG
 
 
+## v0.7.0-b.2 (2026-08-28)
+
+### Bug Fixes
+
+- Harden catalog integration
+  ([`a8a721a`](https://github.com/gaussia-labs/pyboltzmann/commit/a8a721a975b158f48067468691470c83301bd4f5))
+
+### Features
+
+- **catalog**: Add hierarchical catalog navigation
+  ([`c01a306`](https://github.com/gaussia-labs/pyboltzmann/commit/c01a30623347098255ac525c396e12803b5ff759))
+
+
+## v0.7.0-b.1 (2026-08-25)
+
+### Bug Fixes
+
+- **authenticity**: Judge revocation and truncation fail-closed across the chain
+  ([`35037f1`](https://github.com/gaussia-labs/pyboltzmann/commit/35037f107824d7c8448d41f4e62b96931ffd03df))
+
+Two ways an attacker could hide history from the verifier, closed with one doctrine: authorization
+  stays derived first-parent-only, but revocation and truncation are judged over everything
+  reachable.
+
+descends_from walked first parents only, so a compromise position reachable only through a merge's
+  second parent answered False -- "cleared" -- and the stolen key was re-admitted to quorums and its
+  signatures kept. It now walks every parent with a three-way result: reachable withdraws,
+  undecidable stays undecidable, and only a DAG whose every path closed at a genesis clears.
+
+The ancestry walk emitted CHAIN_TRUNCATED only for the head's own missing parent. A fabricated
+  revision whose first parent was simply withheld sat deeper, was labelled ordinary, and the
+  self-admission attack authenticated as AUTHORIZED. A walk that ends at an unresolvable non-genesis
+  position is now a blocking finding -- unless a pin matched, because a pin can only match within
+  the resolvable walk, so a match is an explicit anchor at or above the gap.
+
+AuthenticationReport.detail(kind) is now public; refusals quote it.
+
+- **brain**: Close the pin bypass and make signature evidence travel
+  ([`9f0a653`](https://github.com/gaussia-labs/pyboltzmann/commit/9f0a6534a3d78e14c298621f20b35dc8dad61ecb))
+
+Six review findings against the facade's distribution trust path, fixed together because they share
+  one surface:
+
+The pin gate accepted on the manifest's trust-root annotation -- registry-controlled input --
+  without ever authenticating the config, and its fallback consulted only TRUST_ROOT_MISMATCH, so an
+  unapproved rotation descending from the pin installed anyway. The annotation is now diagnostic
+  only: the config, history, and signatures are always fetched (all small) and the gate refuses on
+  quorum failures, revision violations, and blocking truncations before any module layer moves.
+
+countersign() guarded all five refusals behind "has a parent", signing any fabricated genesis
+  outright. A parentless document is now refused unless this brain already holds it, keeping the
+  legitimate pull-then-endorse bootstrap, and since-claims are checked on both branches.
+
+Only head-keyed records travelled, but the verifier demands quorum records over every revision
+  ancestor -- so every legitimately rotated brain arrived unauthorized. Publish now walks the
+  custody set (head, revision ancestors, governed genesis) and merge accepts exactly the artifact's
+  own ancestry, never whatever the store happens to hold.
+
+A subset publish minted a projection nobody signed and nobody could sign, so it always exported
+  unsigned. The projection is now anchored to the source head the existing annotation names:
+  validated as a byte-exact subset (fail-closed), then judged through the source's own records,
+  which travel with the subset artifact.
+
+Merging referrers could be aborted by the 513th record (the cap raises an AuthenticityError no
+  except clause covered) or an unlistable referrers endpoint; both now skip with a warning, bounded
+  by a per-call merge ceiling, honoring the method's own contract.
+
+"Previously seen signed" was read off the current local head, so one local commit disarmed the
+  stripping guard and locally-signed stores false-positived on honestly-unsigned upstreams. It is
+  now a persistent per-repository pointer, written only when a pull verified AUTHORIZED, first
+  sighting kept forever.
+
+Registry-supplied config bytes are parsed through a wrapper that turns a model mismatch into a
+  DistributionError naming the upgrade path.
+
+- **distribution**: Gate governed artifacts behind a declared wire version
+  ([`d15bb45`](https://github.com/gaussia-labs/pyboltzmann/commit/d15bb4550cc783b609e993287f3fd9235544f05d))
+
+trust_root rides in the config blob, and Snapshot is extra="forbid" on every already-shipped client
+  -- so an old client passed the exact-match version gate ("all good, version 1"), downloaded blobs,
+  and died mid-transfer on a pydantic traceback.
+
+A global PROTOCOL_VERSION bump is off the table: it is embedded in every block envelope, so it would
+  change every block_id and invalidate the published golden vectors. Instead a governed artifact
+  declares WIRE_VERSION (2) in the manifest annotation old clients already refuse on, so they fail
+  fast at resolve() with their existing clear message, before any blob moves. Ungoverned artifacts
+  keep declaring 1, so their interoperability is untouched. This client's gate relaxes from
+  exact-match to declared-above-supported, and a manifest that passes the gate but does not fit the
+  model is refused as a DistributionError naming the upgrade path instead of leaking a validation
+  traceback.
+
+- **distribution**: Read referrers listings tolerantly, keep fallback entries intact
+  ([`9318da4`](https://github.com/gaussia-labs/pyboltzmann/commit/9318da4f963780b5be6bf1d21199e0d86ddee96f))
+
+A referrers listing is shared, unauthenticated space: other tools attach SBOMs and attestations
+  whose descriptors legally carry fields this SDK does not model (platform, urls, data). Validating
+  every entry under extra="forbid" before the artifactType filter let one foreign sibling crash
+  pull() with a raw ValidationError, and a non-JSON body escaped as a JSONDecodeError. Entries are
+  now filtered as raw dicts first, parsed second, and skipped with a warning when unreadable --
+  matching what LocalLayoutRegistry already did.
+
+The fallback-tag append also round-tripped foreign entries through this client's model, silently
+  dropping the fields it did not know; the index is now carried as raw documents, so a rewrite drops
+  nothing.
+
+### Continuous Integration
+
+- Pin the release tooling instead of rebuilding it unpinned every run
+  ([`d7b1213`](https://github.com/gaussia-labs/pyboltzmann/commit/d7b12132180b75d5d2bc83eabb0dfee1f8048190))
+
+The python-semantic-release and publish-action Docker actions pip-install their dependencies at
+  image build time, on every run, with no lockfile. GitPython 3.1.60 (published 2026-08-25 18:33
+  UTC) removed the Actor.name_email_regex attribute that every python-semantic-release version reads
+  while parsing its configuration, and the develop release job died 13 minutes later with no change
+  on our side.
+
+Both steps now run semantic-release from a venv this workflow installs itself, with
+  python-semantic-release and gitpython pinned. The venv is seeded with pip because build_command
+  expects one, the way the action's container provided it. Outputs are unchanged: semantic-release
+  writes released/version/tag to GITHUB_OUTPUT itself whenever the variable is set, action or no
+  action.
+
+The gitpython pin can be dropped once python-semantic-release stops using the removed attribute.
+
+- **docs**: Apply the navigation the sync manifest already declares
+  ([`5f56dc9`](https://github.com/gaussia-labs/pyboltzmann/commit/5f56dc9b31a062a593d30002e412cca0381781a3))
+
+The reconciliation guide synced to the central docs and shipped unreachable: the file landed,
+  nothing in docs.json pointed at it, so the page existed and no reader could get to it.
+
+docs-sync.json already described the whole tab -- every group, every page -- and the workflow read
+  only its target_dir. The navigation was therefore maintained twice, once as a declaration nobody
+  applied and once by hand in another repository, with the workflow's own pull request body asking
+  whoever merged it to remember. That is the kind of step that works until the day it does not.
+
+The tab is now rewritten from the manifest. Only the matching tab is touched: docs.json is stored as
+  json.dumps(indent=2), so writing it back that way leaves every other SDK's navigation
+  byte-identical, which keeps the diff reviewable and keeps this from becoming a reason to distrust
+  the sync.
+
+It refuses rather than syncing when the manifest and the synced files disagree, in either direction.
+  A page with no entry is unreachable and an entry with no page fails the docs build, and neither
+  announces itself -- the first is invisible until someone looks for a guide that should be there.
+  Verified against the live docs repository: on its current state the script produces exactly the
+  one line that was missing and nothing else, and each refusal leaves docs.json untouched.
+
+### Documentation
+
+- **guides**: Document authenticity and retire the not-implemented notes
+  ([`2208e1c`](https://github.com/gaussia-labs/pyboltzmann/commit/2208e1ca84a3afd87d0f531abd01a3fdbaaeb788))
+
+A new guide covers the whole role: creating a governed brain, the quorum rule and the multi-party
+  rotation flow, retirement versus compromise without clocks, the pin, publication as referrers, the
+  verification policy, and what a plain install can and cannot decide. The navigation gains the page
+  in both docs.json and the sync manifest, which must move together.
+
+The reconciliation guide's "not implemented -- needs authenticity" row becomes the
+  GovernanceConflictError it now is, and the notes that said no signing exists say what signing
+  mechanically guarantees instead. The conformance guide lists the two new vector files and the new
+  suite; the interfaces page gains the sixth role and the sixth exception family.
+
+### Features
+
+- **authenticity**: Add SSHSIG signing, trust roots, and the positional verifier
+  ([`5f0c1ba`](https://github.com/gaussia-labs/pyboltzmann/commit/5f0c1ba6939f1d42e768731c2f7ba03ca5f6b921))
+
+The paper's Section 8 as a package: detached SSHSIG signatures over canonical snapshot bytes --
+  byte-identical to ssh-keygen's output and verified against OpenSSH in both directions -- a trust
+  root whose validity is positional rather than temporal, required scopes computed from the
+  difference a snapshot made rather than from what a signature claims, and an authenticator whose
+  report keeps integrity and authenticity separate: state is a derived property, so no construction
+  can claim authorized while carrying a blocking finding.
+
+Signing goes through ssh-agent only. The private key never enters the process, hardware tokens
+  included, and the agent returns exactly the RFC 4253 blob SSHSIG's signature field wants, so
+  nothing is reframed.
+
+The Ed25519 mathematics is the one thing the optional [authenticity] extra buys. Every structural
+  check -- wire framing, fingerprints, the fingerprint-versus-embedded-key rejection the paper
+  requires of every reader, quorum arithmetic -- is standard library and works on a plain install,
+  and an unchecked signature reports unverifiable: "could not check" must never read as either
+  verdict, or an attacker's uninstall becomes a forgery.
+
+The snapshot-facing halves (scope diffing, the chain walker, the authenticator) land here and
+  activate when the snapshot learns to carry a trust root in the next commit.
+
+- **brain**: Authenticate, sign, pin, and govern through the facade
+  ([`4738808`](https://github.com/gaussia-labs/pyboltzmann/commit/47388080caa6ab33fab63bf5d4b851dd07a704be))
+
+Brain.init creates the genesis -- the single point where authority is asserted rather than derived,
+  anchored by pinning rather than validated. sign produces a detached record whose claimed scopes
+  default to what the snapshot actually required; authenticate runs the top-down check and returns
+  the report, with compromise markers read from the head's trust root because a compromise is
+  recorded later than the positions it withdraws; pin records the one thing that comes from outside.
+
+Governance moves only by quorum, evaluated against the key list being replaced. A single owner
+  rotates in one call. A quorum spanning machines uses plan_rotate -- the revision document is built
+  once, because created_at makes two constructions sign different bytes -- then countersign on the
+  exact bytes received, which refuses mechanically what a reviewer would refuse by reading: an
+  unseen parent, content smuggled into a governance act, a non-advancing trust root, an admission
+  claim the observable chain refutes. rotate verifies the quorum before the head moves; a failed
+  quorum advances nothing. revoke builds the revision that retires a key (its history stands) or
+  records a compromise (its signatures from that position are withdrawn).
+
+pull gates on the pinned trust root before transferring any module layer, collects referrer
+  signatures, refuses a stripped brain once seen signed and a propose-scoped head unless policy
+  permits it. Reconciling histories that carry different trust roots is refused outright as a
+  governance conflict: unioning two key lists grants the union of both sides' permissions. Every
+  query result carries authorship beside verified, never folded into it. Pruning keeps signature
+  records of retained snapshots -- a signature a garbage collection can remove is not a signature.
+
+- **conformance**: Publish golden vectors for the authenticity role
+  ([`f45b90a`](https://github.com/gaussia-labs/pyboltzmann/commit/f45b90a98a88df44730d0e2a14e0f56b943c615b))
+
+Two files, two layers, both plain data readable without executing this SDK. sshsig.json pins the
+  wire format byte for byte -- including the signed-data blob, which is what tells a framing bug
+  from a signing bug, since without it both fail at the same place with the same message. It also
+  pins the traps verified against OpenSSH 10.2: no version field in the signed data, 70-column
+  armor, and the reserved-field asymmetry. signatures.json pins the judgement: whole chains,
+  published test key pairs (the seeds are deliberately public), and the verdict a verifier MUST
+  reach for each of the paper's worked cases -- admission by quorum, a self-admitted key failing
+  with no pin at all, retirement standing where compromise withdraws.
+
+AuthenticityConformance replays every published case against any store, so a third-party
+  implementation inherits the whole judgement layer the way it already inherits the identity one.
+  The generator lives in tests/ and is deterministic by construction: a regeneration that changes a
+  published vector means a bug or a new format version, never noise.
+
+- **distribution**: Publish signatures as referrers, and compositions with history
+  ([`2c84cc7`](https://github.com/gaussia-labs/pyboltzmann/commit/2c84cc7a112ccc6e0d6df695d201c550a70aecdb))
+
+A signature is never a layer of the brain manifest: adding a countersignature would change the
+  manifest, and therefore the brain's digest, so a brain would change identity because someone
+  agreed with it. Each record is instead the single layer of its own manifest, whose subject names
+  the brain -- an OCI referrer in a registry, one more index.json entry in a local layout, so an
+  export and the wire carry one format. Registries that predate the Referrers API get the
+  sha256-<hex> fallback tag, read-modify-written on push. The trust root's digest is annotated on
+  the brain manifest so a consumer can compare a pin before transferring anything.
+
+Referrers are a separate RegistryReferrers protocol rather than three more methods on
+  RegistryClient, because adding methods to a protocol breaks every third-party transport that
+  already satisfies it; callers feature-detect, and a transport that never learned about referrers
+  still moves the brain.
+
+The history layer now also carries the composition documents its snapshots reference. Required
+  scopes are computed from the difference against the first parent, and without the parent's
+  compositions every pulled commit is undecidable between an ingest and a canonical drop -- a
+  verifier that guessed smaller would be exploitable by shipping a truncated history. With
+  compositions travelling, "never transferred" is now detected at the block level, which is what the
+  diagnosis meant.
+
+- **module**: Carry the trust root inside the snapshot document
+  ([`dffdb21`](https://github.com/gaussia-labs/pyboltzmann/commit/dffdb21777ed315dcec4d96304bc4bed91b75009))
+
+It lives in the snapshot rather than in a module or a layer because it must reach every install,
+  complete or partial, and because inside the signed bytes a signature can never be evaluated
+  against a key list the signer did not commit to. A None never enters the canonical bytes, so every
+  existing snapshot keeps the exact digest it had before the field existed -- pinned by test against
+  the pre-field serialization.
+
+Every derivation carries the trust root forward. A commit is not a governance act: a derivation that
+  dropped it would present a changed digest (present to absent) to the verifier, be classified as a
+  revision, and demand a govern quorum it has no reason to carry. A reconciliation keeps the first
+  parent's -- a merge does not adopt a key list. The one constructor that changes it,
+  with_trust_root, copies the modules verbatim and is structurally unable to fold content into
+  governance.
+
+With the field in place, the scope computation of the previous commit becomes decidable and is
+  covered here: the paper's scope table as a parametrized matrix, an executable oracle over
+  arbitrary compositions, and fail-closed questions wherever evidence is missing.
+
+- **protocol**: Declare the authenticity role and export its surface
+  ([`67d46b7`](https://github.com/gaussia-labs/pyboltzmann/commit/67d46b76a2f204c09ceaafe69ceaf4273ed6af18))
+
+BrainAuthenticity is the sixth protocol role, and it is claimable separately on purpose: a consumer
+  that recomputes integrity while holding no trust anchor is not a degraded client but the
+  zero-configuration case the protocol guarantees, and requiring signature verification for a reader
+  to conform would make offline integrity conditional on configuration the protocol promises it does
+  not need. What no implementation may do is claim an authenticity it did not check.
+
+The package root exports the working surface -- Scope, TrustRoot, SignatureRecord,
+  AuthenticationReport, VerificationPolicy, AgentSigner and the rest -- so a caller reaches it the
+  way they reach every other role.
+
+
 ## v0.6.0 (2026-08-20)
 
 

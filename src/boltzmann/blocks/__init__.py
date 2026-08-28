@@ -21,7 +21,7 @@ from boltzmann.blocks.provenance import (
     RemovalRecord,
     SupersessionRecord,
 )
-from boltzmann.blocks.semantic import Relation, SemanticBlock, SemanticBlockV2, SemanticKind
+from boltzmann.blocks.semantic import Relation, SemanticBlock, SemanticBlockV2, SemanticBlockV3, SemanticKind
 
 __all__ = [
     "ENVELOPE_KEYS",
@@ -50,6 +50,7 @@ __all__ = [
     "RemovalRecord",
     "SemanticBlock",
     "SemanticBlockV2",
+    "SemanticBlockV3",
     "SemanticKind",
     "Step",
     "SupersessionRecord",

@@ -1,0 +1,514 @@
+{
+  "boltzmann": 1,
+  "serialization": "jcs/1",
+  "hash": "sha256",
+  "namespace": "boltzmann.snapshot.v1",
+  "description": "Snapshots, published test key pairs, and the verdict a verifier MUST reach. Before a case runs, every document in `snapshots` and every record in `signatures` is stored beside the chain, the way a real brain holds them -- ancestor revisions are re-judged from storage, so a subtree whose admitting revision lacks its quorum falls with it. A case then presents the named records over its snapshot, optionally a pinned trust root and the newest trust root the verifier knows, and states the verdict.",
+  "warning": "The private seeds below are PUBLISHED, deliberately: they exist so an implementation in any language can regenerate and extend these vectors. Never use them for anything real.",
+  "keys": [
+    {
+      "name": "A",
+      "type": "ssh-ed25519",
+      "seed_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "public": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILx8vLVjY3X6HYJDTUZnJNkjd/U7mAaV3UnSbQzhIgWl",
+      "public_key_blob_hex": "0000000b7373682d6564323535313900000020bc7cbcb5636375fa1d82434d466724d92377f53b980695dd49d26d0ce12205a5",
+      "fingerprint": "SHA256:uckGXcH3+2/th6yWBnmJJgkMfPA65BhRg/TRtgXcViE"
+    },
+    {
+      "name": "B",
+      "type": "ssh-ed25519",
+      "seed_hex": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+      "public": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFUVT0IGXqWhvqBUY4Jr4mhOuS35LBAAJ6q6rlfKVUIH",
+      "public_key_blob_hex": "0000000b7373682d656432353531390000002055154f42065ea5a1bea05463826be2684eb92df92c100027aabaae57ca554207",
+      "fingerprint": "SHA256:JpmCQnaylH37qPdioWeZ3Vzfk0Kziy21v9qz+wmVSvU"
+    },
+    {
+      "name": "C",
+      "type": "ssh-ed25519",
+      "seed_hex": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+      "public": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINQEvERWWu27iZFQ5bCzsyuUQb8Mt4hMMxMNqNvCfdLP",
+      "public_key_blob_hex": "0000000b7373682d6564323535313900000020d404bc44565aedbb899150e5b0b3b32b9441bf0cb7884c33130da8dbc27dd2cf",
+      "fingerprint": "SHA256:KhLjP/Ysvo3xLVkiurmOOHOv4pvX1nnizJkPaldpD54"
+    }
+  ],
+  "trust_roots": {
+    "revision-one": {
+      "document": {
+        "boltzmann": 1,
+        "govern_quorum": 2,
+        "keys": [
+          {
+            "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILx8vLVjY3X6HYJDTUZnJNkjd/U7mAaV3UnSbQzhIgWl",
+            "scopes": [
+              "ingest",
+              "commit",
+              "drop:canonical",
+              "govern"
+            ],
+            "since": 1
+          },
+          {
+            "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFUVT0IGXqWhvqBUY4Jr4mhOuS35LBAAJ6q6rlfKVUIH",
+            "scopes": [
+              "ingest",
+              "commit",
+              "govern"
+            ],
+            "since": 1
+          }
+        ],
+        "namespace": "boltzmann.snapshot.v1",
+        "revision": 1
+      },
+      "digest": "sha256:b442d9710b43825332120fd3c41f1484e6d798bb3dfa2009bbcd2768b9f3fe7a"
+    },
+    "revision-two": {
+      "document": {
+        "boltzmann": 1,
+        "govern_quorum": 2,
+        "keys": [
+          {
+            "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILx8vLVjY3X6HYJDTUZnJNkjd/U7mAaV3UnSbQzhIgWl",
+            "scopes": [
+              "ingest",
+              "commit",
+              "drop:canonical",
+              "govern"
+            ],
+            "since": 1
+          },
+          {
+            "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFUVT0IGXqWhvqBUY4Jr4mhOuS35LBAAJ6q6rlfKVUIH",
+            "scopes": [
+              "ingest",
+              "commit",
+              "govern"
+            ],
+            "since": 1
+          },
+          {
+            "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINQEvERWWu27iZFQ5bCzsyuUQb8Mt4hMMxMNqNvCfdLP",
+            "scopes": [
+              "commit"
+            ],
+            "since": 2
+          }
+        ],
+        "namespace": "boltzmann.snapshot.v1",
+        "revision": 2
+      },
+      "digest": "sha256:b4094cdd2640c8d0f801bb2726cf922778fff0a062ac9b8d3f21893eb98ed98b"
+    },
+    "compromised": {
+      "document": {
+        "boltzmann": 1,
+        "govern_quorum": 2,
+        "keys": [
+          {
+            "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILx8vLVjY3X6HYJDTUZnJNkjd/U7mAaV3UnSbQzhIgWl",
+            "scopes": [
+              "ingest",
+              "commit",
+              "drop:canonical",
+              "govern"
+            ],
+            "since": 1
+          },
+          {
+            "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFUVT0IGXqWhvqBUY4Jr4mhOuS35LBAAJ6q6rlfKVUIH",
+            "scopes": [
+              "ingest",
+              "commit",
+              "govern"
+            ],
+            "since": 1
+          },
+          {
+            "compromised_from": "sha256:7405fef52fe2a90e9a554b1136e5d11cde7fd703acfb6b4fb1b4fd5463bfdfcf",
+            "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINQEvERWWu27iZFQ5bCzsyuUQb8Mt4hMMxMNqNvCfdLP",
+            "scopes": [
+              "commit"
+            ],
+            "since": 2
+          }
+        ],
+        "namespace": "boltzmann.snapshot.v1",
+        "revision": 3
+      },
+      "digest": "sha256:8b0bcab575cd702b74607283157e0784d27905c499ecc114132dd1f36d348409"
+    }
+  },
+  "snapshots": {
+    "genesis": {
+      "canonical": "{\"boltzmann\":1,\"created_at\":\"2026-07-01T00:00:00Z\",\"modules\":{},\"trust_root\":{\"boltzmann\":1,\"govern_quorum\":2,\"keys\":[{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILx8vLVjY3X6HYJDTUZnJNkjd/U7mAaV3UnSbQzhIgWl\",\"scopes\":[\"ingest\",\"commit\",\"drop:canonical\",\"govern\"],\"since\":1},{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFUVT0IGXqWhvqBUY4Jr4mhOuS35LBAAJ6q6rlfKVUIH\",\"scopes\":[\"ingest\",\"commit\",\"govern\"],\"since\":1}],\"namespace\":\"boltzmann.snapshot.v1\",\"revision\":1}}",
+      "digest": "sha256:1aa4db9b51cd3ec102fe4e14a2075686dbbd7ab90b0d6203be3cb70bc22769eb"
+    },
+    "S7": {
+      "canonical": "{\"boltzmann\":1,\"created_at\":\"2026-07-02T00:00:00Z\",\"modules\":{\"semantic\":{\"block_count\":1,\"composition\":\"sha256:01b2c661a7fbd13fedc28fef2cacf413b8eec2293f9774aed7bfbe6d0a3a2e8c\",\"layout\":\"rfc6962-sorted/1\",\"memory_type\":\"semantic\",\"root\":\"sha256:4d1c6bc1dec48ca0f51f6fe24ed16d66b597ba10edf69e2397dfbe2d33715f44\"}},\"parent\":\"sha256:1aa4db9b51cd3ec102fe4e14a2075686dbbd7ab90b0d6203be3cb70bc22769eb\",\"trust_root\":{\"boltzmann\":1,\"govern_quorum\":2,\"keys\":[{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILx8vLVjY3X6HYJDTUZnJNkjd/U7mAaV3UnSbQzhIgWl\",\"scopes\":[\"ingest\",\"commit\",\"drop:canonical\",\"govern\"],\"since\":1},{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFUVT0IGXqWhvqBUY4Jr4mhOuS35LBAAJ6q6rlfKVUIH\",\"scopes\":[\"ingest\",\"commit\",\"govern\"],\"since\":1}],\"namespace\":\"boltzmann.snapshot.v1\",\"revision\":1}}",
+      "digest": "sha256:21edfe1ad12877058c02a3ad8271f2a19f2bbdd45ce6e8c0db18f64991e8a065"
+    },
+    "S8": {
+      "canonical": "{\"boltzmann\":1,\"created_at\":\"2026-07-03T00:00:00Z\",\"modules\":{\"semantic\":{\"block_count\":1,\"composition\":\"sha256:01b2c661a7fbd13fedc28fef2cacf413b8eec2293f9774aed7bfbe6d0a3a2e8c\",\"layout\":\"rfc6962-sorted/1\",\"memory_type\":\"semantic\",\"root\":\"sha256:4d1c6bc1dec48ca0f51f6fe24ed16d66b597ba10edf69e2397dfbe2d33715f44\"}},\"parent\":\"sha256:21edfe1ad12877058c02a3ad8271f2a19f2bbdd45ce6e8c0db18f64991e8a065\",\"trust_root\":{\"boltzmann\":1,\"govern_quorum\":2,\"keys\":[{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILx8vLVjY3X6HYJDTUZnJNkjd/U7mAaV3UnSbQzhIgWl\",\"scopes\":[\"ingest\",\"commit\",\"drop:canonical\",\"govern\"],\"since\":1},{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFUVT0IGXqWhvqBUY4Jr4mhOuS35LBAAJ6q6rlfKVUIH\",\"scopes\":[\"ingest\",\"commit\",\"govern\"],\"since\":1},{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINQEvERWWu27iZFQ5bCzsyuUQb8Mt4hMMxMNqNvCfdLP\",\"scopes\":[\"commit\"],\"since\":2}],\"namespace\":\"boltzmann.snapshot.v1\",\"revision\":2}}",
+      "digest": "sha256:4559a988c6ff70185d704d1320b0746353c64207329ecc444a621b893c0de1c1"
+    },
+    "S9": {
+      "canonical": "{\"boltzmann\":1,\"created_at\":\"2026-07-04T00:00:00Z\",\"modules\":{\"semantic\":{\"block_count\":2,\"composition\":\"sha256:db8d57e59e7d8bdfcf6f4805d95e8c0666d0a608d3758d8643d60229e50132ca\",\"layout\":\"rfc6962-sorted/1\",\"memory_type\":\"semantic\",\"root\":\"sha256:9339df2bcf791c9f5a5637b848eb0802db6432a78fabc6125035e1e4e7deecb0\"}},\"parent\":\"sha256:4559a988c6ff70185d704d1320b0746353c64207329ecc444a621b893c0de1c1\",\"trust_root\":{\"boltzmann\":1,\"govern_quorum\":2,\"keys\":[{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILx8vLVjY3X6HYJDTUZnJNkjd/U7mAaV3UnSbQzhIgWl\",\"scopes\":[\"ingest\",\"commit\",\"drop:canonical\",\"govern\"],\"since\":1},{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFUVT0IGXqWhvqBUY4Jr4mhOuS35LBAAJ6q6rlfKVUIH\",\"scopes\":[\"ingest\",\"commit\",\"govern\"],\"since\":1},{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINQEvERWWu27iZFQ5bCzsyuUQb8Mt4hMMxMNqNvCfdLP\",\"scopes\":[\"commit\"],\"since\":2}],\"namespace\":\"boltzmann.snapshot.v1\",\"revision\":2}}",
+      "digest": "sha256:7405fef52fe2a90e9a554b1136e5d11cde7fd703acfb6b4fb1b4fd5463bfdfcf"
+    },
+    "S8-self-admitted": {
+      "canonical": "{\"boltzmann\":1,\"created_at\":\"2026-07-03T00:00:00Z\",\"modules\":{\"semantic\":{\"block_count\":1,\"composition\":\"sha256:01b2c661a7fbd13fedc28fef2cacf413b8eec2293f9774aed7bfbe6d0a3a2e8c\",\"layout\":\"rfc6962-sorted/1\",\"memory_type\":\"semantic\",\"root\":\"sha256:4d1c6bc1dec48ca0f51f6fe24ed16d66b597ba10edf69e2397dfbe2d33715f44\"}},\"parent\":\"sha256:21edfe1ad12877058c02a3ad8271f2a19f2bbdd45ce6e8c0db18f64991e8a065\",\"trust_root\":{\"boltzmann\":1,\"govern_quorum\":2,\"keys\":[{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILx8vLVjY3X6HYJDTUZnJNkjd/U7mAaV3UnSbQzhIgWl\",\"scopes\":[\"ingest\",\"commit\",\"drop:canonical\",\"govern\"],\"since\":1},{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFUVT0IGXqWhvqBUY4Jr4mhOuS35LBAAJ6q6rlfKVUIH\",\"scopes\":[\"ingest\",\"commit\",\"govern\"],\"since\":1},{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINQEvERWWu27iZFQ5bCzsyuUQb8Mt4hMMxMNqNvCfdLP\",\"scopes\":[\"commit\"],\"since\":1}],\"namespace\":\"boltzmann.snapshot.v1\",\"revision\":2}}",
+      "digest": "sha256:ceb67671992fd39831db8ea16448dfa0d59c9d06b8c2ec6dcaa1ed45679a0cd3"
+    },
+    "S9-on-a-lie": {
+      "canonical": "{\"boltzmann\":1,\"created_at\":\"2026-07-04T00:00:00Z\",\"modules\":{\"semantic\":{\"block_count\":2,\"composition\":\"sha256:db8d57e59e7d8bdfcf6f4805d95e8c0666d0a608d3758d8643d60229e50132ca\",\"layout\":\"rfc6962-sorted/1\",\"memory_type\":\"semantic\",\"root\":\"sha256:9339df2bcf791c9f5a5637b848eb0802db6432a78fabc6125035e1e4e7deecb0\"}},\"parent\":\"sha256:ceb67671992fd39831db8ea16448dfa0d59c9d06b8c2ec6dcaa1ed45679a0cd3\",\"trust_root\":{\"boltzmann\":1,\"govern_quorum\":2,\"keys\":[{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILx8vLVjY3X6HYJDTUZnJNkjd/U7mAaV3UnSbQzhIgWl\",\"scopes\":[\"ingest\",\"commit\",\"drop:canonical\",\"govern\"],\"since\":1},{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFUVT0IGXqWhvqBUY4Jr4mhOuS35LBAAJ6q6rlfKVUIH\",\"scopes\":[\"ingest\",\"commit\",\"govern\"],\"since\":1},{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINQEvERWWu27iZFQ5bCzsyuUQb8Mt4hMMxMNqNvCfdLP\",\"scopes\":[\"commit\"],\"since\":1}],\"namespace\":\"boltzmann.snapshot.v1\",\"revision\":2}}",
+      "digest": "sha256:7347fcfe396acc86720894c4f9f8b04eeaed7e9a0de16793184d0a4cf4af388b"
+    },
+    "S10-retires-B": {
+      "canonical": "{\"boltzmann\":1,\"created_at\":\"2026-07-05T00:00:00Z\",\"modules\":{\"semantic\":{\"block_count\":2,\"composition\":\"sha256:db8d57e59e7d8bdfcf6f4805d95e8c0666d0a608d3758d8643d60229e50132ca\",\"layout\":\"rfc6962-sorted/1\",\"memory_type\":\"semantic\",\"root\":\"sha256:9339df2bcf791c9f5a5637b848eb0802db6432a78fabc6125035e1e4e7deecb0\"}},\"parent\":\"sha256:7405fef52fe2a90e9a554b1136e5d11cde7fd703acfb6b4fb1b4fd5463bfdfcf\",\"trust_root\":{\"boltzmann\":1,\"govern_quorum\":2,\"keys\":[{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILx8vLVjY3X6HYJDTUZnJNkjd/U7mAaV3UnSbQzhIgWl\",\"scopes\":[\"ingest\",\"commit\",\"drop:canonical\",\"govern\"],\"since\":1},{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFUVT0IGXqWhvqBUY4Jr4mhOuS35LBAAJ6q6rlfKVUIH\",\"retired_from\":3,\"scopes\":[\"ingest\",\"commit\",\"govern\"],\"since\":1},{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINQEvERWWu27iZFQ5bCzsyuUQb8Mt4hMMxMNqNvCfdLP\",\"scopes\":[\"commit\"],\"since\":2}],\"namespace\":\"boltzmann.snapshot.v1\",\"revision\":3}}",
+      "digest": "sha256:84f866100479b837e6a114abdd3422b11be16b742e31885cc4922986d70b2c82"
+    },
+    "S11": {
+      "canonical": "{\"boltzmann\":1,\"created_at\":\"2026-07-06T00:00:00Z\",\"modules\":{\"semantic\":{\"block_count\":3,\"composition\":\"sha256:9ed00e861d37062f39c83d6436985bf28e33e3fe5ae6de85ed98f6f6e40db68a\",\"layout\":\"rfc6962-sorted/1\",\"memory_type\":\"semantic\",\"root\":\"sha256:56c9c382d948a265b6d9c466345093d808d007a258da6e23cf5a304a0097fb83\"}},\"parent\":\"sha256:84f866100479b837e6a114abdd3422b11be16b742e31885cc4922986d70b2c82\",\"trust_root\":{\"boltzmann\":1,\"govern_quorum\":2,\"keys\":[{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILx8vLVjY3X6HYJDTUZnJNkjd/U7mAaV3UnSbQzhIgWl\",\"scopes\":[\"ingest\",\"commit\",\"drop:canonical\",\"govern\"],\"since\":1},{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFUVT0IGXqWhvqBUY4Jr4mhOuS35LBAAJ6q6rlfKVUIH\",\"retired_from\":3,\"scopes\":[\"ingest\",\"commit\",\"govern\"],\"since\":1},{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINQEvERWWu27iZFQ5bCzsyuUQb8Mt4hMMxMNqNvCfdLP\",\"scopes\":[\"commit\"],\"since\":2}],\"namespace\":\"boltzmann.snapshot.v1\",\"revision\":3}}",
+      "digest": "sha256:dc451c5daffb91176b3b211aaaf9943e7ad0ac77c706879478a8f2f912a84f4e"
+    },
+    "S12-records-compromise": {
+      "canonical": "{\"boltzmann\":1,\"created_at\":\"2026-07-06T00:00:00Z\",\"modules\":{\"semantic\":{\"block_count\":2,\"composition\":\"sha256:db8d57e59e7d8bdfcf6f4805d95e8c0666d0a608d3758d8643d60229e50132ca\",\"layout\":\"rfc6962-sorted/1\",\"memory_type\":\"semantic\",\"root\":\"sha256:9339df2bcf791c9f5a5637b848eb0802db6432a78fabc6125035e1e4e7deecb0\"}},\"parent\":\"sha256:7405fef52fe2a90e9a554b1136e5d11cde7fd703acfb6b4fb1b4fd5463bfdfcf\",\"trust_root\":{\"boltzmann\":1,\"govern_quorum\":2,\"keys\":[{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILx8vLVjY3X6HYJDTUZnJNkjd/U7mAaV3UnSbQzhIgWl\",\"scopes\":[\"ingest\",\"commit\",\"drop:canonical\",\"govern\"],\"since\":1},{\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFUVT0IGXqWhvqBUY4Jr4mhOuS35LBAAJ6q6rlfKVUIH\",\"scopes\":[\"ingest\",\"commit\",\"govern\"],\"since\":1},{\"compromised_from\":\"sha256:7405fef52fe2a90e9a554b1136e5d11cde7fd703acfb6b4fb1b4fd5463bfdfcf\",\"key\":\"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINQEvERWWu27iZFQ5bCzsyuUQb8Mt4hMMxMNqNvCfdLP\",\"scopes\":[\"commit\"],\"since\":2}],\"namespace\":\"boltzmann.snapshot.v1\",\"revision\":3}}",
+      "digest": "sha256:da23bdfd8b4c5ba9d5001aa7142794233cd13f72e4a1d7fc347fa01d67bfe4f2"
+    }
+  },
+  "signatures": {
+    "A-over-genesis": {
+      "boltzmann": 1,
+      "key": "SHA256:uckGXcH3+2/th6yWBnmJJgkMfPA65BhRg/TRtgXcViE",
+      "namespace": "boltzmann.snapshot.v1",
+      "scopes": [
+        "govern"
+      ],
+      "signature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgvHy8tWNjdfodgkNNRmck2SN39T\nuYBpXdSdJtDOEiBaUAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQIrYywySwEulDBgH5nfgge/vfT+8TMECW4Cf0lQp7u\nECX5kge8abQRiutZ6XyORvWuIybfvTN8qjNDj3k2Na+Qw=\n-----END SSH SIGNATURE-----\n",
+      "snapshot": "sha256:1aa4db9b51cd3ec102fe4e14a2075686dbbd7ab90b0d6203be3cb70bc22769eb"
+    },
+    "B-over-genesis": {
+      "boltzmann": 1,
+      "key": "SHA256:JpmCQnaylH37qPdioWeZ3Vzfk0Kziy21v9qz+wmVSvU",
+      "namespace": "boltzmann.snapshot.v1",
+      "scopes": [
+        "govern"
+      ],
+      "signature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgVRVPQgZepaG+oFRjgmviaE65Lf\nksEAAnqrquV8pVQgcAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQCXg8JC3MqKiyIJa3hDkVxmKmK7/FlOyjhebpjhwxW\nEp50wE8FPno50UfLwIY+9f2GcrJZWs60F5CzZ3KFmqHgM=\n-----END SSH SIGNATURE-----\n",
+      "snapshot": "sha256:1aa4db9b51cd3ec102fe4e14a2075686dbbd7ab90b0d6203be3cb70bc22769eb"
+    },
+    "A-over-S7": {
+      "boltzmann": 1,
+      "key": "SHA256:uckGXcH3+2/th6yWBnmJJgkMfPA65BhRg/TRtgXcViE",
+      "namespace": "boltzmann.snapshot.v1",
+      "scopes": [
+        "commit"
+      ],
+      "signature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgvHy8tWNjdfodgkNNRmck2SN39T\nuYBpXdSdJtDOEiBaUAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQDtKCLWVYdT5+YsPLpD49zD/yMrjGuEpRVyAuQsTOO\nJsZx7cyuxtFA7qr1WWTER+va4a0iW/MmZ0WUD3U/6L6QE=\n-----END SSH SIGNATURE-----\n",
+      "snapshot": "sha256:21edfe1ad12877058c02a3ad8271f2a19f2bbdd45ce6e8c0db18f64991e8a065"
+    },
+    "A-over-S8": {
+      "boltzmann": 1,
+      "key": "SHA256:uckGXcH3+2/th6yWBnmJJgkMfPA65BhRg/TRtgXcViE",
+      "namespace": "boltzmann.snapshot.v1",
+      "scopes": [
+        "govern"
+      ],
+      "signature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgvHy8tWNjdfodgkNNRmck2SN39T\nuYBpXdSdJtDOEiBaUAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQKA9+NoXhZLZnIQxY8iIDXrB6x6zex1+XMoOLQsiGO\nikxVOIfAxb1GozKXSEf5aJy+y7RZMcqiPSrIm9TFXEpA0=\n-----END SSH SIGNATURE-----\n",
+      "snapshot": "sha256:4559a988c6ff70185d704d1320b0746353c64207329ecc444a621b893c0de1c1"
+    },
+    "B-over-S8": {
+      "boltzmann": 1,
+      "key": "SHA256:JpmCQnaylH37qPdioWeZ3Vzfk0Kziy21v9qz+wmVSvU",
+      "namespace": "boltzmann.snapshot.v1",
+      "scopes": [
+        "govern"
+      ],
+      "signature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgVRVPQgZepaG+oFRjgmviaE65Lf\nksEAAnqrquV8pVQgcAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQEHNiQZQHWGHB7ZgoeQl02HjLPt0P93zqDht4+NVKK\nj/IteH1VKNE3GykrhVnEigtsQUigBkGfppkFK+FUhtbAA=\n-----END SSH SIGNATURE-----\n",
+      "snapshot": "sha256:4559a988c6ff70185d704d1320b0746353c64207329ecc444a621b893c0de1c1"
+    },
+    "C-over-S9": {
+      "boltzmann": 1,
+      "key": "SHA256:KhLjP/Ysvo3xLVkiurmOOHOv4pvX1nnizJkPaldpD54",
+      "namespace": "boltzmann.snapshot.v1",
+      "scopes": [
+        "commit"
+      ],
+      "signature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg1AS8RFZa7buJkVDlsLOzK5RBvw\ny3iEwzEw2o28J90s8AAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQHHmQgvk5v5LnG80SA7ogoj8O4Fx5piL4vSlwR9+uz\nRUwvIYamfx/HP583w+IJX/WUDEgyDtGeno7OxjFaRPuA0=\n-----END SSH SIGNATURE-----\n",
+      "snapshot": "sha256:7405fef52fe2a90e9a554b1136e5d11cde7fd703acfb6b4fb1b4fd5463bfdfcf"
+    },
+    "C-over-S8-self-admitted": {
+      "boltzmann": 1,
+      "key": "SHA256:KhLjP/Ysvo3xLVkiurmOOHOv4pvX1nnizJkPaldpD54",
+      "namespace": "boltzmann.snapshot.v1",
+      "scopes": [
+        "govern"
+      ],
+      "signature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg1AS8RFZa7buJkVDlsLOzK5RBvw\ny3iEwzEw2o28J90s8AAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQAFc/HRI4DWmCen+cN99/XWD/L5VSbBSeayfYVdTyR\notw0hssSZN70Og/3awIJaJ73rYq3/2D8GJo1jzrvM/4wI=\n-----END SSH SIGNATURE-----\n",
+      "snapshot": "sha256:ceb67671992fd39831db8ea16448dfa0d59c9d06b8c2ec6dcaa1ed45679a0cd3"
+    },
+    "C-over-S9-on-a-lie": {
+      "boltzmann": 1,
+      "key": "SHA256:KhLjP/Ysvo3xLVkiurmOOHOv4pvX1nnizJkPaldpD54",
+      "namespace": "boltzmann.snapshot.v1",
+      "scopes": [
+        "commit"
+      ],
+      "signature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg1AS8RFZa7buJkVDlsLOzK5RBvw\ny3iEwzEw2o28J90s8AAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQFay7Q+9iYc5LkqJkkalfk1FsdFjqAKEBKyTTh8sov\nuL0h2L9hDdsqLULpYWUh7cAHy0RfqhN4IZ1Q7ZG97aug0=\n-----END SSH SIGNATURE-----\n",
+      "snapshot": "sha256:7347fcfe396acc86720894c4f9f8b04eeaed7e9a0de16793184d0a4cf4af388b"
+    },
+    "A-over-S10": {
+      "boltzmann": 1,
+      "key": "SHA256:uckGXcH3+2/th6yWBnmJJgkMfPA65BhRg/TRtgXcViE",
+      "namespace": "boltzmann.snapshot.v1",
+      "scopes": [
+        "govern"
+      ],
+      "signature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgvHy8tWNjdfodgkNNRmck2SN39T\nuYBpXdSdJtDOEiBaUAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQNrBB806vBW+rQTeETsuMxptTgz02cOcrZFp9/x/dk\n1EDK1hvc2PX1l8AwCJ5DodySMULR6lByP1rbCWC6cxdwk=\n-----END SSH SIGNATURE-----\n",
+      "snapshot": "sha256:84f866100479b837e6a114abdd3422b11be16b742e31885cc4922986d70b2c82"
+    },
+    "B-over-S10": {
+      "boltzmann": 1,
+      "key": "SHA256:JpmCQnaylH37qPdioWeZ3Vzfk0Kziy21v9qz+wmVSvU",
+      "namespace": "boltzmann.snapshot.v1",
+      "scopes": [
+        "govern"
+      ],
+      "signature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgVRVPQgZepaG+oFRjgmviaE65Lf\nksEAAnqrquV8pVQgcAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQCC/sD30O7iUYudXJrC2lj/1uOaQM6Vnc68DmDuPqO\n4POwpwZulMETjLivWcD+d1DwTNtvAVtWyGCKpOXnkg2As=\n-----END SSH SIGNATURE-----\n",
+      "snapshot": "sha256:84f866100479b837e6a114abdd3422b11be16b742e31885cc4922986d70b2c82"
+    },
+    "B-over-S11": {
+      "boltzmann": 1,
+      "key": "SHA256:JpmCQnaylH37qPdioWeZ3Vzfk0Kziy21v9qz+wmVSvU",
+      "namespace": "boltzmann.snapshot.v1",
+      "scopes": [
+        "commit"
+      ],
+      "signature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgVRVPQgZepaG+oFRjgmviaE65Lf\nksEAAnqrquV8pVQgcAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQG1leNV1IpTGJxWeNmUtlzbn7f9/+RP3C73BmBC9MI\nGw51lsbaXqYdw42/kRTb/8JeGKIMXj4PAfH1fGFER41Ao=\n-----END SSH SIGNATURE-----\n",
+      "snapshot": "sha256:dc451c5daffb91176b3b211aaaf9943e7ad0ac77c706879478a8f2f912a84f4e"
+    },
+    "A-over-S11": {
+      "boltzmann": 1,
+      "key": "SHA256:uckGXcH3+2/th6yWBnmJJgkMfPA65BhRg/TRtgXcViE",
+      "namespace": "boltzmann.snapshot.v1",
+      "scopes": [
+        "commit"
+      ],
+      "signature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgvHy8tWNjdfodgkNNRmck2SN39T\nuYBpXdSdJtDOEiBaUAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQFrcuJ0CpkPTAi5HOKlcxSjlPENBUYC/4QU5JCsp0U\ni5Q0cQcQg88sJIRqjmNw59NmipQGXqjvtsVF9qFep+uQo=\n-----END SSH SIGNATURE-----\n",
+      "snapshot": "sha256:dc451c5daffb91176b3b211aaaf9943e7ad0ac77c706879478a8f2f912a84f4e"
+    },
+    "A-over-S12": {
+      "boltzmann": 1,
+      "key": "SHA256:uckGXcH3+2/th6yWBnmJJgkMfPA65BhRg/TRtgXcViE",
+      "namespace": "boltzmann.snapshot.v1",
+      "scopes": [
+        "govern"
+      ],
+      "signature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgvHy8tWNjdfodgkNNRmck2SN39T\nuYBpXdSdJtDOEiBaUAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQLnFfsZ3ObdmofhZAlHwvcTNaX+Uu1oMalh7piLmV+\neF8WeNiez2zOhOUEwUx8RIr2KH6gqBQfiBv9AaK62ofAE=\n-----END SSH SIGNATURE-----\n",
+      "snapshot": "sha256:da23bdfd8b4c5ba9d5001aa7142794233cd13f72e4a1d7fc347fa01d67bfe4f2"
+    },
+    "B-over-S12": {
+      "boltzmann": 1,
+      "key": "SHA256:JpmCQnaylH37qPdioWeZ3Vzfk0Kziy21v9qz+wmVSvU",
+      "namespace": "boltzmann.snapshot.v1",
+      "scopes": [
+        "govern"
+      ],
+      "signature": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgVRVPQgZepaG+oFRjgmviaE65Lf\nksEAAnqrquV8pVQgcAAAAVYm9sdHptYW5uLnNuYXBzaG90LnYxAAAAAAAAAAZzaGE1MTIA\nAABTAAAAC3NzaC1lZDI1NTE5AAAAQEaTyD4pyp6MW73ysdPJh7AKoBZjU74JssBZuQtUNO\n+G/QUQvvQJZiOePqgSBLR+k+gy83PUvzJ4wYG0FTjM9wM=\n-----END SSH SIGNATURE-----\n",
+      "snapshot": "sha256:da23bdfd8b4c5ba9d5001aa7142794233cd13f72e4a1d7fc347fa01d67bfe4f2"
+    }
+  },
+  "cases": [
+    {
+      "name": "a_genesis_is_exempt_from_the_quorum_rule",
+      "snapshot": "genesis",
+      "signatures": [
+        "A-over-genesis",
+        "B-over-genesis"
+      ],
+      "expect": {
+        "state": "authorized",
+        "role": "genesis",
+        "required_scopes": [
+          "govern"
+        ]
+      }
+    },
+    {
+      "name": "a_genesis_below_its_own_declared_quorum_warns_without_blocking",
+      "snapshot": "genesis",
+      "signatures": [
+        "A-over-genesis"
+      ],
+      "expect": {
+        "state": "authorized",
+        "findings_include": [
+          "genesis_below_quorum"
+        ]
+      }
+    },
+    {
+      "name": "an_ordinary_commit_verifies_against_the_trust_root_in_force",
+      "snapshot": "S7",
+      "signatures": [
+        "A-over-S7"
+      ],
+      "expect": {
+        "state": "authorized",
+        "role": "ordinary",
+        "required_scopes": [
+          "commit"
+        ]
+      }
+    },
+    {
+      "name": "an_unsigned_snapshot_is_unsigned_not_invalid",
+      "snapshot": "S7",
+      "signatures": [],
+      "expect": {
+        "state": "unsigned"
+      }
+    },
+    {
+      "name": "admitting_an_owner_by_quorum",
+      "snapshot": "S8",
+      "signatures": [
+        "A-over-S8",
+        "B-over-S8"
+      ],
+      "expect": {
+        "state": "authorized",
+        "role": "revision",
+        "quorum_required": 2,
+        "quorum_met": 2,
+        "required_scopes": [
+          "govern"
+        ]
+      }
+    },
+    {
+      "name": "the_admitted_key_commits_ordinarily",
+      "snapshot": "S9",
+      "signatures": [
+        "C-over-S9"
+      ],
+      "expect": {
+        "state": "authorized",
+        "outcomes": {
+          "C": "valid"
+        }
+      }
+    },
+    {
+      "name": "a_key_admitting_itself_fails_with_no_pin_at_all",
+      "snapshot": "S8-self-admitted",
+      "signatures": [
+        "C-over-S8-self-admitted"
+      ],
+      "expect": {
+        "state": "unauthorized",
+        "outcomes": {
+          "C": "unauthorized_key"
+        },
+        "findings_include": [
+          "quorum_failure"
+        ],
+        "quorum_met": 0
+      }
+    },
+    {
+      "name": "rejection_propagates_to_the_forged_subtree",
+      "snapshot": "S9-on-a-lie",
+      "signatures": [
+        "C-over-S9-on-a-lie"
+      ],
+      "expect": {
+        "state": "unauthorized",
+        "findings_include": [
+          "quorum_failure"
+        ]
+      }
+    },
+    {
+      "name": "a_retired_key_counts_toward_the_quorum_that_retired_it",
+      "snapshot": "S10-retires-B",
+      "signatures": [
+        "A-over-S10",
+        "B-over-S10"
+      ],
+      "expect": {
+        "state": "authorized",
+        "quorum_met": 2
+      }
+    },
+    {
+      "name": "a_retired_keys_later_signature_fails_as_retired_not_unauthorized",
+      "snapshot": "S11",
+      "signatures": [
+        "B-over-S11",
+        "A-over-S11"
+      ],
+      "expect": {
+        "state": "authorized",
+        "outcomes": {
+          "B": "retired_key",
+          "A": "valid"
+        }
+      }
+    },
+    {
+      "name": "signatures_before_a_retirement_stand",
+      "snapshot": "S8",
+      "signatures": [
+        "A-over-S8",
+        "B-over-S8"
+      ],
+      "expect": {
+        "state": "authorized"
+      }
+    },
+    {
+      "name": "a_compromise_withdraws_from_its_position_onward",
+      "snapshot": "S9",
+      "signatures": [
+        "C-over-S9"
+      ],
+      "current_trust_root": "compromised",
+      "expect": {
+        "state": "unauthorized",
+        "withdrawn": [
+          "C"
+        ],
+        "findings_include": [
+          "compromised_key"
+        ]
+      }
+    },
+    {
+      "name": "a_pinned_trust_root_rejects_a_stranger",
+      "snapshot": "S8-self-admitted",
+      "signatures": [
+        "C-over-S8-self-admitted"
+      ],
+      "pin": "revision-one",
+      "expect": {
+        "state": "unauthorized",
+        "findings_include": [
+          "quorum_failure"
+        ]
+      }
+    },
+    {
+      "name": "a_pin_is_satisfied_through_approved_revisions",
+      "snapshot": "S9",
+      "signatures": [
+        "C-over-S9"
+      ],
+      "pin": "revision-one",
+      "expect": {
+        "state": "authorized",
+        "pinned": true
+      }
+    }
+  ]
+}

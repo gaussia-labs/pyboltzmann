@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 # where `pygaussia` provides `gaussia`. What a user types to install and what they type to import differ
 # by three letters, which is why the README says both.
 name = "pyboltzmann"
-version = "0.6.0"
+version = "0.7.0-b.2"
 description = "An SDK for the Boltzmann Protocol: portable, verifiable, model-agnostic knowledge"
 readme = "README.md"
 license = {text = "MIT"}
@@ -65,6 +65,20 @@ oci = [
 # has no reason to install a Python test framework to read them.
 conformance = [
     "pytest>=8.0.0",
+]
+
+# Checking *who* assembled a brain, over SSHSIG signatures (paper Section 8). An extra rather
+# than a dependency, because the protocol makes integrity unconditional and authenticity a
+# separately claimable role: a consumer offline, with no configuration and no trust in anyone,
+# must still be able to recompute the whole hash structure, and a compiled cryptographic
+# library on the install path would make that conditional on a wheel existing for their
+# platform. The split is possible because the format is mostly framing: the SSH wire codec,
+# the armor, the SHA-256 fingerprint, the record schema, and the fingerprint-versus-embedded-key
+# check the paper requires are all standard library. The extra buys exactly one operation --
+# the Ed25519 verify -- and nothing else. The floor is a support floor, not a feature floor:
+# every primitive used here predates cryptography 3.0.
+authenticity = [
+    "cryptography>=42.0.0",
 ]
 
 [dependency-groups]

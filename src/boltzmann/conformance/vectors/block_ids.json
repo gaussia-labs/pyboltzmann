@@ -252,6 +252,24 @@
       },
       "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"procedural\",\"payload\":{\"content\":{\"blob\":\"sha256:0e607134856762edd36fe8284f52b5dee1528f5cd957978d49f7fbf8204512f2\",\"media_type\":\"image/png\",\"size\":58},\"goal\":\"Locate the triple point\",\"label\":\"Read the diagram\",\"steps\":[{\"action\":\"find where the three phase boundaries meet\"}]},\"schema_version\":2,\"serialization\":\"jcs/1\"}",
       "block_id": "sha256:8608c536db574b5a7b01b26e525df71e2b4a0e83f9fda0a870c43e70c3a2f4ad"
+    },
+    {
+      "name": "semantic_catalog_scheme",
+      "memory_type": "semantic",
+      "schema_version": 3,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "semantic",
+        "payload": {
+          "kind": "scheme",
+          "scheme": "year",
+          "exclusive": true
+        },
+        "schema_version": 3,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"semantic\",\"payload\":{\"exclusive\":true,\"kind\":\"scheme\",\"scheme\":\"year\"},\"schema_version\":3,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:fe60efbc17bb29a6304ccb1c7cdc07915bad93b78977699ea16c7df5c49c1765"
     }
   ]
 }

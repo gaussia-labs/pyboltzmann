@@ -1,0 +1,141 @@
+---
+title: "Catalog and hierarchical navigation"
+description: "Classify canonical sources with portable semantic blocks, then browse them as hierarchies or virtual paths."
+---
+
+The catalog adds structure without adding a sixth memory module or turning the brain into a filesystem.
+Its durable facts are semantic blocks:
+
+- a **scheme** declares one classification dimension, such as `year`, `topic`, or `type`;
+- a **class** declares one value inside a scheme, such as `2025` or `fourier`;
+- a **hierarchy relation** says that one class is broader than another in the same scheme;
+- a **placement relation** classifies one canonical source as one class.
+
+The SDK rebuilds the convenient catalog view in memory from those blocks. The view itself is not stored.
+The paper also allows an optional travelling catalog layer; this SDK does not implement that optional
+layer, because its view can be rebuilt from the semantic declarations. This keeps the canonical source
+unchanged: it is the placement block, not the canonical block, that carries the classification.
+
+## Declare the taxonomy
+
+Taxonomy design is explicit SDK work. As an SDK policy, the candidate gate lets a model propose placements
+but requires schemes, classes, and hierarchy edges to enter through `Brain.classify`. The protocol itself
+does not require every implementation to make that authorization choice.
+
+```python
+from boltzmann import (
+    ClassDeclaration,
+    HierarchyDeclaration,
+    SchemeDeclaration,
+)
+
+year = SchemeDeclaration(scheme="year", exclusive=True)
+topic = SchemeDeclaration(scheme="topic")
+kind = SchemeDeclaration(scheme="type", exclusive=True)
+
+y2025 = ClassDeclaration(scheme="year", label="2025")
+math = ClassDeclaration(scheme="topic", label="math")
+fourier = ClassDeclaration(scheme="topic", label="fourier")
+exams = ClassDeclaration(scheme="type", label="examenes")
+
+result = brain.classify([
+    year, topic, kind,
+    y2025, math, fourier, exams,
+    HierarchyDeclaration(broader=math.block_id, narrower=fourier.block_id),
+])
+
+result.is_clean
+result.verdicts       # one validated/rejected/contradicted verdict per declaration
+result.commit         # every accepted declaration lands in one snapshot
+```
+
+Declarations are evaluated in order, so a class can refer to a scheme declared earlier in the same call.
+Classes must be declared before use; there is deliberately no `mkdir -p` behavior.
+
+<Note>
+  A class contains its scheme and label, but not its parent. Moving `fourier` under another class writes a
+  different hierarchy relation without changing the identity of the `fourier` class.
+</Note>
+
+This SDK additionally requires hierarchies to be acyclic and to stay inside one scheme. Those constraints
+make path navigation deterministic; they are stricter SDK policy, not new protocol invariants. A class may
+have multiple parents. Browsing a parent includes sources placed directly in any descendant.
+
+## Classify canonical sources
+
+```python
+from boltzmann import PlacementDeclaration
+
+result = brain.classify([
+    PlacementDeclaration(source=source_id, class_id=y2025.block_id),
+    PlacementDeclaration(source=source_id, class_id=fourier.block_id),
+    PlacementDeclaration(source=source_id, class_id=exams.block_id),
+])
+```
+
+Each placement cites the canonical source as evidence and receives a derivation record. Dropping that
+canonical source therefore cascades to its placements, while the reusable taxonomy remains.
+
+An exclusive scheme allows at most one direct class per source. A second year or type is well-formed but
+conflicts with the held placement, so its verdict is `contradicted` rather than `rejected`.
+
+Placements follow normal accessibility rules. To correct a misfiled source, demote or supersede the old
+placement block and then classify the source in its replacement class. The old statement remains a
+verifiable member of history but no longer participates in the rebuilt catalog.
+
+## Browse classes
+
+```python
+brain.browse(fourier.block_id).sources
+brain.browse(math.block_id).sources       # also includes descendants such as fourier
+
+# Multiple classes mean faceted AND.
+brain.browse([y2025.block_id, fourier.block_id, exams.block_id]).sources
+```
+
+`CatalogNode.direct_sources` reports only placements on that exact class. `CatalogNode.sources` includes
+descendant placements.
+
+## Use paths like subdirectories
+
+A path is an ordered view over schemes, not a stored parent chain:
+
+```python
+view = brain.catalog_path(("year", "topic", "type"))
+
+view.browse("2025/fourier/examenes").sources
+view.iterdir("").directories                 # available years
+view.iterdir("2025").directories             # topics present in 2025
+view.iterdir("2025/fourier").directories     # types in that intersection
+
+view.classify(source_id, "2025/fourier/examenes")
+```
+
+The three segments mean `year=2025 AND topic=fourier AND type=examenes`. The same placements can be viewed
+in another order without rewriting anything:
+
+```python
+brain.catalog_path(("type", "topic", "year")).browse("examenes/fourier/2025")
+```
+
+`browse` and `iterdir` accept prefixes. `classify` requires every segment. Labels are exact and
+case-sensitive; leading and trailing slashes are ignored; percent-encoded labels are decoded; empty
+internal segments and `.` or `..` are rejected. Class declarations reject `/`, `.`, and `..` up front so
+every declared label is reachable as exactly one path segment.
+
+## Filter ordinary queries
+
+Catalog classes are binding query filters and use AND semantics. A derived block participates through its
+canonical evidence; a canonical block participates through its own identity.
+
+```python
+from boltzmann import Query, QueryFilters
+
+brain.search(Query(filters=QueryFilters(
+    memory_types=[MemoryType.CANONICAL],
+    classes=[y2025.block_id, math.block_id],
+)))
+```
+
+Class filters include descendant placements. Existing `subject` and episodic `tags` remain unchanged;
+catalog classes are an additional, typed hierarchy for canonical evidence.
