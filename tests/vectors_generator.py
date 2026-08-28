@@ -9,6 +9,7 @@ must not change.
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from boltzmann.authenticity import (
     SshPublicKey,
     TrustedKey,
     TrustRoot,
+    parse_rfc4253_signature,
     put_string,
     put_uint32,
     rfc4253_signature,
@@ -101,6 +103,17 @@ def generate_sshsig() -> dict:
     good = sign(MESSAGE, lecturer)
     blob = good.to_blob()
 
+    def sha256_signature() -> str:
+        """Build generic SSHSIG/SHA-256 bytes without crossing Boltzmann's signing gate."""
+        data = signed_data(MESSAGE, namespace=SNAPSHOT_NAMESPACE, hash_algorithm="sha256")
+        algorithm, raw = parse_rfc4253_signature(lecturer.sign_blob(data))
+        return dataclasses.replace(
+            good,
+            hash_algorithm="sha256",
+            signature_algorithm=algorithm,
+            signature=raw,
+        ).armored()
+
     def poisoned_reserved() -> str:
         data = (
             MAGIC_PREAMBLE
@@ -109,12 +122,8 @@ def generate_sshsig() -> dict:
             + put_string(b"sha512")
             + put_string(message_hash("sha512", MESSAGE))
         )
-        import dataclasses
-
         algorithm, raw = good.signature_algorithm, None
         framed = lecturer.sign_blob(data)
-        from boltzmann.authenticity import parse_rfc4253_signature
-
         algorithm, raw = parse_rfc4253_signature(framed)
         forged = dataclasses.replace(good, reserved=b"x", signature=raw, signature_algorithm=algorithm)
         return forged.armored()
@@ -148,6 +157,11 @@ def generate_sshsig() -> dict:
             "expect": "format",
         },
         {
+            "name": "sha256_is_valid_sshsig_but_not_a_boltzmann_signature",
+            "armored": sha256_signature(),
+            "expect": "format",
+        },
+        {
             "name": "md5_is_not_a_hash_algorithm_here",
             "blob_hex": blob.replace(put_string(b"sha512"), put_string(b"md5")).hex(),
             "expect": "format",
@@ -177,7 +191,7 @@ def generate_sshsig() -> dict:
         ),
         "warning": WARNING,
         "keys": [lecturer.described()],
-        "vectors": [positive("sha512"), positive("sha256")],
+        "vectors": [positive("sha512")],
         "rejections": rejections,
     }
 
