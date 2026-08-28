@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.8.0-b.4 (2026-08-28)
+
+### Bug Fixes
+
+- **distribution**: Refuse pull rollbacks
+  ([`4090776`](https://github.com/gaussia-labs/pyboltzmann/commit/4090776d8478b42bb3f17d4d6d96a5867a83ccc7))
+
+
 ## v0.8.0-b.3 (2026-08-28)
 
 ### Bug Fixes
