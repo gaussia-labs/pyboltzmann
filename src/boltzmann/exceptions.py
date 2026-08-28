@@ -161,6 +161,15 @@ class DivergenceError(DistributionError):
     """
 
 
+class RollbackError(DistributionError):
+    """Exception raised when a pull serves a strict ancestor of the head already held.
+
+    Distinct from :class:`DivergenceError`: divergence means both histories contain work and calls
+    for reconciliation, while rollback means a mutable reference moved backwards and calls for
+    refusal unless the consumer explicitly chooses to forget its newer state.
+    """
+
+
 class ReconciliationError(ProtocolError):
     """Base exception for reconciling two histories (paper Section 12)."""
 

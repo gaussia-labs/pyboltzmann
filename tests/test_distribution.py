@@ -30,7 +30,7 @@ from boltzmann.distribution.media_types import (
     REF_NAME_ANNOTATION,
     memory_type_of,
 )
-from boltzmann.exceptions import DistributionError, ReferenceNotFoundError
+from boltzmann.exceptions import DistributionError, ReferenceNotFoundError, RollbackError
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.store.memory import MemoryBlockStore
@@ -484,6 +484,78 @@ class TestDivergence:
         await brain.push(registry, REFERENCE, "v1")
         await brain.push(registry, tag="totally-new")
         assert set(registry.tags(REFERENCE)) == {"v1", "totally-new"}
+
+
+class TestPullRollback:
+    """A mutable registry tag cannot make a consumer forget a head it already held."""
+
+    async def _published_versions(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> tuple:
+        publisher = seeded(tmp_path / "publisher", request_)
+        await publisher.push(registry, REFERENCE, "v1")
+        v1 = await registry.resolve(REFERENCE, "v1")
+
+        source = publisher.module(MemoryType.CANONICAL).block_ids[0]
+        task = publisher.define_task(source)
+        publisher.commit(publisher.validate(llm("newer")(task, b""), task))
+        await publisher.push(registry, tag="v2")
+        v2 = await registry.resolve(REFERENCE, "v2")
+        return v1, v2
+
+    async def test_a_served_strict_ancestor_is_refused_and_the_head_does_not_move(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> None:
+        v1, v2 = await self._published_versions(tmp_path, registry, request_)
+        target = Brain.open(tmp_path / "consumer", actor=SAM)
+        await target.pull(registry, REFERENCE, "v2")
+
+        with pytest.raises(RollbackError, match="ROLLBACK"):
+            await target.pull(registry, REFERENCE, "v1")
+
+        assert target.snapshot().digest == v2.config.digest
+        assert target.snapshot().digest != v1.config.digest
+
+    async def test_an_explicit_override_installs_the_older_head_and_warns(
+        self,
+        tmp_path: Path,
+        registry: LocalLayoutRegistry,
+        request_: RegistrationRequest,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        v1, _ = await self._published_versions(tmp_path, registry, request_)
+        target = Brain.open(tmp_path / "consumer", actor=SAM)
+        await target.pull(registry, REFERENCE, "v2")
+
+        with caplog.at_level("WARNING"):
+            await target.pull(registry, REFERENCE, "v1", allow_rollback=True)
+
+        assert target.snapshot().digest == v1.config.digest
+        assert any("ROLLBACK override" in message for message in caplog.messages)
+
+    async def test_an_unreadable_local_ancestor_warns_when_rollback_cannot_be_decided(
+        self,
+        tmp_path: Path,
+        registry: LocalLayoutRegistry,
+        request_: RegistrationRequest,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        publisher = seeded(tmp_path / "publisher", request_)
+        await publisher.push(registry, REFERENCE, "v1")
+
+        target = Brain.open(tmp_path / "consumer", actor=SAM)
+        await target.pull(registry, REFERENCE, "v1")
+        source = target.module(MemoryType.CANONICAL).block_ids[0]
+        task = target.define_task(source)
+        target.commit(target.validate(llm("local-1")(task, b""), task))
+        missing_parent = target.snapshot().digest
+        target.commit(target.validate(llm("local-2")(task, b""), task))
+        target.store.delete(missing_parent)
+
+        with caplog.at_level("WARNING"):
+            await target.pull(registry, REFERENCE, "v1")
+
+        assert any("ROLLBACK_UNCHECKED" in message for message in caplog.messages)
 
 
 class TestOrigin:
