@@ -514,7 +514,7 @@ class Brain:
     def _load_snapshot(self) -> Snapshot:
         if self._state is None:
             return Snapshot()
-        return Snapshot.model_validate_json(self.store.get_bytes(self._state.snapshot))
+        return Snapshot.from_document(self.store.get_bytes(self._state.snapshot))
 
     def _advance(
         self,
@@ -607,7 +607,7 @@ class Brain:
             chain.append(parent)
             if not self.store.is_resolvable(parent):
                 break
-            snapshot = Snapshot.model_validate_json(self.store.get_bytes(parent))
+            snapshot = Snapshot.from_document(self.store.get_bytes(parent))
         return chain
 
     def reachable_history(self) -> set[OciDigest]:
@@ -638,7 +638,7 @@ class Brain:
                     continue
                 seen.add(parent)
                 if self.store.is_resolvable(parent):
-                    frontier.append(Snapshot.model_validate_json(self.store.get_bytes(parent)))
+                    frontier.append(Snapshot.from_document(self.store.get_bytes(parent)))
         return seen
 
     # --- Discovery ------------------------------------------------------------
@@ -840,7 +840,7 @@ class Brain:
         else:
             if not self.store.is_resolvable(snapshot):
                 raise SnapshotError(f"snapshot {snapshot.short} is not held, so it cannot be authenticated")
-            document = Snapshot.model_validate_json(self.store.get_bytes(snapshot))
+            document = Snapshot.from_document(self.store.get_bytes(snapshot))
         # Compromise markers come from the newest revision this brain knows -- the head's trust
         # root -- because a compromise is recorded after the positions it withdraws.
         return Authenticator(self.store, policy=policy).authenticate(document, current=self._snapshot.trust_root)
@@ -897,7 +897,7 @@ class Brain:
             return self._snapshot
         if not self.store.is_resolvable(digest):
             raise SnapshotError(f"snapshot {digest.short} is not held by this brain")
-        return Snapshot.model_validate_json(self.store.get_bytes(digest))
+        return Snapshot.from_document(self.store.get_bytes(digest))
 
     def _authorship(self) -> Authorship:
         """The head's authorship line, recomputed only when the head or its records change."""
@@ -1018,12 +1018,7 @@ class Brain:
                 refutes, or a parentless genesis this brain does not hold. Refusal names what
                 failed; nothing is signed.
         """
-        revision = Snapshot.model_validate_json(document)
-        if revision.canonical_bytes() != document:
-            raise SnapshotError(
-                "the received document is not in canonical form, so a signature over it would cover "
-                "bytes no verifier reconstructs; ask the initiator for plan_rotate's output verbatim"
-            )
+        revision = Snapshot.from_document(document)
         if revision.trust_root is None:
             raise ResolutionRefusedError(
                 "the document carries no trust root; countersigning is for governance acts, and "
@@ -1042,7 +1037,7 @@ class Brain:
                     f"the document's parent {parent_digest.short} is not in this brain's history; a "
                     f"countersigner endorses a transition of a history it can see"
                 )
-            parent = Snapshot.model_validate_json(self.store.get_bytes(parent_digest))
+            parent = Snapshot.from_document(self.store.get_bytes(parent_digest))
             if revision.modules != parent.modules:
                 raise ResolutionRefusedError(
                     "the document changes module roots as well as the trust root; a revision changes "
@@ -1129,8 +1124,8 @@ class Brain:
         if (trust_root is None) == (plan is None):
             raise SnapshotError("exactly one of trust_root (build fresh) or plan (reuse planned bytes) is given")
         if plan is not None:
-            revision = Snapshot.model_validate_json(plan.document)
-            if revision.canonical_bytes() != plan.document or revision.digest != plan.digest:
+            revision = Snapshot.from_document(plan.document)
+            if revision.digest != plan.digest:
                 raise SnapshotError("the plan's document and digest disagree; it was altered in transit")
             if revision.first_parent != self._snapshot.digest:
                 raise SnapshotError(
@@ -3691,8 +3686,8 @@ class Brain:
                 except DistributionError:
                     continue
             try:
-                record = SignatureRecord.model_validate_json(self.store.get_bytes(record_layer.digest))
-            except (ValueError, BlockError):
+                record = SignatureRecord.from_document(self.store.get_bytes(record_layer.digest))
+            except (ValueError, BlockError, AuthenticityError):
                 continue
             if record.snapshot not in allowed:
                 continue
@@ -3771,8 +3766,8 @@ class Brain:
         of leaking a validation traceback.
         """
         try:
-            return Snapshot.model_validate_json(self.store.get_bytes(digest))
-        except ValueError as error:
+            return Snapshot.from_document(self.store.get_bytes(digest))
+        except (ValueError, SnapshotError) as error:
             raise DistributionError(
                 f"the artifact's snapshot document {digest.short} cannot be read by this client: "
                 f"{error}; if the artifact was published by a newer SDK, upgrade pyboltzmann"
@@ -3846,7 +3841,7 @@ class Brain:
             # consumer can verify an old version but never reopen or *difference* it, and the
             # required-scope computation is a difference (paper Section 8.5). Only what is still
             # resolvable goes -- a pruned composition is gone here as well as there.
-            for reference in Snapshot.model_validate_json(raw).modules.values():
+            for reference in Snapshot.from_document(raw).modules.values():
                 if reference.composition.hex not in compositions and self.store.is_resolvable(reference.composition):
                     compositions[reference.composition.hex] = self.store.get_bytes(reference.composition)
         if not documents:
@@ -4533,7 +4528,7 @@ class Brain:
         snapshots = []
         for digest in self._state.retained:
             if self.store.is_resolvable(digest):
-                snapshots.append(Snapshot.model_validate_json(self.store.get_bytes(digest)))
+                snapshots.append(Snapshot.from_document(self.store.get_bytes(digest)))
         return snapshots
 
     def state(self) -> dict[str, Any]:

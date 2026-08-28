@@ -152,6 +152,15 @@ class TestParseManifest:
         assert manifest.digest == OciDigest.of(manifest.to_bytes())
         assert parse_manifest(manifest.to_bytes()).digest == manifest.digest
 
+    def test_duplicate_json_keys_are_refused(self) -> None:
+        _, manifest = build(MemoryType.SEMANTIC)
+        duplicated = manifest.to_bytes().replace(
+            b'"schemaVersion":2',
+            b'"schemaVersion":2,"schemaVersion":2',
+        )
+        with pytest.raises(DistributionError, match="duplicate JSON key"):
+            parse_manifest(duplicated)
+
     def test_a_foreign_artifact_is_refused(self) -> None:
         document = {"artifact_type": "application/vnd.oci.image.manifest.v1+json", "config": {}, "layers": []}
         with pytest.raises(DistributionError, match="not a Boltzmann brain"):

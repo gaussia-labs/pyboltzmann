@@ -22,6 +22,7 @@ string, or as an integer scaled by a documented factor.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Protocol, runtime_checkable
 
 import rfc8785
@@ -36,6 +37,93 @@ MAX_SAFE_INTEGER = 2**53 - 1
 
 MIN_SAFE_INTEGER = -MAX_SAFE_INTEGER
 """Smallest integer an IEEE-754 double represents exactly."""
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build one JSON object without applying Python's ambiguous last-key-wins rule."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise SerializationError(f"contains duplicate JSON key {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_constant(value: str) -> Any:
+    """JSON has no NaN or infinity tokens, even though Python's decoder accepts them."""
+    raise SerializationError(f"contains non-standard JSON number {value!r}")
+
+
+def _normalize_string(value: str, path: str) -> str:
+    """Combine valid UTF-16 pairs and reject any surrogate that stands alone."""
+    normalized: list[str] = []
+    position = 0
+    while position < len(value):
+        codepoint = ord(value[position])
+        if 0xD800 <= codepoint <= 0xDBFF:
+            if position + 1 >= len(value):
+                raise SerializationError(f"contains a lone surrogate in JSON string at {path}")
+            following = ord(value[position + 1])
+            if not 0xDC00 <= following <= 0xDFFF:
+                raise SerializationError(f"contains a lone surrogate in JSON string at {path}")
+            normalized.append(chr(0x10000 + ((codepoint - 0xD800) << 10) + following - 0xDC00))
+            position += 2
+            continue
+        if 0xDC00 <= codepoint <= 0xDFFF:
+            raise SerializationError(f"contains a lone surrogate in JSON string at {path}")
+        normalized.append(value[position])
+        position += 1
+    return "".join(normalized)
+
+
+def _normalize_json_strings(value: Any, path: str = "$") -> Any:
+    """Normalize every string after decoding, including object keys."""
+    if isinstance(value, str):
+        return _normalize_string(value, path)
+    if isinstance(value, list):
+        return [_normalize_json_strings(item, f"{path}[{position}]") for position, item in enumerate(value)]
+    if isinstance(value, dict):
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized_key = _normalize_string(key, f"{path} key")
+            if normalized_key in normalized:
+                raise SerializationError(f"contains duplicate JSON key {normalized_key!r} after Unicode decoding")
+            normalized[normalized_key] = _normalize_json_strings(item, f"{path}.{normalized_key}")
+        return normalized
+    return value
+
+
+def parse_json_strict(data: bytes | str) -> Any:
+    """Decode JSON without ambiguous keys, malformed Unicode, or non-standard constants.
+
+    Python's default decoder accepts duplicate object keys with last-key-wins semantics and can
+    materialize escaped lone surrogates as strings. Neither has one portable identity across
+    implementations, so protocol documents use this decoder before validation or hashing.
+
+    Args:
+        data (bytes | str): UTF-8 JSON bytes or already-decoded JSON text.
+
+    Returns:
+        Any: The decoded JSON-shaped value.
+
+    Raises:
+        SerializationError: If the input is not UTF-8 JSON or has an ambiguous representation.
+    """
+    if isinstance(data, bytes):
+        try:
+            text = data.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as error:
+            raise SerializationError(f"is not valid UTF-8: {error}") from error
+    elif isinstance(data, str):
+        text = data
+    else:
+        raise SerializationError(f"must be bytes or text, got {type(data).__name__}")
+
+    try:
+        decoded = json.loads(text, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
+    except json.JSONDecodeError as error:
+        raise SerializationError(f"is not valid JSON: {error}") from error
+    return _normalize_json_strings(decoded)
 
 
 @runtime_checkable

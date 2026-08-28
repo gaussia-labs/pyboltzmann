@@ -233,8 +233,8 @@ def unpack_history(data: bytes, store: BlockStore, max_size: int | None = None) 
                 continue
             payload = handle.read()
             try:
-                Snapshot.model_validate_json(payload)
-            except ValueError as error:
+                Snapshot.from_document(payload)
+            except (ValueError, BoltzmannError) as error:
                 raise DistributionError(
                     f"history layer entry {info.name} is not a snapshot document: {error}"
                 ) from error

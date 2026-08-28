@@ -92,8 +92,8 @@ def load_snapshot(store: BlockStore, digest: OciDigest) -> Snapshot | None:
     if not store.is_resolvable(digest):
         return None
     try:
-        return Snapshot.model_validate_json(store.get_bytes(digest))
-    except ValueError:
+        return Snapshot.from_document(store.get_bytes(digest))
+    except (ValueError, SnapshotError):
         return None
 
 

@@ -248,10 +248,26 @@ class TestSnapshotLineage:
         """Every snapshot published under the scalar form is immutable and still a valid statement of
         composition; refusing it would make existing histories unreadable to gain nothing."""
         linear = Snapshot().with_modules([])
-        reread = Snapshot.model_validate_json(linear.canonical_bytes())
+        reread = Snapshot.from_document(linear.canonical_bytes())
 
         assert reread.parents == linear.parents
         assert reread.digest == linear.digest
+
+    @pytest.mark.parametrize(
+        ("mutation", "match"),
+        [
+            (
+                lambda data: data.replace(b'"safe":"yes"', b'"safe":"yes","safe":"no"'),
+                "duplicate JSON key",
+            ),
+            (lambda data: data.replace(b'"yes"', b'"\xff"'), "UTF-8"),
+            (lambda data: data.replace(b'"yes"', b'"\\ud800"'), "surrogate"),
+        ],
+    )
+    def test_snapshot_identity_rejects_ambiguous_json(self, mutation, match: str) -> None:
+        document = Snapshot(labels={"safe": "yes"}).canonical_bytes()
+        with pytest.raises(Exception, match=match):
+            Snapshot.from_document(mutation(document))
 
     def test_a_document_naming_both_is_refused(self) -> None:
         """It says two things about the same lineage, and there is no reading of it that is not a guess."""
