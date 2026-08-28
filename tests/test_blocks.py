@@ -142,6 +142,24 @@ class TestDecoding:
             Block.decode(reordered.encode())
 
     @pytest.mark.parametrize(
+        ("mutation", "match"),
+        [
+            (
+                lambda data: data.replace(
+                    b'"label":"Fourier series"',
+                    b'"label":"Fourier series","label":"chosen last"',
+                ),
+                "duplicate JSON key",
+            ),
+            (lambda data: data.replace(b'"Fourier series"', b'"\xff"'), "UTF-8"),
+            (lambda data: data.replace(b'"Fourier series"', b'"\\ud800"'), "surrogate"),
+        ],
+    )
+    def test_ambiguous_json_is_refused_before_it_can_define_identity(self, mutation, match: str) -> None:
+        with pytest.raises(BlockSchemaError, match=match):
+            Block.decode(mutation(semantic().canonical_bytes()))
+
+    @pytest.mark.parametrize(
         ("data", "match"),
         [
             (b"not json", "not valid JSON"),

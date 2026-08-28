@@ -904,6 +904,34 @@ class TestSignedDistribution:
         with pytest.raises(DistributionError, match="upgrade pyboltzmann"):
             await consumer.pull(registry, REFERENCE, "v1")
 
+    async def test_a_noncanonical_config_is_refused_before_install(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> None:
+        import json as json_
+
+        from boltzmann.distribution.manifest import Descriptor
+        from boltzmann.distribution.media_types import CONFIG_MEDIA_TYPE
+
+        publisher = seeded(tmp_path / "publisher", request_)
+        await publisher.push(registry, REFERENCE, "v1")
+        manifest = await registry.resolve(REFERENCE, "v1")
+        config = json_.loads(publisher.store.get_bytes(manifest.config.digest))
+        raw = json_.dumps(config, indent=2).encode()
+        doctored = manifest.model_copy(
+            update={
+                "config": Descriptor(
+                    media_type=CONFIG_MEDIA_TYPE,
+                    digest=publisher.store.put_bytes(raw),
+                    size=len(raw),
+                )
+            }
+        )
+        await registry.push(REFERENCE, "v1", doctored, publisher.store)
+
+        consumer = Brain.open(tmp_path / "consumer", actor=SAM)
+        with pytest.raises(DistributionError, match="not in canonical"):
+            await consumer.pull(registry, REFERENCE, "v1")
+
     async def test_a_rotated_then_advanced_brain_stays_authorized_for_a_fresh_consumer(
         self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
     ) -> None:

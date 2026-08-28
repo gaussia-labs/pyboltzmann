@@ -19,9 +19,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from boltzmann.authenticity.trust_root import TrustRoot
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.constants import PROTOCOL_VERSION
-from boltzmann.exceptions import SnapshotError
+from boltzmann.exceptions import SerializationError, SnapshotError
 from boltzmann.identity.digest import MerkleRoot, OciDigest
-from boltzmann.identity.serialization import canonicalize
+from boltzmann.identity.serialization import canonicalize, parse_json_strict
 from boltzmann.identity.time import Timestamp, utc_timestamp
 from boltzmann.merkle.tree import LAYOUT_NAME
 
@@ -227,6 +227,30 @@ class Snapshot(BaseModel):
         elif parents:
             document["parents"] = parents
         return canonicalize(document)
+
+    @classmethod
+    def from_document(cls, data: bytes) -> Snapshot:
+        """Decode one canonical snapshot document without ambiguous JSON semantics.
+
+        Args:
+            data (bytes): The config or history bytes that physically identify the snapshot.
+
+        Returns:
+            Snapshot: The validated snapshot.
+
+        Raises:
+            SnapshotError: If the bytes are ambiguous JSON or are not the canonical representation
+                of the snapshot they decode to.
+            pydantic.ValidationError: If the decoded object does not satisfy the snapshot schema.
+        """
+        try:
+            document = parse_json_strict(data)
+        except SerializationError as error:
+            raise SnapshotError(f"snapshot document {error}") from error
+        snapshot = cls.model_validate(document)
+        if snapshot.canonical_bytes() != data:
+            raise SnapshotError("snapshot document is not in canonical jcs/1 form")
+        return snapshot
 
     @property
     def digest(self) -> OciDigest:

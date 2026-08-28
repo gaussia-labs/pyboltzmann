@@ -46,7 +46,7 @@ def snapshot_at(store: BlockStore, digest: OciDigest) -> Snapshot:
             f"snapshot {digest.short} is not resolvable in this store, so the history through it cannot "
             f"be read; it was never fetched, or it was pruned"
         )
-    return Snapshot.model_validate_json(store.get_bytes(digest))
+    return Snapshot.from_document(store.get_bytes(digest))
 
 
 def common_ancestor(

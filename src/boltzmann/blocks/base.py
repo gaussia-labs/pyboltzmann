@@ -33,7 +33,6 @@ Two conventions keep identity unambiguous:
 
 from __future__ import annotations
 
-import json
 from abc import ABC
 from typing import Any, ClassVar, Self
 
@@ -42,9 +41,9 @@ from pydantic import ValidationError as PydanticValidationError
 
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.constants import PROTOCOL_VERSION
-from boltzmann.exceptions import BlockIntegrityError, BlockSchemaError
+from boltzmann.exceptions import BlockIntegrityError, BlockSchemaError, SerializationError
 from boltzmann.identity.digest import BlockId, Digest
-from boltzmann.identity.serialization import SERIALIZATION_ID, canonicalize, reject_non_deterministic
+from boltzmann.identity.serialization import SERIALIZATION_ID, canonicalize, parse_json_strict, reject_non_deterministic
 
 ENVELOPE_KEYS = frozenset({"boltzmann", "memory_type", "payload", "schema_version", "serialization"})
 """The exact set of keys a block envelope carries."""
@@ -176,9 +175,9 @@ class Block(BaseModel, ABC):
             BlockIntegrityError: If ``data`` is not in canonical form.
         """
         try:
-            envelope = json.loads(data)
-        except json.JSONDecodeError as error:
-            raise BlockSchemaError(f"block envelope is not valid JSON: {error}") from error
+            envelope = parse_json_strict(data)
+        except SerializationError as error:
+            raise BlockSchemaError(f"block envelope {error}") from error
 
         if not isinstance(envelope, dict):
             raise BlockSchemaError(f"block envelope must be an object, got {type(envelope).__name__}")

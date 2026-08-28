@@ -61,9 +61,9 @@ from boltzmann.distribution.media_types import (
     VECTOR_INDEX_MEDIA_TYPE,
     module_media_type,
 )
-from boltzmann.exceptions import BlockNotFoundError, DistributionError, IdentityError
+from boltzmann.exceptions import BlockNotFoundError, DistributionError, IdentityError, SerializationError
 from boltzmann.identity.digest import MerkleRoot, OciDigest
-from boltzmann.identity.serialization import canonicalize
+from boltzmann.identity.serialization import canonicalize, parse_json_strict
 from boltzmann.module.snapshot import ModuleRef, Snapshot
 from boltzmann.store.base import BlockStore
 
@@ -652,9 +652,9 @@ def parse_signature_manifest(data: bytes) -> SignatureManifest:
         DistributionError: If the document is not a Boltzmann signature manifest.
     """
     try:
-        document: Any = json.loads(data)
-    except json.JSONDecodeError as error:
-        raise DistributionError(f"signature manifest is not valid JSON: {error}") from error
+        document: Any = parse_json_strict(data)
+    except SerializationError as error:
+        raise DistributionError(f"signature manifest {error}") from error
     if not isinstance(document, dict):
         raise DistributionError(f"signature manifest must be an object, got {type(document).__name__}")
     declared = document.get("artifactType")
@@ -683,9 +683,9 @@ def parse_manifest(data: bytes) -> BrainManifest:
             version, or declares a protocol version this client does not implement.
     """
     try:
-        document: Any = json.loads(data)
-    except json.JSONDecodeError as error:
-        raise DistributionError(f"manifest is not valid JSON: {error}") from error
+        document: Any = parse_json_strict(data)
+    except SerializationError as error:
+        raise DistributionError(f"manifest {error}") from error
 
     if not isinstance(document, dict):
         raise DistributionError(f"manifest must be an object, got {type(document).__name__}")

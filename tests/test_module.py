@@ -152,6 +152,23 @@ class TestModule:
         composition = Composition(MemoryType.PROCEDURAL)
         assert Composition.from_document(composition.document()) == composition
 
+    @pytest.mark.parametrize("mutation", [lambda values: list(reversed(values)), lambda values: [*values, values[0]]])
+    def test_a_received_composition_requires_strict_canonical_leaf_order(self, mutation) -> None:
+        import json
+
+        composition = Composition(MemoryType.SEMANTIC, [BlockId.of(b"a"), BlockId.of(b"b")])
+        document = json.loads(composition.document())
+        document["block_ids"] = mutation(document["block_ids"])
+
+        with pytest.raises(ModuleError, match="strictly ascending"):
+            Composition.from_document(json.dumps(document, separators=(",", ":")).encode())
+
+    def test_a_composition_rejects_duplicate_json_keys(self) -> None:
+        document = Composition(MemoryType.SEMANTIC).document()
+        duplicated = document.replace(b'"boltzmann":1', b'"boltzmann":1,"boltzmann":1')
+        with pytest.raises(ModuleError, match="duplicate JSON key"):
+            Composition.from_document(duplicated)
+
     @pytest.mark.parametrize(
         ("mutation", "match"),
         [

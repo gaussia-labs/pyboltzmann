@@ -748,7 +748,7 @@ class AuthenticityConformance(ABC):
             store_record(store, SignatureRecord.model_validate(described))
         if "pin" in case:
             write_pin(store, OciDigest.parse(vectors["trust_roots"][case["pin"]]["digest"]), PinSource.OUT_OF_BAND)
-        snapshot = Snapshot.model_validate_json(vectors["snapshots"][case["snapshot"]]["canonical"].encode("utf-8"))
+        snapshot = Snapshot.from_document(vectors["snapshots"][case["snapshot"]]["canonical"].encode("utf-8"))
         records = [SignatureRecord.model_validate(vectors["signatures"][name]) for name in case["signatures"]]
         current = None
         if "current_trust_root" in case:
@@ -780,5 +780,5 @@ class AuthenticityConformance(ABC):
         described = vectors["snapshots"]["S7"]
         digest = store.put_bytes(described["canonical"].encode("utf-8"))
         store_record(store, SignatureRecord.model_validate(vectors["signatures"]["A-over-S7"]))
-        snapshot = Snapshot.model_validate_json(store.get_bytes(OciDigest.parse(described["digest"])))
+        snapshot = Snapshot.from_document(store.get_bytes(OciDigest.parse(described["digest"])))
         assert snapshot.digest == digest
