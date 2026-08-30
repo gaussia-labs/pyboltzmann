@@ -1,6 +1,34 @@
 # CHANGELOG
 
 
+## v0.8.0-b.7 (2026-08-30)
+
+### Features
+
+- **ingest**: Record the verdict that admitted each block
+  ([`aaaede6`](https://github.com/gaussia-labs/pyboltzmann/commit/aaaede664240ce91289f1e589152afdf88134219))
+
+The provenance ledger carried six record types where the protocol names seven. The missing one is
+  validation, and its absence made "it was validated" a claim a consumer had to take from whoever
+  committed: the verdict lived only on the write path, and nothing in the signed composition could
+  confirm a gate had run at all.
+
+Every committed block now gets a validation record beside its derivation edge, naming the verdict,
+  the checks that produced it, and the task. The check set is part of the claim rather than
+  decoration -- the same VALIDATED under two different check sets says two different things -- so
+  the gate now carries the codes that ran on its report, and the record refuses to be written
+  without them.
+
+ValidationStatus moves to the provenance module, because a verdict that travels in a record is wire
+  schema rather than write-path bookkeeping. It is re-exported from the gate, so every existing
+  import keeps working.
+
+Brain.audit_validation reads the ledger back and reports what cannot show its verdict. It reports
+  rather than refuses: a brain written before the record existed did nothing wrong, and refusing it
+  would trade availability for an auditability that snapshot cannot retroactively supply. The
+  removal invariant is the one that rejects, because there a missing record is the attack itself.
+
+
 ## v0.8.0-b.6 (2026-08-30)
 
 ### Bug Fixes
