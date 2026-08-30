@@ -17,6 +17,7 @@ import pytest
 
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
+from boltzmann.blocks.semantic import SemanticBlock
 from boltzmann.conformance import golden
 from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.exceptions import SerializationError
@@ -240,6 +241,40 @@ class TestTheSchemaRegistry:
         for memory_type, entries in golden.registry()["schemas"].items():
             versions = [entry["schema_version"] for entry in entries]
             assert versions == list(range(1, len(versions) + 1)), memory_type
+
+
+class TestRegisteringAnUnknownSchema:
+    """Defining a schema the protocol's registry does not carry must not pass unremarked."""
+
+    def test_it_warns_and_names_the_consequence(self, caplog) -> None:
+        with caplog.at_level("WARNING"):
+
+            class UnregisteredSemantic(SemanticBlock):
+                MEMORY_TYPE = MemoryType.SEMANTIC
+                SCHEMA_VERSION = 99
+
+        assert "schema registry does not carry" in caplog.text
+        assert "UnregisteredSemantic" in caplog.text
+        assert golden.CORPUS_REPOSITORY in caplog.text
+
+    def test_it_warns_rather_than_refuses(self, caplog) -> None:
+        """Defining a schema is how one comes to be proposed for registration in the first place.
+
+        An exception here would make the SDK unusable for the work that precedes registration --
+        which is not the failure being guarded against. The failure is doing it silently.
+        """
+        with caplog.at_level("WARNING"):
+
+            class ProposedSemantic(SemanticBlock):
+                MEMORY_TYPE = MemoryType.SEMANTIC
+                SCHEMA_VERSION = 98
+
+        assert (MemoryType.SEMANTIC, 98) in Block.registry()
+
+    def test_a_registered_schema_is_quiet(self, caplog) -> None:
+        with caplog.at_level("WARNING"):
+            Block.schemas(MemoryType.SEMANTIC)
+        assert "schema registry does not carry" not in caplog.text
 
 
 class TestVectorsNeedNoTestFramework:

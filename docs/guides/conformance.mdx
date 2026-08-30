@@ -72,6 +72,18 @@ A block is written under the **oldest** registered schema its payload satisfies,
 get to choose. Writing under the newest instead would let a new schema silently re-version every block
 written afterwards, including blocks that use nothing it added.
 
+Defining a block class registers its schema with this process, which is not the same thing as the schema
+being registered with the protocol. When the two disagree, the SDK says so:
+
+```
+WARNING  MySemanticV9 defines semantic schema_version 9, which the schema registry does not carry.
+         Blocks written under it are named in a way no other implementation reproduces...
+```
+
+It warns rather than refuses. Defining a schema is how one comes to be proposed for registration, so an
+exception would make the SDK unusable for the work that precedes it — the failure being guarded against
+is doing it *silently*, and ending up with a per-deployment registry by accident.
+
 ## The behavioral suite, for Python
 
 A Python implementation inherits the suite directly. These are `pytest` classes — collect them and they
