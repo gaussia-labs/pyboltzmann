@@ -67,6 +67,46 @@
       },
       "canonical_bytes": "{\"max\":9007199254740991,\"min\":-9007199254740991}",
       "sha256": "sha256:63546eb60913dcb1cdd5118f7bf4885beed344af930c8a9d5f38fad243fd4819"
+    },
+    {
+      "name": "non_bmp_key_ordering",
+      "value": {
+        "😀": 1,
+        "～": 2
+      },
+      "canonical_bytes": "{\"😀\":1,\"～\":2}",
+      "sha256": "sha256:5848fd4854a6ce2c6f23359368eef2f1a8d667176e91a9b74a92b7086fa7b207",
+      "why": "RFC 8785 sorts object members by UTF-16 code units. A key above U+FFFF is encoded as a surrogate pair, so it sorts BELOW U+FF5E by code unit and above it by code point. An implementation sorting by code point produces different bytes for this object -- and therefore a different block_id for identical knowledge."
+    },
+    {
+      "name": "nfc_form",
+      "value": {
+        "label": "café"
+      },
+      "canonical_bytes": "{\"label\":\"café\"}",
+      "sha256": "sha256:2d7fba14f0a7cffed454bc268d791c0f32d11f62946998a323087ccf5df29075",
+      "why": "The composed form of a string the next vector carries decomposed. The protocol normalizes nothing, so these are two different values and MUST produce two different digests. Pair with nfd_form."
+    },
+    {
+      "name": "nfd_form",
+      "value": {
+        "label": "café"
+      },
+      "canonical_bytes": "{\"label\":\"café\"}",
+      "sha256": "sha256:38b9723ab036c08537bb628922272d7e25deada9ae5ed1369b1828f6ec665536",
+      "why": "The decomposed form. Identical when rendered, distinct as bytes, and therefore a distinct block. An implementation that normalized on the way in would silently merge two blocks a user wrote separately."
+    },
+    {
+      "name": "duplicate_key_document",
+      "rejected": true,
+      "document": "{\"a\":1,\"a\":2}",
+      "why": "JSON parsers differ on duplicate keys and most take the last. A document that says two things about one member has no single reading, so it MUST be rejected at decode rather than resolved by whichever parser is in use."
+    },
+    {
+      "name": "lone_surrogate",
+      "rejected": true,
+      "document": "{\"a\":\"\\ud800\"}",
+      "why": "An unpaired surrogate is not a character and has no UTF-8 encoding, so it cannot be canonicalized. Rejected rather than replaced, because a replacement character would change the value silently."
     }
   ]
 }

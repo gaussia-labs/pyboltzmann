@@ -49,6 +49,36 @@ jobs:
       - name: Test
         run: uv run --python ${{ matrix.python-version }} pytest -m "not slow"
 
+  # The corpus is published elsewhere and vendored here. Without this job the copy would drift, and
+  # "conforming" would quietly go back to meaning "matches pyboltzmann" -- which is the thing moving
+  # the corpus out was meant to end.
+  corpus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the published corpus
+        uses: actions/checkout@v4
+        with:
+          repository: gaussia-labs/boltzmann-conformance
+          path: corpus
+
+      - name: The vendored copy names the version it was taken from
+        run: |
+          pinned=$(grep -oE '^CORPUS_VERSION = "[^"]+"' src/boltzmann/conformance/golden.py | cut -d'"' -f2)
+          published=$(cat corpus/CORPUS_VERSION)
+          echo "vendored: $pinned   published: $published"
+          if [ "$pinned" != "$published" ]; then
+            echo "::error::the vendored corpus is pinned at $pinned and $published is published." \
+                 "Re-vendor, or pin deliberately and say why."
+            exit 1
+          fi
+
+      - name: The vendored files are the published files
+        run: |
+          diff -r corpus/vectors src/boltzmann/conformance/vectors --exclude='__init__.py' --exclude='__pycache__'
+          diff corpus/registry/schemas.json src/boltzmann/conformance/registry/schemas.json
+
   release:
     needs: test
     # A pull request runs the tests and stops there. Releasing from one would tag and publish a

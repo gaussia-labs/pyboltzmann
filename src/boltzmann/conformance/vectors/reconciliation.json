@@ -1,0 +1,166 @@
+{
+  "boltzmann": 1,
+  "serialization": "jcs/1",
+  "hash": "sha256",
+  "layout": "rfc6962-sorted/1",
+  "description": "Reconciliation of a single module is set arithmetic over immutable, content-addressed identifiers: M = (B u X u Y) \\ ((B \\ X) u (B \\ Y)). Everything either side added is kept, and everything either side removed stays removed. A textual conflict is not representable, because modifying a block yields a different identity. The refusals matter as much as the results: a reconciliation proceeds only when the best common ancestor is unique.",
+  "vectors": [
+    {
+      "name": "both_sides_added",
+      "layout": "rfc6962-sorted/1",
+      "ancestor": [
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "ours": [
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa",
+        "sha256:ae0bec9e9d33c56354bd612c8a6010840324fc5b9786ce0a18b696b304b09397"
+      ],
+      "theirs": [
+        "sha256:4c55a8552a2c7261f61f798c2265e6f13358f326ae5b934096ff16bd15e62c33",
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "merged": [
+        "sha256:4c55a8552a2c7261f61f798c2265e6f13358f326ae5b934096ff16bd15e62c33",
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa",
+        "sha256:ae0bec9e9d33c56354bd612c8a6010840324fc5b9786ce0a18b696b304b09397"
+      ],
+      "merged_root": "sha256:b02632c0dbd4c7e40a1b1f8acef3107505178d2ad3a9c4da4e653fe7bb58631f",
+      "why": "The ordinary case: a merge of two contributions keeps both. Nothing was removed, so the subtrahend is empty and the result is the union."
+    },
+    {
+      "name": "one_side_dropped_what_the_other_retained",
+      "layout": "rfc6962-sorted/1",
+      "ancestor": [
+        "sha256:54c26a1ab342ef60f2f8e77cba23ed4f174c83d41119d6e84d9a4e0c54941249",
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "ours": [
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "theirs": [
+        "sha256:54c26a1ab342ef60f2f8e77cba23ed4f174c83d41119d6e84d9a4e0c54941249",
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "merged": [
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "merged_root": "sha256:78c574239dfeebae2915e7d0d8966b0c3e333d71893e6fc887e83db5a35a9143",
+      "why": "Exclusion has precedence, and that is the point of the equation rather than a side effect. A block one side deliberately dropped must not return because the other side still held it -- otherwise every reconciliation would silently undo a removal."
+    },
+    {
+      "name": "both_sides_dropped_the_same_block",
+      "layout": "rfc6962-sorted/1",
+      "ancestor": [
+        "sha256:283bb9deef02e6843abfb538efa1eca70801bd8a701c3f98191e123496339247",
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "ours": [
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "theirs": [
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "merged": [
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "merged_root": "sha256:78c574239dfeebae2915e7d0d8966b0c3e333d71893e6fc887e83db5a35a9143",
+      "why": "Agreement on a removal is still a removal. Stated because the equation reaches it by two different subtractions and both must land on the same answer."
+    },
+    {
+      "name": "re_adding_is_not_smuggling_it_back",
+      "layout": "rfc6962-sorted/1",
+      "ancestor": [
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa",
+        "sha256:e7cd9c3ab5da1895f52abfece688c0f136a26c348f0619bdf724a9e1667b747f"
+      ],
+      "ours": [
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "theirs": [
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa",
+        "sha256:e7cd9c3ab5da1895f52abfece688c0f136a26c348f0619bdf724a9e1667b747f"
+      ],
+      "merged": [
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "merged_root": "sha256:78c574239dfeebae2915e7d0d8966b0c3e333d71893e6fc887e83db5a35a9143",
+      "why": "Content addressing means re-registering the same source yields the same identifier, so the reconciliation recognizes it as something this brain removed rather than as a new contribution. Deliberately re-admitting it remains possible, and remains an explicit commit."
+    },
+    {
+      "name": "symmetric_in_the_two_sides",
+      "layout": "rfc6962-sorted/1",
+      "ancestor": [
+        "sha256:54c26a1ab342ef60f2f8e77cba23ed4f174c83d41119d6e84d9a4e0c54941249",
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "ours": [
+        "sha256:54c26a1ab342ef60f2f8e77cba23ed4f174c83d41119d6e84d9a4e0c54941249",
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "theirs": [
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "merged": [
+        "sha256:a4d26868017c0ccffe2efe50944ef4211834660cca834c6e9f86dec6a88246fa"
+      ],
+      "merged_root": "sha256:78c574239dfeebae2915e7d0d8966b0c3e333d71893e6fc887e83db5a35a9143",
+      "why": "The mirror of the drop-vs-retain case. For a fixed ancestor the merge is symmetric, so which brain performs the reconciliation does not change its result."
+    },
+    {
+      "name": "empty_ancestor_is_a_union",
+      "layout": "rfc6962-sorted/1",
+      "ancestor": [],
+      "ours": [
+        "sha256:ae0bec9e9d33c56354bd612c8a6010840324fc5b9786ce0a18b696b304b09397"
+      ],
+      "theirs": [
+        "sha256:4c55a8552a2c7261f61f798c2265e6f13358f326ae5b934096ff16bd15e62c33"
+      ],
+      "merged": [
+        "sha256:4c55a8552a2c7261f61f798c2265e6f13358f326ae5b934096ff16bd15e62c33",
+        "sha256:ae0bec9e9d33c56354bd612c8a6010840324fc5b9786ce0a18b696b304b09397"
+      ],
+      "merged_root": "sha256:d90da0e9dc9719e8c12d97ee491a8d4d5ce3f4a93d72d61e9ec422b8fb128ead",
+      "why": "With nothing in the ancestor nothing can have been removed, so the result is the union however the two sides differ."
+    }
+  ],
+  "refusals": [
+    {
+      "name": "no_common_ancestor",
+      "condition": "no_common_ancestor",
+      "why": "Two histories that share no ancestor have no three-way merge defined: a block present in one and absent from the other is ambiguous between 'they added it' and 'I dropped it', and those demand opposite outcomes. A conforming implementation MUST refuse with a distinguishable failure."
+    },
+    {
+      "name": "criss_cross_two_best_common_ancestors",
+      "condition": "multiple_merge_bases",
+      "why": "A criss-cross history yields more than one best common ancestor -- common ancestors that are not themselves ancestors of another common ancestor. Equation 4 gives different results for different ancestors, so an implementation that silently picked one would be choosing the outcome. It MUST refuse with a distinguishable failure of its own, separate from having no ancestor at all.",
+      "topology": {
+        "description": "A and B are both best common ancestors of X and Y: neither is an ancestor of the other, and each is reachable from both heads.",
+        "parents": {
+          "A": [],
+          "B": [],
+          "M1": [
+            "A",
+            "B"
+          ],
+          "M2": [
+            "B",
+            "A"
+          ],
+          "X": [
+            "M1"
+          ],
+          "Y": [
+            "M2"
+          ]
+        },
+        "ours": "X",
+        "theirs": "Y",
+        "best_common_ancestors": [
+          "M1",
+          "M2"
+        ]
+      }
+    }
+  ]
+}

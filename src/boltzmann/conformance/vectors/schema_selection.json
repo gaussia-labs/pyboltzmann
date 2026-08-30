@@ -1,0 +1,82 @@
+{
+  "boltzmann": 1,
+  "serialization": "jcs/1",
+  "hash": "sha256",
+  "registry_version": 1,
+  "description": "Payloads and the schema_version that oldest-that-fits assigns them against the registered set in registry/schemas.json. 'satisfies' lists every registered version the payload validates under, with no coercion and no members the schema does not name; 'schema_version' is the smallest of them, always. Because schema_version sits inside the envelope and therefore inside block_id, two implementations that chose differently here would compute different names for identical knowledge and stop sharing blocks without either of them failing.",
+  "vectors": [
+    {
+      "name": "semantic_satisfying_several_takes_the_oldest",
+      "memory_type": "semantic",
+      "payload": {
+        "kind": "formula",
+        "label": "Fourier",
+        "statement": "a periodic function decomposes into sines and cosines"
+      },
+      "satisfies": [
+        1,
+        2
+      ],
+      "schema_version": 1,
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"semantic\",\"payload\":{\"kind\":\"formula\",\"label\":\"Fourier\",\"statement\":\"a periodic function decomposes into sines and cosines\"},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:86366bd547165e3af4e0ab86497dc4136b0c62dd19fb8a39fedf89de70419dd7",
+      "why": "The case the rule exists for. This payload validates under more than one registered schema, and the oldest is chosen: writing it under the newest would silently re-version every block written after a schema is registered, including blocks using nothing it added."
+    },
+    {
+      "name": "semantic_using_a_later_vocabulary_takes_that_version",
+      "memory_type": "semantic",
+      "payload": {
+        "kind": "scheme",
+        "scheme": "argument",
+        "exclusive": true
+      },
+      "satisfies": [
+        3
+      ],
+      "schema_version": 3,
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"semantic\",\"payload\":{\"exclusive\":true,\"kind\":\"scheme\",\"scheme\":\"argument\"},\"schema_version\":3,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:e12e3f12491485b286391e1971a8f00b62db90c801d9a72534d52c6dbc7d1552",
+      "why": "A brain stops being readable by an older client exactly at the point where it genuinely uses something that client has no schema for -- and not one block earlier."
+    },
+    {
+      "name": "episodic_minimal_takes_the_oldest",
+      "memory_type": "episodic",
+      "payload": {
+        "summary": "Lecture 07",
+        "occurred_at": "2026-05-14T14:00:00Z"
+      },
+      "satisfies": [
+        1,
+        2
+      ],
+      "schema_version": 1,
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"episodic\",\"payload\":{\"occurred_at\":\"2026-05-14T14:00:00Z\",\"summary\":\"Lecture 07\"},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:c356cc40ab8cfa850af557235d05d15d0f242c0f2f01bb70051cd94fa7424ddc",
+      "why": "The same rule in a second memory type: registration number decides, never recency."
+    },
+    {
+      "name": "procedural_minimal_takes_the_oldest",
+      "memory_type": "procedural",
+      "payload": {
+        "label": "normalize a PDF",
+        "goal": "recover readable text",
+        "steps": [
+          {
+            "action": "extract text"
+          },
+          {
+            "action": "strip headers"
+          }
+        ]
+      },
+      "satisfies": [
+        1,
+        2
+      ],
+      "schema_version": 1,
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"procedural\",\"payload\":{\"goal\":\"recover readable text\",\"label\":\"normalize a PDF\",\"steps\":[{\"action\":\"extract text\"},{\"action\":\"strip headers\"}]},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:003f7558cd897f933fc82929f1357eea35cabc26ad2bced9fbd7acbccdc4e608",
+      "why": "A procedure that uses no later vocabulary stays readable by the oldest client that knows procedures."
+    }
+  ]
+}
