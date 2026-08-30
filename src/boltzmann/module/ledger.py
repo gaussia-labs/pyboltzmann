@@ -25,6 +25,7 @@ from boltzmann.blocks.provenance import (
     ProvenanceBlock,
     RemovalRecord,
     SupersessionRecord,
+    ValidationRecord,
 )
 from boltzmann.identity.digest import BlockId
 from boltzmann.module.module import Module
@@ -53,6 +54,11 @@ class Ledger:
         derivation_records (dict[BlockId, BlockId]): The provenance block that records each derivation,
             so a cascade can report which edges it touches.
         removed (set[BlockId]): Blocks a recorded removal already excluded.
+        validations (dict[BlockId, ValidationRecord]): The verdict that admitted each block, so
+            "it was validated" is answerable from the signed composition rather than from whoever
+            committed. A block can carry more than one over its history -- a re-derivation revalidates
+            the same identity -- and the last one read wins, since they agree on the identity by
+            construction.
     """
 
     locators: dict[BlockId, str] = field(default_factory=dict)
@@ -64,6 +70,7 @@ class Ledger:
     producers: dict[BlockId, Producer] = field(default_factory=dict)
     derivation_records: dict[BlockId, BlockId] = field(default_factory=dict)
     removed: set[BlockId] = field(default_factory=set)
+    validations: dict[BlockId, ValidationRecord] = field(default_factory=dict)
 
     @classmethod
     def of(cls, modules: dict[MemoryType, Module]) -> Ledger:
@@ -114,6 +121,9 @@ class Ledger:
 
         elif isinstance(record, DemotionRecord):
             self.demoted.add(record.block)
+
+        elif isinstance(record, ValidationRecord):
+            self.validations[record.block] = record
 
         elif isinstance(record, RemovalRecord):
             self.removed.update(record.blocks)

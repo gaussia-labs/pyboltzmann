@@ -82,6 +82,7 @@ from boltzmann.blocks.provenance import (
     RemovalMechanism,
     RemovalRecord,
     SupersessionRecord,
+    ValidationRecord,
 )
 from boltzmann.catalog import (
     Catalog,
@@ -153,7 +154,13 @@ from boltzmann.ingest.proposer import CandidateProposer, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest, RegistrationResult
 from boltzmann.ingest.schema import candidates_schema as _candidates_schema
 from boltzmann.ingest.task import PROPOSABLE_MEMORY_TYPES, ProcessingTask, TaskOperation
-from boltzmann.ingest.validation import ValidationReport, ValidationStatus, Validator, validate
+from boltzmann.ingest.validation import (
+    ValidationAudit,
+    ValidationReport,
+    ValidationStatus,
+    Validator,
+    validate,
+)
 from boltzmann.catalog_validation import ClassificationResult, validate_declarations
 from boltzmann.merkle.proof import InclusionProof
 from boltzmann.merkle.tree import sorted_leaves
@@ -206,6 +213,14 @@ from boltzmann.store.oci_layout import OciLayoutStore
 
 HEAD_POINTER = "head"
 """Name of the mutable pointer that says which snapshot is current."""
+
+_UNRECORDED_CHECKS = "unrecorded"
+"""Placeholder check identifier for a report built before the gate recorded its check set.
+
+A validation record must name at least one check, because a verdict under an unstated check set is
+not something a consumer can act on. A report assembled by hand, or by an older SDK, has no set to
+name -- so the record says so in the one way that cannot be mistaken for a check that ran.
+"""
 
 MAX_MERGED_PER_CALL = 4096
 """Ceiling on signature records merged from one referrers listing.
@@ -1363,6 +1378,35 @@ class Brain:
             content_missing=content_missing,
         )
 
+    def audit_validation(self) -> ValidationAudit:
+        """
+        Report which committed blocks can show the verdict that admitted them.
+
+        Every block entering a composition must be accompanied by a validation record in provenance
+        naming the verdict, the checks that ran, and the task (paper Section 10.3). This reads the
+        ledger back and says where that record is missing.
+
+        It reports rather than refuses. A brain written before the record existed is not a brain that
+        did anything wrong, and refusing it would take availability away to gain an auditability the
+        snapshot cannot retroactively supply. The invariant that *does* refuse is the removal one,
+        because there a missing record is how the ledger would be quietly emptied.
+
+        Returns:
+            ValidationAudit: The derived blocks whose verdict is readable, and those whose is not.
+        """
+        ledger = Ledger.of(self.modules())
+        accounted: dict[MemoryType, list[BlockId]] = {}
+        unaccounted: dict[MemoryType, list[BlockId]] = {}
+
+        for memory_type in self._snapshot.installed:
+            if memory_type in (MemoryType.CANONICAL, MemoryType.PROVENANCE):
+                continue
+            for block_id in self.module(memory_type).block_ids:
+                bucket = accounted if block_id in ledger.validations else unaccounted
+                bucket.setdefault(memory_type, []).append(block_id)
+
+        return ValidationAudit(accounted=accounted, unaccounted=unaccounted)
+
     def open_index(self, memory_type: MemoryType, kind: IndexKind) -> Index:
         """
         Open one of a module's indices.
@@ -1798,6 +1842,10 @@ class Brain:
 
         producer = report.producer or Producer(kind=ProducerKind.ACTOR, id=self.actor.id)
         now = utc_timestamp()
+        # A report from before the gate carried its check set would otherwise write a record naming no
+        # check, which the schema refuses -- correctly, since a verdict under an unstated check set is
+        # not a claim anyone can act on.
+        checks = list(report.checks) or [_UNRECORDED_CHECKS]
 
         blocks: dict[MemoryType, list[Block]] = {}
         provenance: list[ProvenanceBlock] = []
@@ -1815,6 +1863,21 @@ class Brain:
                         at=now,
                         task=report.task_id,
                         locator=result.candidate.locator,
+                    )
+                )
+            )
+            # The verdict travels with the block rather than staying on the write path. A consumer that
+            # meets this composition can then read what admitted each member instead of trusting whoever
+            # committed it, which is the whole difference between a ledger and a habit.
+            provenance.append(
+                ProvenanceBlock(
+                    record=ValidationRecord(
+                        block=block.block_id,
+                        verdict=result.status,
+                        checks=checks,
+                        actor=self.actor,
+                        at=now,
+                        task=report.task_id,
                     )
                 )
             )
