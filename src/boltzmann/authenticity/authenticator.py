@@ -151,6 +151,7 @@ class FindingKind(StrEnum):
     QUORUM_MARGIN = "quorum_margin"
     EVIDENCE_INCOMPLETE = "evidence_incomplete"
     REMOVAL_INVARIANT = "removal_invariant"
+    REMOVAL_UNDECIDABLE = "removal_undecidable"
     UNVERIFIABLE = "unverifiable"
 
 
@@ -581,6 +582,20 @@ class Authenticator:
                         f"snapshot {digest.short} has absences its reachable removal ledger does not "
                         f"account for: {removals.detail}"
                     ),
+                )
+            )
+        elif not removals.is_complete:
+            # The question could not be put, which is not the same as its being answered. Reported
+            # so a consumer knows the ledger went unchecked here, and non-blocking because refusing
+            # would refuse every brain that pruned its history -- something the protocol permits.
+            findings.append(
+                Finding(
+                    kind=FindingKind.REMOVAL_UNDECIDABLE,
+                    detail=(
+                        f"the removal ledger of {digest.short} could not be checked against its first "
+                        f"parent: {removals.detail}"
+                    ),
+                    blocking=False,
                 )
             )
 

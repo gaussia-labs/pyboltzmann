@@ -13,7 +13,7 @@ from boltzmann.blocks.provenance import (
     RemovalRecord,
 )
 from boltzmann.exceptions import RemovalInvariantError
-from boltzmann.identity.digest import BlockId
+from boltzmann.identity.digest import BlockId, OciDigest
 from boltzmann.module.composition import Composition
 from boltzmann.module.module import Module
 from boltzmann.module.snapshot import Snapshot
@@ -64,7 +64,13 @@ def test_a_reachable_removal_record_satisfies_the_invariant() -> None:
     assert check_removal_invariant(store, snapshot).is_valid
 
 
-def test_a_modern_child_cannot_omit_the_field_to_disable_the_invariant() -> None:
+def test_the_invariant_does_not_depend_on_any_field_being_present() -> None:
+    """It is a statement about compositions, so nothing in a snapshot can opt out of it.
+
+    An earlier version keyed the check on whether a module reference carried a tombstones member,
+    which made the field a protocol-version marker as well as a fact -- and an attacker could then
+    turn the check off by omitting it.
+    """
     store, snapshot = removed_snapshot(recorded=False)
     downgraded = snapshot.model_copy(
         update={
@@ -76,6 +82,34 @@ def test_a_modern_child_cannot_omit_the_field_to_disable_the_invariant() -> None
     )
 
     assert not check_removal_invariant(store, downgraded).is_valid
+
+
+def test_an_unresolvable_parent_is_undecidable_rather_than_failed() -> None:
+    """Refusing here would refuse every brain that pruned its history, which the protocol permits.
+
+    Passing silently would be worse: a truncated history would turn the check off. So the question
+    is reported as one that could not be put.
+    """
+    store, snapshot = removed_snapshot(recorded=True)
+    orphan = Snapshot(modules=snapshot.modules, parents=[OciDigest.of(b"a parent nobody holds")])
+
+    integrity = check_removal_invariant(store, orphan)
+
+    assert integrity.is_valid, "nothing is unaccounted for; the difference simply cannot be taken"
+    assert not integrity.is_complete
+    assert "not resolvable" in integrity.detail
+
+
+def test_an_undecidable_ledger_is_reported_without_blocking() -> None:
+    store, snapshot = removed_snapshot(recorded=True)
+    orphan = Snapshot(modules=snapshot.modules, parents=[OciDigest.of(b"a parent nobody holds")])
+    store.put_bytes(orphan.canonical_bytes())
+
+    report = Authenticator(store).authenticate(orphan)
+
+    assert report.has(FindingKind.REMOVAL_UNDECIDABLE)
+    assert not report.has(FindingKind.REMOVAL_INVARIANT)
+    assert not any(f.blocking for f in report.findings if f.kind is FindingKind.REMOVAL_UNDECIDABLE)
 
 
 def test_authentication_reports_and_rejects_an_unrecorded_absence() -> None:

@@ -21,7 +21,13 @@ from boltzmann.store.base import BlockStore
 
 @dataclass(frozen=True, slots=True)
 class RemovalIntegrity:
-    """The checkable result, including every unaccounted absence and evidence gap."""
+    """The checkable result: what the ledger fails to account for, and what it could not be asked.
+
+    The two are kept apart because they call for opposite responses. An absence with no removal
+    record is the ledger being quietly emptied, and the verifier refuses it. An absence that cannot
+    be *evaluated* -- a pruned parent, a composition that never travelled -- is undecidable, and a
+    verifier that refused it would be refusing brains for having pruned, which the protocol permits.
+    """
 
     snapshot: OciDigest
     missing_records: dict[MemoryType, tuple[BlockId, ...]] = field(default_factory=dict)
@@ -29,8 +35,13 @@ class RemovalIntegrity:
 
     @property
     def is_valid(self) -> bool:
-        """Whether every absence has a reachable removal record."""
-        return not self.missing_records and not self.evidence_gaps
+        """Whether every absence this check could evaluate has a reachable removal record."""
+        return not self.missing_records
+
+    @property
+    def is_complete(self) -> bool:
+        """Whether the check could be evaluated at all, with no missing evidence."""
+        return not self.evidence_gaps
 
     @property
     def detail(self) -> str:
@@ -61,21 +72,13 @@ def check_removal_invariant(
 
     resolved_parent = parent if parent is not None else _snapshot(store, child.first_parent)
     if resolved_parent is None or resolved_parent.digest != child.first_parent:
-        # Immutable v0.7 documents predate the field and may legitimately be verified from a
-        # truncated corpus. A modern child, however, has opted into the invariant and cannot use
-        # missing history to turn it off.
-        if not any(reference.tombstones is not None for reference in child.modules.values()):
-            return RemovalIntegrity(snapshot=child.digest)
+        # Undecidable, not satisfied. Without the parent there is no difference to take, and saying
+        # so is the honest answer -- refusing would punish a pruned history, and passing silently
+        # would let a truncated one turn the check off.
         return RemovalIntegrity(
             snapshot=child.digest,
             evidence_gaps=(f"first parent {child.first_parent.short} is not resolvable",),
         )
-
-    # Compatibility applies only while both sides are legacy. Once a parent contains the signed
-    # field, omitting it from every child reference cannot downgrade verification back to v0.7.
-    references = [*resolved_parent.modules.values(), *child.modules.values()]
-    if not any(reference.tombstones is not None for reference in references):
-        return RemovalIntegrity(snapshot=child.digest)
 
     selected = set(modules) if modules is not None else set(resolved_parent.modules) | set(child.modules)
     removed: dict[MemoryType, set[BlockId]] = {}
