@@ -20,9 +20,23 @@ import pytest
 SDK_ROOT = Path(__file__).resolve().parent.parent.parent
 """The SDK checkout this sandbox installs from, when it installs from one."""
 
-VECTORS = ("block_ids.json", "inclusion_proofs.json", "merkle_roots.json", "serialization.json")
+VECTORS = (
+    "block_ids.json",
+    "schema_selection.json",
+    "inclusion_proofs.json",
+    "merkle_roots.json",
+    "serialization.json",
+    "reconciliation.json",
+    "sshsig.json",
+    "signatures.json",
+)
 """The golden vectors an implementation in another language consumes. They are the conformance suite's
-input, so a wheel without them ships a suite nobody outside Python can run."""
+input, so a wheel without them ships a suite nobody outside Python can run. The corpus is published
+separately and vendored here, so this asserts the vendoring survived the build."""
+
+REGISTRY = ("schemas.json",)
+"""The schema registry companion. Without it in the wheel, oldest-that-fits has no registered set to
+select against and a consumer would fall back to whatever this package happens to implement."""
 
 
 @pytest.fixture(scope="module")
@@ -66,7 +80,9 @@ class TestTheInstalledPackage:
         from boltzmann.conformance import golden
 
         for name in VECTORS:
-            assert golden.load(name)["vectors"], f"{name} loaded empty"
+            document = golden.load(name)
+            assert document.get("vectors") or document.get("cases"), f"{name} loaded empty"
+        assert golden.registry()["schemas"], "the schema registry companion loaded empty"
 
     def test_it_is_marked_as_typed(self) -> None:
         """Without py.typed a consumer gets no types from the package at all, silently."""
@@ -92,6 +108,11 @@ class TestTheBuiltWheel:
     def test_the_golden_vectors_ship(self, contents: list[str]) -> None:
         for name in VECTORS:
             assert f"boltzmann/conformance/vectors/{name}" in contents
+
+    def test_the_schema_registry_ships(self, contents: list[str]) -> None:
+        """Vendored from the corpus, and useless to a consumer if the build leaves it behind."""
+        for name in REGISTRY:
+            assert f"boltzmann/conformance/registry/{name}" in contents
 
     def test_no_tests_ship(self, contents: list[str]) -> None:
         """They are not part of the library, and shipping them means shipping their fixtures too."""

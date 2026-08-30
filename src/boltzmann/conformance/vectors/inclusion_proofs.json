@@ -153,6 +153,44 @@
         "43cc37f3cecad6b9afddc6b6c95520316337f9039830624be2f36963aa5f5406",
         "6c1719a99fa9239e74c2e702582cfc9adeb978d4560c3fa7caa11690a9bc363b"
       ]
+    },
+    {
+      "name": "tree_size=1,leaf_index=0",
+      "layout": "rfc6962-sorted/1",
+      "root": "sha256:69b0fc54dd0efc5307db0ba95eb1ad58d862f452d809fbe8cc3285e4ec70746b",
+      "tree_size": 1,
+      "leaf_index": 0,
+      "block_id": "sha256:51ac98e6f13365542e7a80c27f69769a3a0cb771c515a08c8e4923d49291b074",
+      "audit_path": [],
+      "why": "A tree of one leaf: the audit path is empty and the root is the leaf hash. The degenerate case an implementation is most likely to special-case wrongly."
+    },
+    {
+      "name": "tree_size=8,leaf_index=0",
+      "layout": "rfc6962-sorted/1",
+      "root": "sha256:71b2e10c51d0fb8dbc5d405d0b3292d680549af339a67dd9417843f8f3e77033",
+      "tree_size": 8,
+      "leaf_index": 0,
+      "block_id": "sha256:151efe3d59a39eff0711d1aa287ce20a2e0c7147761eca02d502364180c77b72",
+      "audit_path": [
+        "394c52bfb3afd78ef3a1da39470279d209ad616d295ed4d09953e1ca8a69b104",
+        "5c62a908328411c1313d5eb94fed916192a6344e90c0e24ae421f1ac8783405b",
+        "40ee75606a86dd80afaaa301cf3673b21a8ba5b28c1a1c45101b8a1a654a275a"
+      ],
+      "why": "A power-of-two size, where every split is exact and an off-by-one in the split rule stays invisible."
+    },
+    {
+      "name": "tree_size=8,leaf_index=7",
+      "layout": "rfc6962-sorted/1",
+      "root": "sha256:71b2e10c51d0fb8dbc5d405d0b3292d680549af339a67dd9417843f8f3e77033",
+      "tree_size": 8,
+      "leaf_index": 7,
+      "block_id": "sha256:e5b350cc5ac656f7fa0e07422633d7c3c442ff066292b98aa97e6e0d0d4526d0",
+      "audit_path": [
+        "8bc4daaf479df5576e09786458cc46989040a71d0a9062b370e74ab8cf92b1bd",
+        "9ff76be6edcee95385413fb92ea543f6c749b1274701fb91e4cde378c340cfd5",
+        "d51df6d05481fa67d3cbf85b5197117ec8d81cece6859e2afe9160bd9974fe9d"
+      ],
+      "why": "A power-of-two size, where every split is exact and an off-by-one in the split rule stays invisible."
     }
   ]
 }
