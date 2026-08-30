@@ -134,8 +134,16 @@ class TestTheTable:
         assert verdict.scopes == frozenset()
         assert verdict.is_complete
 
-    def test_a_redaction_is_betrayed_only_by_its_provenance_record(self) -> None:
-        # Tombstoning changes no module root; the record is the whole evidence.
+    def test_tombstone_growth_requires_redact_without_reading_provenance(self) -> None:
+        held = composition(MemoryType.CANONICAL, "redacted")
+        parent = snapshot(held)
+        reference = parent.modules[MemoryType.CANONICAL].model_copy(update={"tombstones": [held.block_ids[0]]})
+        child = parent.with_module(reference)
+
+        assert required_scopes(ScopeEvidence(child=child, parent=parent)).scopes == {Scope.REDACT}
+
+    def test_a_legacy_redaction_is_still_detected_from_its_provenance_record(self) -> None:
+        # Compatibility with snapshots written before ModuleRef carried tombstones.
         record = ProvenanceBlock(
             record=RemovalRecord(
                 blocks=[BlockId.of(b"redacted")],

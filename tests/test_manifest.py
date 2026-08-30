@@ -143,6 +143,21 @@ class TestProjectionDocument:
         with pytest.raises(DistributionError, match="not in canonical"):
             Projection.from_document(pretty)
 
+    def test_a_retained_reference_serializes_exactly_as_its_source_does(self) -> None:
+        """The verbatim-subset rule is checked on objects; these are the bytes that carry it.
+
+        A projection that spelled an absent option as ``null`` where the snapshot omits the key would
+        make two documents disagree about a reference they both claim is the same one -- and a consumer
+        comparing the retained entry against the resolved source byte for byte would be right to refuse.
+        """
+        source = Snapshot.of([reference(MemoryType.CANONICAL), reference(MemoryType.SEMANTIC, "bge-m3@1.5")])
+        projection = Projection(source=source.digest, modules=source.modules)
+
+        in_snapshot = json.loads(source.canonical_bytes())["modules"]
+        in_projection = json.loads(projection.canonical_bytes())["modules"]
+
+        assert in_projection == in_snapshot
+
     def test_a_module_key_cannot_disagree_with_its_reference(self) -> None:
         source = Snapshot.of([reference(MemoryType.CANONICAL)])
         with pytest.raises(ValidationError, match="module key"):

@@ -14,13 +14,13 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from boltzmann.authenticity.trust_root import TrustRoot
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.exceptions import SerializationError, SnapshotError
-from boltzmann.identity.digest import MerkleRoot, OciDigest
+from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
 from boltzmann.identity.serialization import canonicalize, parse_json_strict
 from boltzmann.identity.time import Timestamp, utc_timestamp
 from boltzmann.merkle.tree import LAYOUT_NAME
@@ -45,6 +45,9 @@ class ModuleRef(BaseModel):
             (paper Section 6.3).
         index_digest (OciDigest | None): Digest of the travelling index payload. This places the
             index inside the signed snapshot bytes instead of trusting the registry manifest.
+        tombstones (list[BlockId] | None): Destroyed block identities the composition still names.
+            ``None`` is reserved for parsing pre-field snapshots; new module references emit a list,
+            including when it is empty, without changing old snapshots' identities.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -56,6 +59,13 @@ class ModuleRef(BaseModel):
     layout: str = LAYOUT_NAME
     embedding_model: str | None = None
     index_digest: OciDigest | None = None
+    tombstones: list[BlockId] | None = None
+
+    @field_validator("tombstones")
+    @classmethod
+    def _canonicalize_tombstones(cls, values: list[BlockId] | None) -> list[BlockId] | None:
+        """Tombstones are a set on the wire, so construction cannot make order an identity fact."""
+        return None if values is None else sorted(set(values), key=lambda value: value.raw)
 
     @model_validator(mode="after")
     def _require_a_model_for_a_bound_index(self) -> Self:

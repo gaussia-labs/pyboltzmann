@@ -49,6 +49,7 @@ from boltzmann.authenticity.chain import (
     observed_revisions,
     walk_first_parents,
 )
+from boltzmann.authenticity.removals import check_removal_invariant
 from boltzmann.authenticity.diff import gather_evidence, required_scopes
 from boltzmann.authenticity.governance import RotationPlan, RotationResult
 from boltzmann.authenticity.keys import SshPublicKey
@@ -136,6 +137,7 @@ from boltzmann.exceptions import (
     ReferenceNotFoundError,
     ResolutionRefusedError,
     RollbackError,
+    RemovalInvariantError,
     SnapshotError,
     TrustRootMismatchError,
     UnauthorizedKeyError,
@@ -726,7 +728,13 @@ class Brain:
                 f"the stored composition for {memory_type.value} has root {composition.root.short} but the "
                 f"snapshot files it under {reference.root.short}"
             )
-        module = Module(memory_type, self.store, composition, self._index_map(memory_type))
+        module = Module(
+            memory_type,
+            self.store,
+            composition,
+            self._index_map(memory_type),
+            tombstones=reference.tombstones or (),
+        )
         self._modules[memory_type] = module
         return module
 
@@ -1326,8 +1334,8 @@ class Brain:
             classified: set[str] = set()
 
             for block_id in module.block_ids:
-                if not self.store.is_resolvable(block_id):
-                    unreadable = tombstoned if self.store.has(block_id) else missing
+                if block_id in module.tombstones or not self.store.is_resolvable(block_id):
+                    unreadable = tombstoned if block_id in module.tombstones or self.store.has(block_id) else missing
                     unreadable.setdefault(memory_type, []).append(block_id)
                     continue
 
@@ -1859,6 +1867,7 @@ class Brain:
         blocks: dict[MemoryType, list[Block]],
         provenance: Sequence[ProvenanceBlock],
         without: dict[MemoryType, list[BlockId]] | None = None,
+        tombstones: Mapping[MemoryType, Iterable[BlockId]] | None = None,
     ) -> CommitResult:
         """
         Store blocks, advance the affected compositions, and publish a snapshot.
@@ -1875,6 +1884,8 @@ class Brain:
             provenance (Sequence[ProvenanceBlock]): Provenance entries to record alongside them.
             without (dict[MemoryType, list[BlockId]] | None): Blocks to exclude from a composition. The
                 blocks themselves are untouched -- what changes is which composition names them.
+            tombstones (Mapping[MemoryType, Iterable[BlockId]] | None): Destroyed identities to add
+                to module references without changing their compositions or Merkle roots.
 
         Returns:
             CommitResult: The new snapshot and the new roots.
@@ -1886,7 +1897,12 @@ class Brain:
             by_module.setdefault(MemoryType.PROVENANCE, []).extend(provenance)
 
         excluded = {kind: list(ids) for kind, ids in (without or {}).items()}
-        touched = [*by_module, *(kind for kind in excluded if kind not in by_module)]
+        destroyed = {kind: list(ids) for kind, ids in (tombstones or {}).items()}
+        touched = [
+            *by_module,
+            *(kind for kind in excluded if kind not in by_module),
+            *(kind for kind in destroyed if kind not in by_module and kind not in excluded),
+        ]
 
         committed: list[BlockId] = []
         references: list[ModuleRef] = []
@@ -1900,6 +1916,8 @@ class Brain:
             module = self._module_or_empty(memory_type).with_blocks(block.block_id for block in items)
             if memory_type in excluded:
                 module = module.without_blocks(excluded[memory_type])
+            if memory_type in destroyed:
+                module = module.with_tombstones(destroyed[memory_type])
             self._rebuild_indices(module)
             embedding_model, index_digest = self._travelling_index_binding(memory_type)
             reference = module.persist(embedding_model=embedding_model, index_digest=index_digest)
@@ -1992,7 +2010,11 @@ class Brain:
         if not indices:
             return
 
-        blocks = [block_id for block_id in module.block_ids if module.store.is_resolvable(block_id)]
+        blocks = [
+            block_id
+            for block_id in module.block_ids
+            if block_id not in module.tombstones and module.store.is_resolvable(block_id)
+        ]
         decoded = [module.get(block_id) for block_id in blocks]
         for index in indices:
             # The store is passed as a ContentReader: an index over blocks that name their content
@@ -2387,10 +2409,10 @@ class Brain:
         names is destroyed; the redacted block's own envelope always is. When this holds bytes back,
         ``redacted`` says so by not listing them.
 
-        Two limits are worth restating. A hash of low-entropy content is not anonymous, so confirming a
-        guess may still be possible while the ``block_id`` is kept. And erasure does not propagate across
-        already-pulled copies: a revocation can be published, but a distributed brain can only signal
-        destruction, not guarantee it.
+        Two limits are worth restating. Low-entropy or enumerable content may still be recovered by
+        guessing and hashing candidates while the ``block_id`` is kept. And erasure does not propagate
+        across already-pulled copies: a revocation can be published, but a distributed brain can only
+        signal destruction, not guarantee it.
 
         Args:
             block (BlockId): The block to redact.
@@ -2424,7 +2446,7 @@ class Brain:
                 reason=reason,
             )
         )
-        commit = self._write(blocks={}, provenance=[record])
+        commit = self._write(blocks={}, provenance=[record], tombstones={memory_type: [block]})
 
         # The record goes in first. A tombstone with no ledger entry would be indistinguishable from
         # corruption, which is the one thing Section 10.6 forbids.
@@ -3455,6 +3477,11 @@ class Brain:
                 self.store,
                 Composition(memory_type, block_ids),
                 self._index_map(memory_type),
+                tombstones=(
+                    block_id
+                    for block_id in block_ids
+                    if self.store.has(block_id) and not self.store.is_resolvable(block_id)
+                ),
             )
             self._rebuild_indices(module)
             embedding_model, index_digest = self._travelling_index_binding(memory_type)
@@ -4310,6 +4337,12 @@ class Brain:
         A subset artifact passes its resolved source here, not the projection document: the view
         is unsigned by design and its module roots are commitments the source attests.
         """
+        removals = check_removal_invariant(self.store, remote)
+        if not removals.is_valid:
+            raise RemovalInvariantError(
+                f"snapshot {remote.digest.short} has absences its reachable removal ledger does not "
+                f"account for: {removals.detail}"
+            )
         policy = verification if verification is not None else VerificationPolicy()
         judged = remote
         records = for_snapshot(self.store, judged.digest)
@@ -4335,6 +4368,8 @@ class Brain:
                 )
             return
         report = Authenticator(self.store, policy=policy).authenticate(judged, current=judged.trust_root)
+        if report.has(FindingKind.REMOVAL_INVARIANT):
+            raise RemovalInvariantError(report.detail(FindingKind.REMOVAL_INVARIANT))
         if report.is_proposal and not policy.allow_propose_head:
             raise InsufficientScopeError(
                 f"the remote head {judged.digest.short} is signed only under propose: attributable, "
@@ -4400,13 +4435,6 @@ class Brain:
         for memory_type in wanted:
             layer = manifest.layer_for(memory_type)
             assert layer is not None  # checked above
-            if not self.store.is_resolvable(layer.digest):
-                await client.pull_blob(reference, layer.digest, self.store)
-
-            # The manifest's layers and its config blob are two separate registry-supplied documents,
-            # and nothing forces a registry to keep them consistent. Indexing straight into
-            # the resolved config turned that into a bare KeyError, which is neither documented here nor
-            # actionable by a caller.
             expected = resolved.modules.get(memory_type)
             if expected is None:
                 named = ", ".join(kind.value for kind in resolved.modules) or "none"
@@ -4415,10 +4443,20 @@ class Brain:
                     f"it; the config names: {named}. The manifest and its config disagree, so there is "
                     f"nothing to verify the layer against."
                 )
+            if not self.store.is_resolvable(layer.digest):
+                await client.pull_blob(reference, layer.digest, self.store)
 
+            # The manifest's layers and its config blob are two separate registry-supplied documents,
+            # and nothing forces a registry to keep them consistent. Indexing straight into
+            # the resolved config turned that into a bare KeyError, which is neither documented here nor
+            # actionable by a caller.
             # Bounded by ``unpack_layer``'s own expansion ratio: the descriptor's size is the compressed
             # blob's, so it says nothing about what decompressing costs.
-            composition = unpack_layer(self.store.get_bytes(layer.digest), self.store)
+            composition = unpack_layer(
+                self.store.get_bytes(layer.digest),
+                self.store,
+                tombstones=expected.tombstones or (),
+            )
             if composition.root != expected.root:
                 raise DistributionError(
                     f"the {memory_type.value} layer unpacks to root {composition.root.short} but the "

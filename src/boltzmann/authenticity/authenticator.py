@@ -33,6 +33,7 @@ from boltzmann.authenticity.keys import SshPublicKey
 from boltzmann.authenticity.pins import TrustPin, read_pin
 from boltzmann.authenticity.policy import VerificationPolicy
 from boltzmann.authenticity.record import SignatureRecord, for_snapshot
+from boltzmann.authenticity.removals import check_removal_invariant
 from boltzmann.authenticity.scopes import PROPOSABLE_SCOPES, Scope
 from boltzmann.authenticity.sshsig import SshSignature
 from boltzmann.authenticity.sshsig import verify as verify_sshsig
@@ -43,6 +44,7 @@ from boltzmann.exceptions import (
     InsufficientScopeError,
     NamespaceMismatchError,
     QuorumFailureError,
+    RemovalInvariantError,
     RetiredKeyError,
     SignatureFormatError,
     SignatureInvalidError,
@@ -120,6 +122,7 @@ class FindingKind(StrEnum):
     COMPROMISED_KEY = "compromised_key"
     GENESIS_BELOW_QUORUM = "genesis_below_quorum"
     EVIDENCE_INCOMPLETE = "evidence_incomplete"
+    REMOVAL_INVARIANT = "removal_invariant"
     UNVERIFIABLE = "unverifiable"
 
 
@@ -311,6 +314,8 @@ class AuthenticationReport(BaseModel):
         state = self.state
         if state is AuthorshipState.AUTHORIZED:
             return
+        if self.has(FindingKind.REMOVAL_INVARIANT):
+            raise RemovalInvariantError(self.detail(FindingKind.REMOVAL_INVARIANT))
         if state is AuthorshipState.UNSIGNED:
             raise UnsignedBrainError(f"snapshot {self.snapshot} carries no signature")
         if self.has(FindingKind.TRUST_ROOT_MISMATCH):
@@ -487,6 +492,18 @@ class Authenticator:
                         f"keys are judged against every scope still possible"
                     ),
                     blocking=False,
+                )
+            )
+
+        removals = check_removal_invariant(self.store, snapshot, position.parent)
+        if not removals.is_valid:
+            findings.append(
+                Finding(
+                    kind=FindingKind.REMOVAL_INVARIANT,
+                    detail=(
+                        f"snapshot {digest.short} has absences its reachable removal ledger does not "
+                        f"account for: {removals.detail}"
+                    ),
                 )
             )
 

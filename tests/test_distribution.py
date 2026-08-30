@@ -30,9 +30,12 @@ from boltzmann.distribution.media_types import (
     REF_NAME_ANNOTATION,
     memory_type_of,
 )
-from boltzmann.exceptions import DistributionError, ReferenceNotFoundError, RollbackError
+from boltzmann.exceptions import DistributionError, ReferenceNotFoundError, RemovalInvariantError, RollbackError
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
+from boltzmann.module.composition import Composition
+from boltzmann.module.module import Module
+from boltzmann.retention.policy import RetentionPolicy
 from boltzmann.store.memory import MemoryBlockStore
 
 CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
@@ -88,6 +91,23 @@ class TestLayers:
         canonical = brain.module(MemoryType.CANONICAL)
         block = canonical.get(canonical.block_ids[0])
         assert block.blob in required_blobs(canonical)
+
+    def test_a_signed_tombstone_is_never_republished_from_shared_store_bytes(
+        self, tmp_path: Path, request_: RegistrationRequest
+    ) -> None:
+        canonical = seeded(tmp_path / "brain", request_).module(MemoryType.CANONICAL)
+        target = canonical.block_ids[0]
+        content = canonical.get(target).blob
+        redacted_view = Module(
+            MemoryType.CANONICAL,
+            canonical.store,
+            canonical.composition,
+            tombstones=[target],
+        )
+
+        assert canonical.store.is_resolvable(target)
+        assert target not in required_blobs(redacted_view)
+        assert content not in required_blobs(redacted_view)
 
     def test_a_derived_layer_carries_only_its_blocks(self, tmp_path: Path, request_: RegistrationRequest) -> None:
         semantic = seeded(tmp_path / "brain", request_).module(MemoryType.SEMANTIC)
@@ -232,6 +252,37 @@ class TestPushAndPull:
         for memory_type in source.snapshot().installed:
             assert target.root_of(memory_type) == source.root_of(memory_type)
         assert target.verify()
+
+    async def test_a_redacted_module_round_trips_as_tombstones_not_missing(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> None:
+        policy = RetentionPolicy(canonical_drop_allowed=True, redactable_media_types=["application/pdf"])
+        source = Brain.open(tmp_path / "a", actor=CURATOR, policy=policy)
+        redacted = source.register(b"%PDF-1.7 personal data", request_).block_id
+        source.redact(redacted, MemoryType.CANONICAL, reason="erasure request")
+        await source.push(registry, REFERENCE, "v1")
+
+        target = Brain.open(tmp_path / "b", actor=SAM)
+        await target.pull(registry, REFERENCE, "v1")
+
+        assert target.snapshot().modules[MemoryType.CANONICAL].tombstones == [redacted]
+        assert target.store.has(redacted)
+        assert not target.store.is_resolvable(redacted)
+        assert target.verify()
+
+    async def test_pull_rejects_an_absence_without_a_reachable_removal_record(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> None:
+        source = seeded(tmp_path / "a", request_)
+        forged = source.snapshot().with_module(
+            Module(MemoryType.SEMANTIC, source.store, Composition(MemoryType.SEMANTIC)).persist()
+        )
+        source._advance(forged)
+        await source.push(registry, REFERENCE, "v1")
+
+        target = Brain.open(tmp_path / "b", actor=SAM)
+        with pytest.raises(RemovalInvariantError, match="reachable removal ledger"):
+            await target.pull(registry, REFERENCE, "v1")
 
     async def test_pushing_records_the_tag(
         self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
