@@ -191,6 +191,27 @@ commit.is_empty        # nothing changed, as when every candidate was a duplicat
 
 An external model can reach `validate` but never `commit` without going through it.
 
+### The verdict is recorded, not assumed
+
+Every committed block gets a **validation record** in provenance alongside its derivation edge: the
+verdict, the checks that produced it, and the task the proposal answered. "It was validated" is then
+something a consumer reads out of the signed composition rather than takes from whoever committed.
+
+```python
+audit = brain.audit_validation()
+
+audit.is_complete      # every derived block can show the verdict that admitted it
+audit.accounted        # {MemoryType: [BlockId]} -- verdict readable
+audit.unaccounted      # {MemoryType: [BlockId]} -- no reachable record
+```
+
+<Note>
+  The audit reports; it never refuses. A brain written before the record existed still opens, still
+  verifies, and still answers queries — it simply cannot show its verdicts. The invariant that *does*
+  refuse a snapshot is the removal one, because there a missing record is how a ledger gets quietly
+  emptied.
+</Note>
+
 ## Re-derivation
 
 When a source was wrong rather than unwanted, regenerate the knowledge against the corrected source

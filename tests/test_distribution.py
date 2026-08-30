@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from boltzmann.blocks.memory_type import MemoryType
-from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind
+from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind, ValidationRecord
 from boltzmann.brain import Brain, Origin
 from boltzmann.distribution.layers import (
     SNAPSHOT_PREFIX,
@@ -33,6 +33,7 @@ from boltzmann.distribution.media_types import (
 from boltzmann.exceptions import DistributionError, ReferenceNotFoundError, RemovalInvariantError, RollbackError
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
+from boltzmann.ingest.validation import ValidationStatus
 from boltzmann.module.composition import Composition
 from boltzmann.module.module import Module
 from boltzmann.retention.policy import RetentionPolicy
@@ -283,6 +284,30 @@ class TestPushAndPull:
         target = Brain.open(tmp_path / "b", actor=SAM)
         with pytest.raises(RemovalInvariantError, match="reachable removal ledger"):
             await target.pull(registry, REFERENCE, "v1")
+
+    async def test_a_verdict_travels_with_the_block_it_admitted(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> None:
+        """A consumer must be able to read what admitted a block out of the artifact it installed.
+
+        The record is an ordinary provenance block, so nothing special carries it -- which is the
+        point: the claim survives the wire because it is knowledge, not write-path bookkeeping.
+        """
+        source = seeded(tmp_path / "a", request_)
+        await source.push(registry, REFERENCE, "v1")
+
+        target = Brain.open(tmp_path / "b", actor=SAM)
+        await target.pull(registry, REFERENCE, "v1")
+
+        audit = target.audit_validation()
+        assert audit.is_complete
+        assert any(audit.accounted.values())
+
+        records = [b.record for b in target.module(MemoryType.PROVENANCE).blocks()]
+        verdicts = [r for r in records if isinstance(r, ValidationRecord)]
+        assert verdicts
+        assert all(v.verdict is ValidationStatus.VALIDATED for v in verdicts)
+        assert all(v.checks for v in verdicts)
 
     async def test_pushing_records_the_tag(
         self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest

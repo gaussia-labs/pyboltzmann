@@ -47,6 +47,27 @@ class ProducerKind(StrEnum):
     ACTOR = "actor"
 
 
+class ValidationStatus(StrEnum):
+    """The verdict on one candidate (paper Section 10.3).
+
+    Defined here rather than beside the gate that produces it, because a verdict is not a write-path
+    ephemeral: it travels in a provenance record, so it is part of the wire schema. The gate re-exports
+    it, and :mod:`boltzmann.ingest.validation` remains the place to import it from.
+    """
+
+    VALIDATED = "validated"
+    """Well-formed, referenced, and consistent. Eligible for commit."""
+
+    PENDING_REVIEW = "pending_review"
+    """Admissible but not decidable by the protocol alone."""
+
+    REJECTED = "rejected"
+    """Malformed, unreferenced, or duplicate. Never committed."""
+
+    CONTRADICTED = "contradicted"
+    """Well-formed but in conflict with knowledge already held."""
+
+
 class RemovalMechanism(StrEnum):
     """How knowledge left a brain (paper Section 10, Table 5).
 
@@ -285,8 +306,47 @@ class RemovalRecord(BaseModel):
     resulting_roots: dict[str, MerkleRoot] | None = None
 
 
+class ValidationRecord(BaseModel):
+    """
+    A committed block received its verdict, and under which checks.
+
+    Without this, "it was validated" is a claim a consumer takes from whoever committed. With it, the
+    claim sits inside the signed composition and can be read back: which verdict, which checks produced
+    it, and which task the proposal answered (paper Section 10.3).
+
+    Attributes:
+        record_type (Literal["validation"]): Discriminator.
+        block (BlockId): The block the verdict admitted.
+        verdict (ValidationStatus): What the gate decided. Only ``VALIDATED`` blocks are committed,
+            so that is what a record accompanying a member says -- but the field is the full enum
+            because recording the verdicts of candidates that were never committed is permitted.
+        checks (list[str]): Identifiers of the checks that ran, sorted. The set that ran is what makes
+            a verdict meaningful: the same ``VALIDATED`` under two different check sets is two
+            different claims.
+        actor (Actor): Who ran the gate.
+        at (Timestamp): When it ran.
+        task (str | None): The processing task the proposal answered.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    record_type: Literal["validation"] = "validation"
+    block: BlockId
+    verdict: ValidationStatus
+    checks: list[str] = Field(min_length=1)
+    actor: Actor
+    at: Timestamp
+    task: str | None = None
+
+
 ProvenanceEntry = Annotated[
-    RegistrationRecord | DerivationRecord | NormalizationRecord | SupersessionRecord | DemotionRecord | RemovalRecord,
+    RegistrationRecord
+    | DerivationRecord
+    | NormalizationRecord
+    | SupersessionRecord
+    | DemotionRecord
+    | ValidationRecord
+    | RemovalRecord,
     Field(discriminator="record_type"),
 ]
 """One entry in the provenance ledger."""

@@ -18,6 +18,7 @@ from boltzmann.blocks.provenance import (
     ProducerKind,
     RegistrationRecord,
     SupersessionRecord,
+    ValidationRecord,
 )
 from boltzmann.brain import HEAD_POINTER, Brain, BrainState
 from boltzmann.exceptions import ProtocolError, SnapshotError
@@ -384,11 +385,59 @@ class TestCommit:
         assert derivations[0].producer == MODEL
         assert derivations[0].locator == "p.147"
 
+    def test_writes_the_verdict_that_admitted_each_block(self, brain: Brain, source: BlockId) -> None:
+        """Otherwise "it was validated" is a claim a consumer has to take from whoever committed."""
+        task = brain.define_task(source)
+        result = brain.commit(brain.validate(proposals(semantic_candidate(source)), task))
+
+        records = [b.record for b in brain.module(MemoryType.PROVENANCE).blocks()]
+        validations = [r for r in records if isinstance(r, ValidationRecord)]
+        assert len(validations) == 1
+        assert validations[0].block == result.committed[0]
+        assert validations[0].verdict is ValidationStatus.VALIDATED
+        assert validations[0].task == task.task_id
+        assert validations[0].actor == CURATOR
+
+    def test_the_verdict_names_the_checks_that_produced_it(self, brain: Brain, source: BlockId) -> None:
+        """The same VALIDATED under two different check sets says two different things."""
+        task = brain.define_task(source)
+        report = brain.validate(proposals(semantic_candidate(source)), task)
+        brain.commit(report)
+
+        records = [b.record for b in brain.module(MemoryType.PROVENANCE).blocks()]
+        validation = next(r for r in records if isinstance(r, ValidationRecord))
+        assert validation.checks == report.checks
+        assert len(validation.checks) > 1
+
+    def test_the_verdict_is_readable_back_through_the_ledger(self, brain: Brain, source: BlockId) -> None:
+        task = brain.define_task(source)
+        result = brain.commit(brain.validate(proposals(semantic_candidate(source)), task))
+
+        audit = brain.audit_validation()
+        assert audit.is_complete
+        assert audit.accounted[MemoryType.SEMANTIC] == [result.committed[0]]
+
+    def test_a_block_committed_without_a_record_audits_as_unaccounted(self, brain: Brain, source: BlockId) -> None:
+        """The audit reports; it never refuses. A brain written before the record existed still reads."""
+        task = brain.define_task(source)
+        report = brain.validate(proposals(semantic_candidate(source)), task)
+        committed = report.committable[0].block
+        assert committed is not None
+
+        # The write path without the verdict: what an SDK that predates the record produced.
+        brain._write(blocks={MemoryType.SEMANTIC: [committed]}, provenance=[])
+
+        audit = brain.audit_validation()
+        assert not audit.is_complete
+        assert audit.unaccounted[MemoryType.SEMANTIC] == [committed.block_id]
+        assert brain.verify()
+
     def test_provenance_is_not_counted_as_committed_knowledge(self, brain: Brain, source: BlockId) -> None:
         task = brain.define_task(source)
         result = brain.commit(brain.validate(proposals(semantic_candidate(source)), task))
         assert len(result.committed) == 1
-        assert len(result.provenance) == 1
+        # One derivation and one validation: what produced the block, and what admitted it.
+        assert len(result.provenance) == 2
         assert set(result.committed).isdisjoint(result.provenance)
 
     def test_a_committed_block_proves_into_its_root(self, brain: Brain, source: BlockId) -> None:

@@ -15,34 +15,27 @@ the protocol will not decide alone. Only ``VALIDATED`` reaches commit.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
-from boltzmann.blocks.provenance import Producer
+from boltzmann.blocks.provenance import Producer, ValidationStatus
 from boltzmann.identity.digest import BlockId
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.task import ProcessingTask
 from boltzmann.module.module import Module
 
-
-class ValidationStatus(StrEnum):
-    """The verdict on one candidate (paper Section 8.3)."""
-
-    VALIDATED = "validated"
-    """Well-formed, referenced, and consistent. Eligible for commit."""
-
-    PENDING_REVIEW = "pending_review"
-    """Admissible but not decidable by the protocol alone."""
-
-    REJECTED = "rejected"
-    """Malformed, unreferenced, or duplicate. Never committed."""
-
-    CONTRADICTED = "contradicted"
-    """Well-formed but in conflict with knowledge already held."""
+__all__ = [
+    "ValidatedCandidate",
+    "ValidationAudit",
+    "ValidationIssue",
+    "ValidationReport",
+    "ValidationStatus",
+    "Validator",
+    "validate",
+]
 
 
 class ValidationIssue(BaseModel):
@@ -99,6 +92,9 @@ class ValidationReport(BaseModel):
         producer (Producer | None): Carried through from the candidate set, so the commit can record
             what produced each derived block without the caller having to restate it.
         task_id (str | None): The task these proposals answered.
+        checks (list[str]): Identifiers of the checks that ran, sorted. Carried so the commit can
+            record it: a verdict without the set that produced it is not a checkable claim, since the
+            same ``VALIDATED`` under two different check sets says two different things.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -106,6 +102,7 @@ class ValidationReport(BaseModel):
     results: list[ValidatedCandidate] = Field(default_factory=list)
     producer: Producer | None = None
     task_id: str | None = None
+    checks: list[str] = Field(default_factory=list)
 
     def by_status(self, status: ValidationStatus) -> list[ValidatedCandidate]:
         """
@@ -128,6 +125,39 @@ class ValidationReport(BaseModel):
     def is_clean(self) -> bool:
         """Whether every proposal was validated."""
         return all(result.status is ValidationStatus.VALIDATED for result in self.results)
+
+
+class ValidationAudit(BaseModel):
+    """
+    Which committed blocks can show the verdict that admitted them.
+
+    Every block entering a composition must be accompanied by a validation record, so that "it was
+    validated" is a claim a consumer reads out of the signed composition instead of taking on trust
+    (paper Section 10.3). This reports where that does not hold.
+
+    It is a report rather than a rejection, and deliberately so. The requirement binds the writer;
+    making a missing record refuse a snapshot would make every brain written before the record existed
+    unreadable, which trades an auditability gain for an availability loss the paper does not ask for.
+    The removal invariant is the one that rejects, because there the missing record *is* the attack.
+
+    Only the derived modules are audited. A canonical block never passed a gate -- registration is
+    deterministic and its own record answers how the bytes entered -- and a provenance block is the
+    ledger rather than something the ledger accounts for.
+
+    Attributes:
+        accounted (dict[MemoryType, list[BlockId]]): Blocks whose verdict is readable.
+        unaccounted (dict[MemoryType, list[BlockId]]): Blocks with no reachable validation record.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    accounted: dict[MemoryType, list[BlockId]] = Field(default_factory=dict)
+    unaccounted: dict[MemoryType, list[BlockId]] = Field(default_factory=dict)
+
+    @property
+    def is_complete(self) -> bool:
+        """Whether every audited block can show the verdict that admitted it."""
+        return not any(self.unaccounted.values())
 
 
 @runtime_checkable
@@ -239,4 +269,9 @@ def validate(
                     )
                 )
 
-    return ValidationReport(results=results, producer=candidates.producer, task_id=task.task_id)
+    return ValidationReport(
+        results=results,
+        producer=candidates.producer,
+        task_id=task.task_id,
+        checks=sorted({check.code for check in checks}),
+    )
