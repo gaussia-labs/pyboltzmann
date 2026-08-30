@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v0.8.0-b.6 (2026-08-30)
+
+### Bug Fixes
+
+- **distribution**: Serialize a projection's references as its source does
+  ([`088cffd`](https://github.com/gaussia-labs/pyboltzmann/commit/088cffdf1c6f7f1fdd44cacb89ef694b2de1e6e2))
+
+A projection's canonical bytes came from a plain model dump while a snapshot's exclude None, so a
+  retained reference was spelled with explicit nulls where the source snapshot omitted the keys
+  entirely. The two documents then disagreed about a reference both claim is the same one, and a
+  consumer comparing the retained entry against the resolved source byte for byte would have been
+  right to refuse.
+
+Adding tombstones to ModuleRef widens that gap by one more optional field, so it is fixed here
+  rather than left to grow.
+
+### Features
+
+- **retention**: Make removals verifier-checkable
+  ([`67a67c9`](https://github.com/gaussia-labs/pyboltzmann/commit/67a67c9533b3042432a588daeaccf2d7e7337a0a))
+
+
 ## v0.8.0-b.5 (2026-08-28)
 
 ### Features
