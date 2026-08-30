@@ -1,6 +1,32 @@
 # CHANGELOG
 
 
+## v0.8.0-b.11 (2026-08-30)
+
+### Bug Fixes
+
+- **authenticity**: Key the trust pin on the genesis digest
+  ([`334a148`](https://github.com/gaussia-labs/pyboltzmann/commit/334a148179e41faf0ba86efc3e34cfeeda2d742b))
+
+TrustPin.genesis was written at every pin and read nowhere. Its docstring promised that a brain
+  which moved repositories would still be recognized as the same brain, and nothing implemented that
+  -- the pin was judged entirely on the trust root, which is precisely the thing that rotates.
+
+A brain's identity is the digest of its genesis: tags are re-assignable and the trust root changes
+  by design, so two snapshots are the same brain exactly when they resolve to the same genesis. The
+  verifier now checks that first. Without it an anchor taken for one brain could be evaluated
+  against another's chain, and both possible answers would be about the wrong question.
+
+The condition gets its own finding rather than reusing the trust-root mismatch, because the
+  operator's remedy is different: one says authority moved in a way the pin does not approve, the
+  other says this is not the brain you pinned. Pull refuses it before transferring any module layer,
+  alongside the checks already there.
+
+An unresolvable genesis is undecidable rather than negative. A legitimately pruned history cannot
+  answer the question, and refusing it would punish pruning the protocol permits; the truncation is
+  already reported on its own.
+
+
 ## v0.8.0-b.10 (2026-08-30)
 
 ### Bug Fixes

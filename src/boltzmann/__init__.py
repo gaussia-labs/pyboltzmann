@@ -153,7 +153,7 @@ from boltzmann.retention import (
 )
 from boltzmann.store import BlockStore, MemoryBlockStore, OciLayoutStore
 
-__version__ = "0.8.0-b.10"
+__version__ = "0.8.0-b.11"
 
 __all__ = [
     "Actor",
