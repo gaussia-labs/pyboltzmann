@@ -787,6 +787,57 @@ class TestSignedDistribution:
         assert pin.source is PinSource.FIRST_USE
         await consumer.pull(registry, REFERENCE, "v1")
 
+    async def test_a_strangers_contribution_is_attributable_offered_and_unauthorized_as_a_head(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        """The same snapshot, the same signature, and two opposite readings of it.
+
+        Offered for review it is how an open project hears from someone it has never admitted; served
+        as the brain's current state it is Case 2 of the impersonation table. An implementation that
+        could not tell them apart would have to refuse every contribution or accept every imposture.
+        """
+        from boltzmann.authenticity import AuthorshipState, SnapshotStance
+        from boltzmann.exceptions import UnauthorizedKeyError
+
+        owner = self._party(0x7A)
+        stranger = self._party(0x7B)
+
+        upstream = self._governed(tmp_path / "upstream", owner)
+        upstream.ingest(
+            b"%PDF-1.7 Lecture 07", RegistrationRequest(media_type="application/pdf", actor=CURATOR), llm("Fourier")
+        )
+        await upstream.push(registry, REFERENCE, "v1")
+
+        # The contributor starts from the published brain, so they inherit its trust root -- which
+        # does not list them. Their work is signed all the same.
+        contributor = Brain.open(tmp_path / "contrib", actor=SAM)
+        await contributor.pull(registry, REFERENCE, "v1")
+        contributor.ingest(
+            b"%PDF-1.7 Lecture 10: Hankel transforms",
+            RegistrationRequest(media_type="application/pdf", actor=SAM),
+            llm("Hankel"),
+        )
+        contributor.sign(stranger)
+        await contributor.push(registry, "registry.example/org/proposal", "proposal")
+
+        fetched = await upstream.fetch(registry, "registry.example/org/proposal", "proposal")
+
+        # Offered: named, and authorizing nothing.
+        plan = upstream.plan_reconcile(fetched.digest)
+        assert plan.authorship is not None
+        assert plan.authorship.state is AuthorshipState.ATTRIBUTABLE
+        assert plan.authorship.key == stranger.public_key.fingerprint
+
+        offered = upstream.authenticate(fetched.digest, stance=SnapshotStance.OFFERED)
+        with pytest.raises(UnauthorizedKeyError, match="attributable"):
+            offered.require_authorized()
+
+        # Presented as the current state: an unauthorized key, and reported as one.
+        as_head = upstream.authenticate(fetched.digest)
+        assert as_head.state is AuthorshipState.UNAUTHORIZED
+        with pytest.raises(UnauthorizedKeyError, match="in the trust root in force"):
+            as_head.require_authorized()
+
     async def test_a_pinned_consumer_refuses_a_swapped_authority_before_any_layer_moves(
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:

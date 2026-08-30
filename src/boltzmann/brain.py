@@ -40,6 +40,7 @@ from boltzmann.authenticity.authenticator import (
     Authorship,
     AuthorshipState,
     FindingKind,
+    SnapshotStance,
 )
 from boltzmann.authenticity.chain import (
     SnapshotRole,
@@ -863,6 +864,7 @@ class Brain:
         self,
         snapshot: OciDigest | None = None,
         policy: VerificationPolicy | None = None,
+        stance: SnapshotStance = SnapshotStance.HEAD,
     ) -> AuthenticationReport:
         """
         Check who signed a snapshot, against the trust root in force at its position.
@@ -877,9 +879,13 @@ class Brain:
                 one.
             policy (VerificationPolicy | None): Tolerances for this check. Defaults to the
                 paper's defaults: one valid signature, no propose-scoped heads.
+            stance (SnapshotStance): How the snapshot is being presented. ``HEAD`` -- the default --
+                asks about a brain's current state, where a key the trust root does not list is an
+                impersonation attempt. ``OFFERED`` asks about a proposal, where the same key is
+                attributable instead: the author is named and nothing is authorized.
 
         Returns:
-            AuthenticationReport: Every verdict and finding, with the three-state summary
+            AuthenticationReport: Every verdict and finding, with the four-state summary
             derived. Never raises for a protocol failure; call
             :meth:`AuthenticationReport.require_authorized` to turn the report into a typed
             refusal.
@@ -895,7 +901,9 @@ class Brain:
             document = Snapshot.from_document(self.store.get_bytes(snapshot))
         # Compromise markers come from the newest revision this brain knows -- the head's trust
         # root -- because a compromise is recorded after the positions it withdraws.
-        return Authenticator(self.store, policy=policy).authenticate(document, current=self._snapshot.trust_root)
+        return Authenticator(self.store, policy=policy).authenticate(
+            document, current=self._snapshot.trust_root, stance=stance
+        )
 
     def pin(self, trust_root: OciDigest | None = None, source: PinSource | None = None) -> TrustPin:
         """
@@ -2730,8 +2738,25 @@ class Brain:
             collapsed=len(chain),
             replayable=len(replayable),
             untransferred=untransferred,
+            authorship=self._offered_authorship(head),
             carried=self._carried_verbatim(merged, head),
         )
+
+    def _offered_authorship(self, head: Snapshot) -> Authorship | None:
+        """Who signed an incoming head, judged as a proposal rather than as a head.
+
+        The stance is the whole point. The same signature by a key this brain's trust root does not
+        list is an impersonation attempt when a registry serves it as the current state, and an
+        ordinary contribution when someone offers it for review -- and a maintainer reading a plan is
+        in the second situation by construction. Reporting it as unauthorized here would make an open
+        project unable to describe the thing it does most often.
+        """
+        report = Authenticator(self.store).authenticate(
+            head,
+            current=self._snapshot.trust_root,
+            stance=SnapshotStance.OFFERED,
+        )
+        return None if report.state is AuthorshipState.UNSIGNED else report.authorship()
 
     def _cascade_for(self, merged: Mapping[MemoryType, ModuleReconciliation]) -> dict[MemoryType, list[BlockId]]:
         """The cascade a reconciled set of modules implies, read off that set alone.

@@ -284,6 +284,22 @@ class TestPlan:
         assert upstream.snapshot().digest == before
 
 
+class TestWhoOfferedIt:
+    """A contribution names its author, and being unlisted is not being an attacker."""
+
+    async def test_an_unsigned_contribution_reports_no_authorship(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        """Nothing was claimed, so nothing is reported -- the zero-configuration case, unchanged."""
+        upstream = await published(tmp_path / "upstream", registry)
+        await contributed(tmp_path / "contrib", registry)
+        fetched = await upstream.fetch(registry, PROPOSAL, "proposal")
+
+        plan = upstream.plan_reconcile(fetched.digest)
+
+        assert plan.authorship is None
+
+
 class TestStrategies:
     """All three land the same blocks. What differs is who stays on record."""
 

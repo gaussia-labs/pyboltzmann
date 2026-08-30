@@ -587,9 +587,9 @@ class TestAuthorshipInTheBundle:
         calls = {"count": 0}
         original = Authenticator.authenticate
 
-        def counting(self, snapshot, records=None, current=None):
+        def counting(self, snapshot, records=None, current=None, **kwargs):
             calls["count"] += 1
-            return original(self, snapshot, records=records, current=current)
+            return original(self, snapshot, records=records, current=current, **kwargs)
 
         monkeypatch.setattr(Authenticator, "authenticate", counting)
         brain.search(Query(text="Fourier"))

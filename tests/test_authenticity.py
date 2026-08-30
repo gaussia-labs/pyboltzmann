@@ -26,6 +26,7 @@ from boltzmann.authenticity.authenticator import (
     AuthorshipState,
     FindingKind,
     SignatureOutcome,
+    SnapshotStance,
 )
 from boltzmann.authenticity.policy import VerificationPolicy
 from boltzmann.blocks.memory_type import MemoryType
@@ -235,6 +236,76 @@ class TestCaseThreeStartingFromNothing:
         assert report.state is AuthorshipState.UNSIGNED
         with pytest.raises(UnsignedBrainError):
             report.require_authorized()
+
+
+class TestTheSameSignatureFromTwoPositions:
+    """A stranger's key, and the two opposite things it means depending on the claim made for it."""
+
+    def offered(self, store: MemoryBlockStore, seven: Snapshot) -> Snapshot:
+        """C, who is in no trust root, signs a snapshot onto A and B's history."""
+        theirs = advance(store, seven, "concept one", "a stranger's contribution")
+        endorse(store, theirs, C)
+        return theirs
+
+    def test_an_unknown_key_on_a_head_is_an_impersonation_attempt(
+        self, store: MemoryBlockStore, chain: Snapshot
+    ) -> None:
+        theirs = self.offered(store, chain)
+        report = Authenticator(store).authenticate(theirs, stance=SnapshotStance.HEAD)
+
+        assert report.state is AuthorshipState.UNAUTHORIZED
+        assert set(report.outcomes().values()) == {SignatureOutcome.UNAUTHORIZED_KEY}
+        with pytest.raises(UnauthorizedKeyError, match="is in the trust root in force"):
+            report.require_authorized()
+
+    def test_the_same_snapshot_offered_is_attributable_and_names_its_author(
+        self, store: MemoryBlockStore, chain: Snapshot
+    ) -> None:
+        """This is how an open project hears from a stranger, not how it is attacked."""
+        theirs = self.offered(store, chain)
+        report = Authenticator(store).authenticate(theirs, stance=SnapshotStance.OFFERED)
+
+        assert report.state is AuthorshipState.ATTRIBUTABLE
+        assert set(report.outcomes().values()) == {SignatureOutcome.ATTRIBUTABLE_KEY}
+        assert report.attributable_keys == (C.public_key.fingerprint,)
+        assert report.authorship().key == C.public_key.fingerprint
+
+    def test_attributable_authorizes_nothing(self, store: MemoryBlockStore, chain: Snapshot) -> None:
+        """It is not a weaker authorized: the author is named and no authority attaches."""
+        theirs = self.offered(store, chain)
+        report = Authenticator(store).authenticate(theirs, stance=SnapshotStance.OFFERED)
+
+        with pytest.raises(UnauthorizedKeyError, match="attributable"):
+            report.require_authorized()
+
+    def test_the_two_reports_are_distinguishable(self, store: MemoryBlockStore, chain: Snapshot) -> None:
+        """The protocol's requirement, stated as the one assertion that fails if it is not met."""
+        theirs = self.offered(store, chain)
+        authenticator = Authenticator(store)
+
+        as_head = authenticator.authenticate(theirs, stance=SnapshotStance.HEAD)
+        as_offered = authenticator.authenticate(theirs, stance=SnapshotStance.OFFERED)
+
+        assert as_head.state is not as_offered.state
+        assert as_head.outcomes() != as_offered.outcomes()
+        assert as_head.stance is SnapshotStance.HEAD
+        assert as_offered.stance is SnapshotStance.OFFERED
+
+    def test_head_is_the_default_because_it_is_the_safe_answer(self, store: MemoryBlockStore, chain: Snapshot) -> None:
+        """A caller who does not say is asking about a brain's current state."""
+        theirs = self.offered(store, chain)
+        assert Authenticator(store).authenticate(theirs).state is AuthorshipState.UNAUTHORIZED
+
+    def test_an_authorized_key_is_authorized_from_either_position(
+        self, store: MemoryBlockStore, chain: Snapshot
+    ) -> None:
+        """The stance decides what an *unlisted* key means, and touches nothing else."""
+        theirs = advance(store, chain, "concept one", "a listed signer's work")
+        endorse(store, theirs, A)
+
+        authenticator = Authenticator(store)
+        assert authenticator.authenticate(theirs, stance=SnapshotStance.HEAD).state is AuthorshipState.AUTHORIZED
+        assert authenticator.authenticate(theirs, stance=SnapshotStance.OFFERED).state is AuthorshipState.AUTHORIZED
 
 
 class TestRetirement:

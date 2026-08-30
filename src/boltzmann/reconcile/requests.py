@@ -22,6 +22,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from boltzmann.authenticity.authenticator import Authorship
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import Actor
 from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
@@ -149,6 +150,10 @@ class ReconcilePlan(BaseModel):
             The reconciliation proceeds over what it can read, and what those modules would have
             contributed surfaces as verdicts on the blocks that cite them -- but a caller should be able to
             see that a transfer was incomplete without inferring it from a rejection.
+        authorship (Authorship | None): Who signed the incoming head, judged as an *offered* proposal
+            rather than as a head. This is where ``attributable`` becomes visible: a contributor whose
+            key the trust root does not list is named rather than refused, which is how an open project
+            hears from strangers. ``None`` when the incoming head carries no signature at all.
         carried (dict[MemoryType, ModuleRef]): Modules taken at their recorded root rather than reconciled,
             because neither side's composition is readable here. This is what lets a partial install
             publish back without dropping the modules it never fetched (paper Section 12.8).
@@ -166,6 +171,7 @@ class ReconcilePlan(BaseModel):
     collapsed: int = Field(default=0, ge=0)
     replayable: int = Field(default=0, ge=0)
     untransferred: list[MemoryType] = Field(default_factory=list)
+    authorship: Authorship | None = None
     carried: dict[MemoryType, ModuleRef] = Field(default_factory=dict)
 
     def members(

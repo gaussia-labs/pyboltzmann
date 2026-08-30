@@ -60,8 +60,24 @@ from boltzmann.module.snapshot import Snapshot
 from boltzmann.store.base import BlockStore
 
 
+class SnapshotStance(StrEnum):
+    """How a snapshot is being presented, which is what decides what an unknown key means.
+
+    The same bytes signed by the same key are two different things depending on the claim made for
+    them, and the protocol requires the difference to be reportable: a stranger's proposal is how an
+    open project hears from strangers, and the identical snapshot presented as the current state is
+    an impersonation attempt (paper Section 12.6).
+    """
+
+    HEAD = "head"
+    """Presented as the brain's current state -- by a registry, a mirror, or a tag."""
+
+    OFFERED = "offered"
+    """Offered for someone else's consideration, to be judged block by block through validation."""
+
+
 class AuthorshipState(StrEnum):
-    """The three states the paper allows a summary to take -- and the only three."""
+    """The four states the paper allows a summary to take -- and the only four."""
 
     AUTHORIZED = "authorized"
     """A signature over the snapshot verified under a key holding the scopes its change required."""
@@ -69,6 +85,11 @@ class AuthorshipState(StrEnum):
     UNSIGNED = "unsigned"
     """The brain carries no signature at all: the zero-configuration case, fully verifiable for
     integrity, with no authorship claimed or checkable."""
+
+    ATTRIBUTABLE = "attributable"
+    """A signature verified and no authority attaches: the author is cryptographically identified,
+    and nothing else is claimed. Reachable only for a snapshot **offered** as a proposal, since the
+    same signature presented as a head is an unauthorized key and reported as one."""
 
     UNAUTHORIZED = "unauthorized"
     """A signature was present and failed a condition. Includes "could not be checked": a
@@ -91,6 +112,10 @@ class SignatureOutcome(StrEnum):
     INVALID_SIGNATURE = "invalid_signature"
     UNSUPPORTED_KEY_TYPE = "unsupported_key_type"
     UNAUTHORIZED_KEY = "unauthorized_key"
+    ATTRIBUTABLE_KEY = "attributable_key"
+    """The trust root does not list this key and the snapshot was offered rather than presented as a
+    head: the author is identified, no authority attaches, and the blocks are judged one by one."""
+
     INSUFFICIENT_SCOPE = "insufficient_scope"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
     """The key holds every certainly-required scope but not every possibly-required one, and the
@@ -223,6 +248,9 @@ class AuthenticationReport(BaseModel):
         quorum_met (int | None): Distinct qualifying keys that signed.
         findings (tuple[Finding, ...]): Report-level facts, blocking and diagnostic.
         signatures_required (int): The policy's bar, recorded so the report is self-describing.
+        stance (SnapshotStance): How the snapshot was presented. Recorded because it is what decides
+            whether an unlisted key reads as attributable or as unauthorized, and a report that did
+            not say which question it answered would be unreadable a second time.
         integrity (bool | None): The *other* verification, carried alongside and never combined.
     """
 
@@ -242,16 +270,21 @@ class AuthenticationReport(BaseModel):
     quorum_met: int | None = None
     findings: tuple[Finding, ...] = ()
     signatures_required: int = Field(default=1, ge=1)
+    stance: SnapshotStance = SnapshotStance.HEAD
     integrity: bool | None = None
 
     @property
     def state(self) -> AuthorshipState:
         """
-        The three-state summary, derived and underivable otherwise.
+        The four-state summary, derived and underivable otherwise.
 
         No construction can claim ``authorized`` while carrying a blocking finding or lacking a
         valid signature -- the property recomputes, which is the code-level reading of "an
         implementation MUST NOT present an unverified brain as verified".
+
+        ``attributable`` is reachable only under :attr:`SnapshotStance.OFFERED`, and it is not a
+        weaker ``authorized``: it says the author is identified and *nothing* is authorized, which is
+        exactly what a maintainer needs to know before judging a stranger's blocks one by one.
         """
         if not self.signatures and not self.withdrawn:
             return AuthorshipState.UNSIGNED
@@ -265,7 +298,23 @@ class AuthenticationReport(BaseModel):
         }
         if len(accepted) >= self.signatures_required:
             return AuthorshipState.AUTHORIZED
+        if self.stance is SnapshotStance.OFFERED and self.attributable_keys:
+            return AuthorshipState.ATTRIBUTABLE
         return AuthorshipState.UNAUTHORIZED
+
+    @property
+    def attributable_keys(self) -> tuple[str, ...]:
+        """The keys whose signature verified while the trust root listed neither them nor a scope.
+
+        Populated only under :attr:`SnapshotStance.OFFERED`. The fingerprints are the point of the
+        state: an attributable snapshot names its author, and a review that could not say who
+        proposed something would have gained nothing over an anonymous one.
+        """
+        return tuple(
+            verdict.embedded_key or verdict.key
+            for verdict in self.signatures
+            if verdict.outcome in (SignatureOutcome.ATTRIBUTABLE_KEY, SignatureOutcome.VALID_AS_PROPOSAL)
+        )
 
     @property
     def is_proposal(self) -> bool:
@@ -305,7 +354,9 @@ class AuthenticationReport(BaseModel):
             CompromisedKeyError: A signature was withdrawn by a compromise record.
             RetiredKeyError: The only failures are retirements.
             UnauthorizedKeyError: A key is absent from the trust root in force, a ``since``
-                claim was refuted, or the chain truncated under the question.
+                claim was refuted, or the chain truncated under the question. Also the attributable
+                case: an offered proposal names its author and authorizes nothing, so a caller that
+                asked for authorization has still not got it.
             InsufficientScopeError: A key is authorized but not for this change, or the head is
                 only a proposal.
             VerificationUnavailableError: The mathematics could not run.
@@ -339,6 +390,14 @@ class AuthenticationReport(BaseModel):
             )
         if SignatureOutcome.UNAUTHORIZED_KEY in outcomes:
             raise UnauthorizedKeyError(f"no signing key of {self.snapshot} is in the trust root in force")
+        if state is AuthorshipState.ATTRIBUTABLE:
+            # Attributable is not a weaker authorized. The author is named and nothing is authorized,
+            # so a caller that asked this question still has to judge the blocks one by one.
+            raise UnauthorizedKeyError(
+                f"{self.snapshot} is attributable to {', '.join(self.attributable_keys)} and authorizes "
+                f"nothing: it was offered as a proposal, and its blocks are judged through validation "
+                f"rather than by its signature"
+            )
         if (
             self.has(FindingKind.PROPOSED_HEAD)
             or {SignatureOutcome.INSUFFICIENT_SCOPE, SignatureOutcome.INSUFFICIENT_EVIDENCE} & outcomes
@@ -357,13 +416,20 @@ class AuthenticationReport(BaseModel):
         """
         The projection an Evidence Bundle carries.
 
+        An attributable snapshot names its author too. Naming a key only when it was fully authorized
+        would leave the one state whose entire content is "who wrote this" with nothing in the field
+        that says so, and a reviewer would have to go back to the verdicts to learn what the summary
+        was for.
+
         Returns:
-            Authorship: The summary, with the first fully-valid key named when one exists.
+            Authorship: The summary, with the key named when one is identified.
         """
         valid = next(
             (verdict.embedded_key for verdict in self.signatures if verdict.outcome is SignatureOutcome.VALID),
             None,
         )
+        if valid is None and self.state is AuthorshipState.ATTRIBUTABLE:
+            valid = next(iter(self.attributable_keys), None)
         return Authorship(
             state=self.state,
             snapshot=self.snapshot,
@@ -416,6 +482,7 @@ class Authenticator:
         snapshot: Snapshot,
         records: Sequence[SignatureRecord] | None = None,
         current: TrustRoot | None = None,
+        stance: SnapshotStance = SnapshotStance.HEAD,
     ) -> AuthenticationReport:
         """
         Check every signature over a snapshot against the trust root in force at its position.
@@ -431,6 +498,11 @@ class Authenticator:
                 it withdraws (paper Section 8.6); authorization, scopes, and retirement stay
                 judged at the snapshot's own position. Defaults to the snapshot's own trust
                 root, which is exact when authenticating the head.
+            stance (SnapshotStance): How this snapshot is being presented. Defaults to ``HEAD``,
+                which is the safe default: a caller that does not say is asking about a brain's
+                current state, and an unlisted key there is an impersonation attempt rather than a
+                contribution. ``OFFERED`` is for the contribution path, where the same unlisted key
+                is reported as attributable instead (paper Section 12.6).
 
         Returns:
             AuthenticationReport: Everything, separated. Never raises for a protocol failure --
@@ -511,7 +583,7 @@ class Authenticator:
             findings.append(
                 Finding(kind=FindingKind.UNSIGNED_BRAIN, detail=f"snapshot {digest.short} carries no signature")
             )
-            return self._report(snapshot, position, pinned, pin, required, (), (), None, None, findings)
+            return self._report(snapshot, position, pinned, pin, required, (), (), None, None, findings, stance)
 
         if not signature_backend_available():
             findings.append(
@@ -529,7 +601,7 @@ class Authenticator:
         withdrawn: list[SignatureVerdict] = []
         accepted_keys: dict[str, set[bytes]] = {"valid": set(), "proposal": set()}
         for record in held:
-            verdict, blob, is_withdrawn = self._judge(record, snapshot, position, required, newest)
+            verdict, blob, is_withdrawn = self._judge(record, snapshot, position, required, newest, stance)
             if is_withdrawn:
                 withdrawn.append(verdict)
                 findings.append(
@@ -551,10 +623,20 @@ class Authenticator:
                 accepted_keys["proposal"].add(blob)
 
         quorum_required, quorum_met = self._judge_governance(snapshot, position, held, findings)
-        self._judge_policy(accepted_keys["valid"], accepted_keys["proposal"], findings)
+        self._judge_policy(accepted_keys["valid"], accepted_keys["proposal"], findings, stance)
 
         return self._report(
-            snapshot, position, pinned, pin, required, verdicts, withdrawn, quorum_required, quorum_met, findings
+            snapshot,
+            position,
+            pinned,
+            pin,
+            required,
+            verdicts,
+            withdrawn,
+            quorum_required,
+            quorum_met,
+            findings,
+            stance,
         )
 
     # --- One record --------------------------------------------------------------
@@ -566,6 +648,7 @@ class Authenticator:
         position: Position,
         required: RequiredScopes,
         current: TrustRoot | None,
+        stance: SnapshotStance,
     ) -> tuple[SignatureVerdict, bytes | None, bool]:
         """One record's fate: (verdict, embedded key blob for distinctness, withdrawn-by-compromise)."""
 
@@ -637,14 +720,28 @@ class Authenticator:
         in_force = position.in_force
         entry = in_force.entry_for(embedded) if in_force is not None else None
         if in_force is None or entry is None:
+            unknown = (
+                "no trust root is in force at this position"
+                if in_force is None
+                else f"{embedded.fingerprint} is not in the trust root in force (revision {in_force.revision})"
+            )
+            # The same fact, and two different reports. Offered, it is a stranger's contribution and
+            # the author is named; presented as the current state, it is Case 2 of the impersonation
+            # table and nothing about the signature makes it less so.
+            if stance is SnapshotStance.OFFERED:
+                return (
+                    verdict(
+                        SignatureOutcome.ATTRIBUTABLE_KEY,
+                        f"{unknown}; the snapshot is offered, so its author is identified and no authority attaches",
+                        embedded=embedded.fingerprint,
+                    ),
+                    embedded.blob,
+                    False,
+                )
             return (
                 verdict(
                     SignatureOutcome.UNAUTHORIZED_KEY,
-                    (
-                        "no trust root is in force at this position"
-                        if in_force is None
-                        else f"{embedded.fingerprint} is not in the trust root in force (revision {in_force.revision})"
-                    ),
+                    unknown,
                     embedded=embedded.fingerprint,
                 ),
                 embedded.blob,
@@ -929,8 +1026,21 @@ class Authenticator:
             return declared, met
         return None, None
 
-    def _judge_policy(self, valid: set[bytes], proposals: set[bytes], findings: list[Finding]) -> None:
-        """The policy's bar: enough distinct fully-valid keys, or an explicitly allowed proposal."""
+    def _judge_policy(
+        self,
+        valid: set[bytes],
+        proposals: set[bytes],
+        findings: list[Finding],
+        stance: SnapshotStance,
+    ) -> None:
+        """The policy's bar: enough distinct fully-valid keys, or an explicitly allowed proposal.
+
+        The bar is a bar for a *head*. A snapshot that was offered is not claiming to be the current
+        state, so falling short of the policy is not a finding about it -- judging an offered
+        proposal against the bar for a published head would refuse every contribution ever made.
+        """
+        if stance is SnapshotStance.OFFERED:
+            return
         needed = self.policy.required_signatures
         if len(valid) >= needed:
             return
@@ -1007,6 +1117,7 @@ class Authenticator:
         quorum_required: int | None,
         quorum_met: int | None,
         findings: Sequence[Finding],
+        stance: SnapshotStance = SnapshotStance.HEAD,
     ) -> AuthenticationReport:
         in_force: TrustRoot | None = position.in_force
         return AuthenticationReport(
@@ -1024,4 +1135,5 @@ class Authenticator:
             quorum_met=quorum_met,
             findings=tuple(findings),
             signatures_required=self.policy.required_signatures,
+            stance=stance,
         )

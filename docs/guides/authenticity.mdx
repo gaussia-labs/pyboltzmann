@@ -57,7 +57,7 @@ the derivable rules take over. *A genesis is not validated, it is anchored.*
 brain.sign(signer)                       # a detached record beside the snapshot; no identity changes
 report = brain.authenticate()
 
-report.state                             # authorized | unsigned | unauthorized
+report.state                             # authorized | unsigned | attributable | unauthorized
 report.role                              # genesis | ordinary | revision
 report.required_scopes                   # computed from the diff against the first parent
 report.outcomes()                        # one verdict per signature, by fingerprint
@@ -77,6 +77,40 @@ Three rules do most of the work:
 - **Missing evidence widens the requirement.** A truncated chain or an unreadable composition makes the
   verdict `insufficient_evidence`, never a smaller demand: a verifier that quietly computed less from a
   truncated history would be exploitable by shipping a truncated history.
+
+## A stranger's key: attributable, or an impersonation
+
+The same snapshot, signed by the same key the trust root does not list, means two opposite things
+depending on the claim made for it — so the report says which question it answered:
+
+```python
+from boltzmann import SnapshotStance
+
+brain.authenticate(digest)                                   # HEAD is the default
+brain.authenticate(digest, stance=SnapshotStance.OFFERED)    # judged as a proposal
+```
+
+- **Offered** — someone hands you a history for review. The signature verifies, the author is
+  cryptographically identified, and **no authority attaches**: the state is `attributable`, and the
+  blocks are judged one at a time through validation, where a proposer's identity earns them nothing
+  anyway. This is how an open project hears from people it has never admitted.
+- **As a head** — a registry, a mirror, or the contributor's own tag serves it as the brain's current
+  state. The same signature is now an unauthorized key, reported as one, and refused.
+
+`HEAD` is the default because it is the safe answer: a caller who does not say is asking about a
+brain's current state. `plan_reconcile` sets `OFFERED` for you and reports the result on the plan:
+
+```python
+plan = brain.plan_reconcile(fetched.digest)
+plan.authorship.state        # attributable, for a contributor you have not admitted
+plan.authorship.key          # who it is from
+```
+
+<Warning>
+  `attributable` is not a weaker `authorized`. `require_authorized()` still raises for it. It says the
+  author is named and nothing is authorized — which is precisely what a maintainer needs to know
+  before reading the contribution.
+</Warning>
 
 ## Admitting a key: the quorum rule
 
@@ -178,7 +212,7 @@ Every query result reports both verifications, separately:
 ```python
 bundle = brain.search(query)
 bundle.all_verified          # hashes and membership: the first verification
-bundle.authorship.state      # authorized | unsigned | unauthorized: the second
+bundle.authorship.state      # authorized | unsigned | attributable | unauthorized: the second
 bundle.authorship.key        # a fingerprint that authorized it, when one did
 bundle.authorship.pinned     # whether the trust root is anchored by this consumer's pin
 ```
