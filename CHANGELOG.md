@@ -1,6 +1,34 @@
 # CHANGELOG
 
 
+## v0.8.0-b.8 (2026-08-30)
+
+### Features
+
+- **authenticity**: Distinguish an attributable proposal from an unauthorized head
+  ([`1c52fae`](https://github.com/gaussia-labs/pyboltzmann/commit/1c52fae39528ddcacee918b4ffd58d041b010dd0))
+
+A signature by a key the trust root does not list had exactly one reading here, and the protocol
+  requires two. Offered for review, such a snapshot is how an open project hears from someone it has
+  never admitted: the author is identified and no authority attaches. Served as the brain's current
+  state, the identical bytes are an impersonation attempt. Collapsing them meant either refusing
+  every stranger's contribution or reporting an imposture as an ordinary proposal.
+
+The distinction is positional, so the position is now an input. authenticate() takes a stance,
+  defaulting to HEAD because a caller who does not say is asking about a brain's current state and
+  must get the safe answer. Under OFFERED an unlisted key yields ATTRIBUTABLE_KEY and the report
+  resolves to the new ATTRIBUTABLE state; the policy bar for a published head is not applied, since
+  judging a proposal against it would refuse every contribution ever made.
+
+Attributable is not a weaker authorized: require_authorized still raises. What it adds is the
+  author's fingerprint, on the report and in the Authorship an evidence bundle carries, because a
+  state whose whole content is "who wrote this" that did not say who would have gained nothing over
+  an anonymous one.
+
+plan_reconcile sets the stance for the contribution path and reports the result, which is where a
+  maintainer reads it.
+
+
 ## v0.8.0-b.7 (2026-08-30)
 
 ### Features
