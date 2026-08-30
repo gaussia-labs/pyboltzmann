@@ -114,7 +114,7 @@ class Module:
             layout=self.composition.layout,
             embedding_model=embedding_model,
             index_digest=index_digest,
-            tombstones=sorted(self.tombstones, key=lambda value: value.raw),
+            tombstones=sorted(self.tombstones, key=lambda value: value.raw) or None,
         )
 
     def __len__(self) -> int:

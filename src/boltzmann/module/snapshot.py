@@ -46,8 +46,12 @@ class ModuleRef(BaseModel):
         index_digest (OciDigest | None): Digest of the travelling index payload. This places the
             index inside the signed snapshot bytes instead of trusting the registry manifest.
         tombstones (list[BlockId] | None): Destroyed block identities the composition still names.
-            ``None`` is reserved for parsing pre-field snapshots; new module references emit a list,
-            including when it is empty, without changing old snapshots' identities.
+            Present exactly when a module has some: a reference with nothing destroyed omits the
+            member rather than carrying an empty list. The paper's snapshot document says a module
+            "additionally lists those identities" when its composition still names destroyed bytes,
+            so an empty list is not the same document -- and an implementation that emitted one
+            would compute a different snapshot digest from one that did not, for identical brain
+            state. That is the silent divergence the identity layer exists to prevent.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

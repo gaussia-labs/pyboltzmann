@@ -344,13 +344,29 @@ class TestSnapshot:
         snapshot = self.build(MemoryType.SEMANTIC)
         assert b"tombstones" not in snapshot.canonical_bytes()
 
-    def test_newly_persisted_module_refs_emit_even_an_empty_tombstone_set(self) -> None:
+    def test_a_module_with_nothing_destroyed_omits_the_member(self) -> None:
+        """An empty list and an absent member are different documents with different digests.
+
+        The paper's snapshot lists tombstones for a module whose composition "still names destroyed
+        bytes", so a module with none omits the member. An implementation that emitted an empty list
+        would compute a different snapshot digest from one that did not, for identical brain state --
+        which is exactly the silent divergence canonical serialization exists to prevent.
+        """
         store = MemoryBlockStore()
         reference = Module(MemoryType.SEMANTIC, store).persist()
         snapshot = Snapshot.of([reference])
 
-        assert reference.tombstones == []
-        assert b'"tombstones":[]' in snapshot.canonical_bytes()
+        assert reference.tombstones is None
+        assert b"tombstones" not in snapshot.canonical_bytes()
+
+    def test_a_module_with_a_tombstone_carries_it(self) -> None:
+        store = MemoryBlockStore()
+        destroyed = BlockId.of(b"destroyed")
+        module = Module(MemoryType.SEMANTIC, store, Composition(MemoryType.SEMANTIC, [destroyed]))
+        reference = module.with_tombstones([destroyed]).persist()
+
+        assert reference.tombstones == [destroyed]
+        assert b'"tombstones":' in Snapshot.of([reference]).canonical_bytes()
 
 
 class TestSnapshotTrustRoot:
