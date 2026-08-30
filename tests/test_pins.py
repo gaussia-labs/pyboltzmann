@@ -145,6 +145,52 @@ class TestPinJudgement:
         assert report.pinned, "a change that followed the quorum rule is the mechanism working"
         assert report.state is AuthorshipState.AUTHORIZED
 
+    def test_a_pin_for_another_brain_does_not_answer_this_one(self) -> None:
+        """A brain is its genesis. Tags are re-assignable and the trust root rotates, so without
+        this the anchor would be evaluated against a chain it was never taken for -- and whichever
+        answer came back would be about the wrong question."""
+        store = MemoryBlockStore()
+        root = governed()
+        ours = keep(store, Snapshot(trust_root=root, labels={"brain": "ours"}))
+        endorse(store, ours, A)
+
+        write_pin(store, root.digest, PinSource.OUT_OF_BAND, genesis=OciDigest.of(b"another brain entirely"))
+        report = Authenticator(store).authenticate(ours)
+
+        assert not report.pinned
+        assert report.has(FindingKind.PIN_BRAIN_MISMATCH)
+        assert not report.has(FindingKind.TRUST_ROOT_MISMATCH), "a different brain is not an authority change"
+        with pytest.raises(TrustRootMismatchError, match="a different brain"):
+            report.require_authorized()
+
+    def test_the_same_brain_under_a_new_reference_still_matches(self) -> None:
+        """Moving repositories is not a change of identity, which is the reason to key on genesis."""
+        store = MemoryBlockStore()
+        root = governed()
+        genesis = keep(store, Snapshot(trust_root=root))
+        endorse(store, genesis, A)
+        head = keep(store, genesis.with_modules([]))
+        endorse(store, head, A)
+
+        write_pin(store, root.digest, PinSource.FIRST_USE, genesis=genesis.digest, reference="ghcr.io/old/brain")
+        report = Authenticator(store).authenticate(head)
+
+        assert report.pinned
+        assert report.state is AuthorshipState.AUTHORIZED
+
+    def test_a_pruned_history_leaves_the_question_open_rather_than_failing(self) -> None:
+        """A legitimately pruned brain cannot resolve its genesis; refusing it would punish pruning."""
+        store = MemoryBlockStore()
+        root = governed()
+        genesis = Snapshot(trust_root=root)
+        head = keep(store, genesis.with_modules([]))  # the genesis document itself is never stored
+        endorse(store, head, A)
+
+        write_pin(store, root.digest, PinSource.FIRST_USE, genesis=OciDigest.of(b"unrelated"))
+        report = Authenticator(store).authenticate(head)
+
+        assert not report.has(FindingKind.PIN_BRAIN_MISMATCH)
+
     def test_an_unapproved_swap_is_a_mismatch_however_internally_valid(self) -> None:
         store = MemoryBlockStore()
         write_pin(store, governed().digest, PinSource.OUT_OF_BAND)

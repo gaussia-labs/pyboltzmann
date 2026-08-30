@@ -3924,6 +3924,12 @@ class Brain:
         await self._merge_signatures(client, reference, manifest)
         subject = resolved.source
         report = Authenticator(self.store).authenticate(subject, current=subject.trust_root)
+        if report.has(FindingKind.PIN_BRAIN_MISMATCH):
+            raise TrustRootMismatchError(
+                f"{reference}:{tag} is not the brain this pin was taken for -- "
+                f"{report.detail(FindingKind.PIN_BRAIN_MISMATCH)} -- refused before transferring any "
+                f"module layer"
+            )
         if report.has(FindingKind.TRUST_ROOT_MISMATCH):
             raise TrustRootMismatchError(
                 f"{reference}:{tag} carries a trust root that neither matches the pinned "
