@@ -155,7 +155,7 @@ def read_index(store: BlockStore) -> SignatureIndex:
         SignatureIndex: The index.
     """
     raw = store.read_pointer(SIGNATURES_POINTER)
-    return SignatureIndex.model_validate_json(raw) if raw else SignatureIndex()
+    return SignatureIndex.model_validate(parse_json_strict(raw)) if raw else SignatureIndex()
 
 
 def write_index(store: BlockStore, index: SignatureIndex) -> None:

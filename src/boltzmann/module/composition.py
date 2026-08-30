@@ -218,8 +218,9 @@ class Composition:
             Composition: The composition it describes.
 
         Raises:
-            ModuleError: If the document is malformed, names an unknown memory type, or was
-                produced by a Merkle layout this client does not implement.
+            ModuleError: If the document is malformed, names an unknown memory type, is not the
+                canonical representation of the composition it decodes to, or was produced by a
+                Merkle layout this client does not implement.
         """
         try:
             document: Any = parse_json_strict(data)
@@ -258,4 +259,11 @@ class Composition:
                 f"composition was built with Merkle layout {layout!r}, this client implements "
                 f"{composition.layout!r}: the roots would not be comparable"
             )
+        # Last, because it subsumes every check above and says nothing useful about which one a
+        # caller tripped. The root commits to the *set*, so two documents differing in whitespace,
+        # key order, or an unknown member produce the same root under different OCI digests -- and a
+        # composition is addressed by that digest in the snapshot that names it. Accepting a
+        # non-canonical spelling would let one logical version be shipped under two identities.
+        if composition.document() != data:
+            raise ModuleError("composition document is not in canonical jcs/1 form")
         return composition

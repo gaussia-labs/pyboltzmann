@@ -146,7 +146,7 @@ from boltzmann.exceptions import (
     UnsignedBrainError,
 )
 from boltzmann.identity.digest import BlockId, Digest, MerkleRoot, OciDigest
-from boltzmann.identity.serialization import canonicalize
+from boltzmann.identity.serialization import canonicalize, parse_json_strict
 from boltzmann.identity.time import utc_timestamp
 from boltzmann.indices.base import Index, IndexKind, TravellingIndex
 from boltzmann.ingest.commit import CommitResult
@@ -566,11 +566,11 @@ class Brain:
 
     def _read_state(self) -> BrainState | None:
         raw = self.store.read_pointer(HEAD_POINTER)
-        return BrainState.model_validate_json(raw) if raw else None
+        return BrainState.model_validate(parse_json_strict(raw)) if raw else None
 
     def _read_remotes(self) -> RemoteAuthenticity:
         raw = self.store.read_pointer(REMOTES_POINTER)
-        return RemoteAuthenticity.model_validate_json(raw) if raw else RemoteAuthenticity()
+        return RemoteAuthenticity.model_validate(parse_json_strict(raw)) if raw else RemoteAuthenticity()
 
     def _record_seen_signed(self, reference: str, snapshot: OciDigest) -> None:
         """Remember that this repository was seen authentically signed, once, forever."""
@@ -624,7 +624,7 @@ class Brain:
         # pointer and adding one would change an interface third-party stores already implement.
         if not raw:
             return None
-        return ReconcileState.model_validate_json(raw)
+        return ReconcileState.model_validate(parse_json_strict(raw))
 
     def _put_reconcile_state(self, state: ReconcileState | None) -> None:
         """Record or clear the reconciliation in progress."""

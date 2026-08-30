@@ -24,8 +24,9 @@ from boltzmann.authenticity import (
     write_pin,
 )
 from boltzmann.authenticity.authenticator import Authenticator, AuthorshipState, FindingKind
+from boltzmann.authenticity.pins import PIN_POINTER
 from boltzmann.blocks.provenance import Actor, ActorKind
-from boltzmann.exceptions import SnapshotError, TrustRootMismatchError
+from boltzmann.exceptions import SerializationError, SnapshotError, TrustRootMismatchError
 from boltzmann.identity.digest import OciDigest
 from boltzmann.module.snapshot import Snapshot
 from boltzmann.store.memory import MemoryBlockStore
@@ -92,6 +93,21 @@ class TestPinState:
 
     def test_no_pin_is_none_not_an_error(self) -> None:
         assert read_pin(MemoryBlockStore()) is None
+
+    def test_a_pointer_with_duplicate_keys_is_refused(self) -> None:
+        """The pointer is written canonically, so it is read the same way.
+
+        A pin is the anchor every other authenticity judgement is measured against. Reading it with
+        last-key-wins semantics would mean a hand-edited pointer carrying two trust roots resolves to
+        whichever came last, silently -- the ambiguity the strict decoder exists to refuse.
+        """
+        store = MemoryBlockStore()
+        write_pin(store, OciDigest.of(b"a trust root"), PinSource.OUT_OF_BAND)
+        raw = store.read_pointer(PIN_POINTER)
+        store.write_pointer(PIN_POINTER, raw.replace(b'"source"', b'"source":"first_use","source"', 1))
+
+        with pytest.raises(SerializationError, match="duplicate JSON key"):
+            read_pin(store)
 
 
 class TestPinJudgement:

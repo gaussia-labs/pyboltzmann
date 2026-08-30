@@ -5,8 +5,9 @@ implementation in another language reads the same files and must reach the same
 ``block_id`` and ``MerkleRoot`` values -- which is the only practical way to check that
 two clients really agree on identity, rather than merely claiming to.
 
-They are generated from this SDK by :func:`regenerate`, and once published a vector file
-must not change: a changed vector means either a bug, or a new serialization identifier.
+The authenticity files are produced by ``tests/vectors_generator.py``; the identity files are
+maintained by hand and pinned by ``tests/test_golden_vectors.py``. Once published a vector file must
+not change: a changed vector means either a bug, or a new serialization identifier.
 """
 
 from __future__ import annotations
