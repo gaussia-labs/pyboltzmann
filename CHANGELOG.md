@@ -1,6 +1,33 @@
 # CHANGELOG
 
 
+## v0.8.0-b.12 (2026-08-30)
+
+### Bug Fixes
+
+- **module**: Omit the tombstones member when a module has none
+  ([`bdcb06f`](https://github.com/gaussia-labs/pyboltzmann/commit/bdcb06fdf074bc53314d1885274811cae5457ecb))
+
+Every new module reference carried "tombstones":[], and the paper's snapshot carries the member only
+  for a module whose composition "still names destroyed bytes". An empty list and an absent member
+  are different documents with different digests, so an implementation following the paper and this
+  one would have computed different snapshot digests for identical brain state -- the silent
+  divergence canonical serialization exists to prevent, re-entering through a field added to prevent
+  a different one.
+
+The empty list was doing a second job, and that is the actual defect. The removal invariant used the
+  member's presence to decide whether a snapshot was "modern" and had therefore opted into the
+  check, which made a fact about destroyed bytes double as a protocol-version marker -- and let
+  anyone turn the invariant off by omitting the field. The invariant is a statement about
+  compositions and now applies unconditionally.
+
+That leaves the case the version gate was standing in for: an unresolvable first parent, where no
+  difference can be taken. It is now reported as undecidable and does not block. Refusing would
+  refuse every brain that pruned its history, which the protocol permits; passing in silence would
+  let a truncated history disable the check. Saying which of the two happened is the only honest
+  answer.
+
+
 ## v0.8.0-b.11 (2026-08-30)
 
 ### Bug Fixes
