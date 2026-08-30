@@ -1,6 +1,28 @@
 # CHANGELOG
 
 
+## v0.8.0-b.9 (2026-08-30)
+
+### Features
+
+- **authenticity**: Warn when the govern quorum leaves no margin
+  ([`d421559`](https://github.com/gaussia-labs/pyboltzmann/commit/d4215599ec824238aa52378de523e63795951d76))
+
+A trust root whose quorum equals its number of govern holders is legal, and it is also a one-key
+  fuse. Lose that key -- stolen, or simply lost -- and governance is over: neither the remaining
+  holders nor an attacker can assemble the signatures to record a compromise or admit a replacement,
+  while a stolen key keeps signing within its scopes. The protocol has no recovery path, because
+  re-anchoring would be exactly the self-assertion the quorum rule exists to forbid.
+
+So it is said out loud, twice and for different readers. init and rotate warn at the moment the
+  margin is chosen, which is the only moment anything can still be done about it, and the report
+  carries a non-blocking QUORUM_MARGIN finding so a consumer meeting the brain later sees the
+  condition too.
+
+A warning rather than a refusal: no rule forbids the configuration, and a deployment with exactly
+  one owner has no other option available to it.
+
+
 ## v0.8.0-b.8 (2026-08-30)
 
 ### Features
