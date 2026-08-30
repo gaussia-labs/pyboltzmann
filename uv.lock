@@ -1010,7 +1010,7 @@ wheels = [
 
 [[package]]
 name = "pyboltzmann"
-version = "0.8.0b9"
+version = "0.8.0b10"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },

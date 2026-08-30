@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v0.8.0-b.10 (2026-08-30)
+
+### Bug Fixes
+
+- **module**: Reject composition documents not in canonical form
+  ([`5051f09`](https://github.com/gaussia-labs/pyboltzmann/commit/5051f092a25ec1b82a5d11d82ef93725760f4925))
+
+Every other wire document this SDK decodes re-serializes itself and refuses bytes that do not match
+  -- blocks, snapshots, signature records, projections. The composition document was the exception,
+  and it is the one where the gap is easiest to exploit quietly: the Merkle root commits to the
+  *set* of leaves, so a pretty-printed document, a differently ordered one, and one carrying an
+  unknown member all produce the identical root under three different OCI digests. A snapshot names
+  the digest, so one logical version could ship under several identities, each verifying perfectly.
+
+The check goes last, after the specific ones, because it subsumes them and says nothing about which
+  the caller actually tripped.
+
+Pointer reads get the same treatment for the same reason. They were written with canonicalize and
+  read with model_validate_json, so the write path refused ambiguity the read path accepted -- and
+  the pin is the anchor every other authenticity judgement is measured against.
+
+Also corrects the golden-vector docstring, which named a regenerate() function that has never
+  existed.
+
+
 ## v0.8.0-b.9 (2026-08-30)
 
 ### Features
