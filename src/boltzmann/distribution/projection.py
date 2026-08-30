@@ -43,8 +43,13 @@ class Projection(BaseModel):
         return [kind for kind in MemoryType if kind in self.modules]
 
     def canonical_bytes(self) -> bytes:
-        """The canonical config bytes stored and digested by OCI."""
-        return canonicalize(self.model_dump(mode="json"))
+        """The canonical config bytes stored and digested by OCI.
+
+        ``exclude_none`` matches :meth:`Snapshot.canonical_bytes`, and matching is the whole point: a
+        retained reference must serialize to the same bytes here as it does in the source snapshot, or
+        "verbatim subset" would be a claim about objects that the documents themselves contradict.
+        """
+        return canonicalize(self.model_dump(mode="json", exclude_none=True))
 
     @classmethod
     def from_document(cls, data: bytes) -> Projection:
