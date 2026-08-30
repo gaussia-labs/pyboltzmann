@@ -234,6 +234,19 @@ class TrustRoot(BaseModel):
         """The active ``govern`` holders: the keys a revision's quorum can draw on."""
         return self.holders(Scope.GOVERN)
 
+    @property
+    def has_governance_margin(self) -> bool:
+        """Whether losing one ``govern`` key would still leave a quorum reachable.
+
+        When the quorum equals the number of holders, a single key lost or stolen freezes governance
+        permanently: neither the remaining holders nor the attacker can assemble the signatures to
+        record a compromise or admit a replacement, while the attacker keeps signing within the
+        stolen key's scopes. There is no recovery path inside the protocol -- re-anchoring would be
+        exactly the self-assertion the quorum rule exists to forbid -- so the condition is worth
+        naming before it is entered rather than diagnosing after (paper Section 8.6).
+        """
+        return len(self.govern_holders) > self.govern_quorum
+
 
 class SinceVerdict(StrEnum):
     """What walking the observed revisions says about a key's admission claim.

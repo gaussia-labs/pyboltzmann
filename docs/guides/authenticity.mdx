@@ -140,6 +140,17 @@ brain.rotate(plan=plan, records=[record_a, record_b])   # quorum met -> the head
 content smuggled into a governance act, a trust root that does not advance, an admission claim the
 observable chain refutes. A failed quorum advances nothing.
 
+**Keep a margin.** A quorum equal to the number of `govern` holders is legal and permanent: lose one
+key and neither the remaining holders nor the attacker can assemble the signatures to record a
+compromise or admit a replacement, while a stolen key keeps signing within its scopes. There is no
+recovery path inside the protocol — re-anchoring would be exactly the self-assertion the quorum rule
+exists to forbid — so `init` and `rotate` warn when you enter that state, and the report names it:
+
+```python
+root.has_governance_margin               # False when the quorum equals the holders
+report.has(FindingKind.QUORUM_MARGIN)    # reported, never blocking
+```
+
 **Why a key cannot admit itself.** An attacker installs the public brain, writes their key into the
 list — possibly byte-identical to a legitimate admission — and signs with it. Integrity passes; the
 signature verifies. What fails is the transition: the trust root in force at their snapshot is the one its

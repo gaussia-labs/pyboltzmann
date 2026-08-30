@@ -20,7 +20,7 @@ from boltzmann.authenticity import (
     TrustRoot,
     rfc4253_signature,
 )
-from boltzmann.authenticity.authenticator import AuthorshipState, SignatureOutcome
+from boltzmann.authenticity.authenticator import AuthorshipState, FindingKind, SignatureOutcome
 from boltzmann.blocks.provenance import Actor, ActorKind
 from boltzmann.brain import Brain
 from boltzmann.exceptions import (
@@ -97,6 +97,57 @@ class TestInit:
     def test_an_unsigned_genesis_is_permitted_and_reported_unsigned(self, tmp_path: Path) -> None:
         brain = Brain.init(tmp_path / "brain", actor=CURATOR, trust_root=sole_owner())
         assert brain.authenticate().state is AuthorshipState.UNSIGNED
+
+
+class TestGovernanceMargin:
+    """A quorum with no slack is legal, and one lost key ends governance for good."""
+
+    def with_margin(self) -> TrustRoot:
+        return TrustRoot(
+            revision=1,
+            govern_quorum=2,
+            keys=(
+                A.entry(Scope.COMMIT, Scope.GOVERN),
+                B.entry(Scope.COMMIT, Scope.GOVERN),
+                C.entry(Scope.COMMIT, Scope.GOVERN),
+            ),
+        )
+
+    def test_a_quorum_equal_to_its_holders_has_no_margin(self) -> None:
+        assert not two_owners().has_governance_margin
+        assert not sole_owner().has_governance_margin
+        assert self.with_margin().has_governance_margin
+
+    def test_init_warns_when_the_margin_is_gone(self, tmp_path: Path, caplog) -> None:
+        """At the moment the margin is chosen: afterwards there is nothing to be done about it."""
+        with caplog.at_level("WARNING"):
+            Brain.init(tmp_path / "brain", actor=CURATOR, trust_root=two_owners(), signers=[A, B])
+        assert "freezes governance permanently" in caplog.text
+
+    def test_init_is_quiet_when_a_key_could_be_lost(self, tmp_path: Path, caplog) -> None:
+        with caplog.at_level("WARNING"):
+            Brain.init(tmp_path / "brain", actor=CURATOR, trust_root=self.with_margin(), signers=[A, B])
+        assert "freezes governance permanently" not in caplog.text
+
+    def test_a_revision_that_removes_the_margin_warns(self, tmp_path: Path, caplog) -> None:
+        brain = Brain.init(tmp_path / "brain", actor=CURATOR, trust_root=self.with_margin(), signers=[A, B])
+        tightened = TrustRoot(
+            revision=2,
+            govern_quorum=2,
+            keys=(A.entry(Scope.COMMIT, Scope.GOVERN), B.entry(Scope.COMMIT, Scope.GOVERN)),
+        )
+        with caplog.at_level("WARNING"):
+            brain.rotate(tightened, signers=[A, B])
+        assert "freezes governance permanently" in caplog.text
+
+    def test_the_report_names_it_without_blocking(self, tmp_path: Path) -> None:
+        """A verifier meeting the brain later should see the condition; it is not a failure."""
+        brain = Brain.init(tmp_path / "brain", actor=CURATOR, trust_root=two_owners(), signers=[A, B])
+        report = brain.authenticate()
+
+        assert report.has(FindingKind.QUORUM_MARGIN)
+        assert report.state is AuthorshipState.AUTHORIZED
+        assert not any(f.blocking for f in report.findings if f.kind is FindingKind.QUORUM_MARGIN)
 
 
 class TestSign:

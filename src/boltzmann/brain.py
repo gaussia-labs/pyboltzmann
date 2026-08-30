@@ -534,7 +534,29 @@ class Brain:
                 trust_root.govern_quorum,
                 len(distinct),
             )
+        cls._warn_without_governance_margin(trust_root, path)
         return brain
+
+    @staticmethod
+    def _warn_without_governance_margin(trust_root: TrustRoot, where: object) -> None:
+        """Say so at the moment the margin is chosen, not the moment it is needed.
+
+        A quorum equal to the number of govern holders is not an error and no rule forbids it, so
+        this is a warning rather than a refusal. It is emitted here, at creation and at revision,
+        because that is the only moment anything can still be done about it: once the key is lost
+        the protocol has no recovery path, and a report noticing it afterwards arrives too late to
+        inform the decision it was about.
+        """
+        if trust_root.has_governance_margin:
+            return
+        logging.getLogger(__name__).warning(
+            "trust root of %s sets a govern quorum of %d with %d govern holder(s): losing one key "
+            "freezes governance permanently, with no recovery path inside the protocol. Keep more "
+            "govern holders than the quorum requires",
+            where,
+            trust_root.govern_quorum,
+            len(trust_root.govern_holders),
+        )
 
     def __repr__(self) -> str:
         installed = ", ".join(kind.value for kind in self._snapshot.installed) or "empty"
@@ -1237,6 +1259,7 @@ class Brain:
             store_record(self.store, record)
         self._advance(revision)
         assert revision.trust_root is not None
+        self._warn_without_governance_margin(revision.trust_root, self._snapshot.digest.short)
         return RotationResult(
             snapshot=digest,
             revision=revision.trust_root.revision,
