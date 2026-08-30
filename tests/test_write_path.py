@@ -28,6 +28,7 @@ from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.ingest.task import ProcessingTask
 from boltzmann.ingest.validation import ValidationStatus
+from boltzmann.module.composition import Composition
 from boltzmann.module.snapshot import Snapshot
 from boltzmann.store.memory import MemoryBlockStore
 
@@ -544,9 +545,9 @@ class TestPersistence:
             [
                 reference.model_copy(
                     update={
-                        "composition": brain.store.put_bytes(
-                            b'{"boltzmann":1,"block_ids":[],"layout":"rfc6962-sorted/1","memory_type":"canonical"}'
-                        )
+                        # A well-formed, canonical composition -- of the wrong version. The point is
+                        # that it does not reproduce the root the reference files it under.
+                        "composition": brain.store.put_bytes(Composition(MemoryType.CANONICAL).document())
                     }
                 )
             ]

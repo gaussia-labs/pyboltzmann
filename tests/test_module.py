@@ -180,6 +180,32 @@ class TestModule:
         with pytest.raises(ModuleError, match="strictly ascending"):
             Composition.from_document(json.dumps(document, separators=(",", ":")).encode())
 
+    def test_a_composition_must_arrive_in_canonical_form(self) -> None:
+        """A composition is addressed by the digest of these bytes, and the root cannot tell them apart.
+
+        The root commits to the *set*, so a pretty-printed document and a compact one produce the
+        same root under two different OCI digests -- and a snapshot names the digest. Accepting both
+        spellings would let one logical version be shipped under two identities.
+        """
+        import json
+
+        composition = Composition(MemoryType.SEMANTIC, [BlockId.of(b"a"), BlockId.of(b"b")])
+        pretty = json.dumps(json.loads(composition.document()), indent=2).encode()
+
+        assert Composition.from_document(composition.document()) == composition
+        with pytest.raises(ModuleError, match="not in canonical"):
+            Composition.from_document(pretty)
+
+    def test_a_composition_rejects_an_unknown_member(self) -> None:
+        """Extra keys survive a reserialize as a different byte string, so they are refused there."""
+        import json
+
+        document = json.loads(Composition(MemoryType.SEMANTIC).document())
+        document["annotations"] = {"whatever": "1"}
+
+        with pytest.raises(ModuleError, match="not in canonical"):
+            Composition.from_document(json.dumps(document, separators=(",", ":")).encode())
+
     def test_a_composition_rejects_duplicate_json_keys(self) -> None:
         document = Composition(MemoryType.SEMANTIC).document()
         duplicated = document.replace(b'"boltzmann":1', b'"boltzmann":1,"boltzmann":1')

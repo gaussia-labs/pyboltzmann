@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict
 
 from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.identity.digest import OciDigest
-from boltzmann.identity.serialization import canonicalize
+from boltzmann.identity.serialization import canonicalize, parse_json_strict
 from boltzmann.identity.time import Timestamp, utc_timestamp
 from boltzmann.store.base import BlockStore
 
@@ -74,7 +74,7 @@ def read_pin(store: BlockStore) -> TrustPin | None:
         TrustPin | None: The pin, or ``None`` when no anchor was ever recorded.
     """
     raw = store.read_pointer(PIN_POINTER)
-    return TrustPin.model_validate_json(raw) if raw else None
+    return TrustPin.model_validate(parse_json_strict(raw)) if raw else None
 
 
 def write_pin(
