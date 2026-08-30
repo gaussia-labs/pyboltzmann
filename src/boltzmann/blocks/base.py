@@ -33,6 +33,7 @@ Two conventions keep identity unambiguous:
 
 from __future__ import annotations
 
+import logging
 from abc import ABC
 from typing import Any, ClassVar, Self
 
@@ -84,6 +85,7 @@ class Block(BaseModel, ABC):
                 f"already held by {registered.__name__}"
             )
         _REGISTRY[key] = cls
+        _warn_if_unregistered(memory_type, cls)
 
     @model_validator(mode="after")
     def _reject_non_deterministic_payload(self) -> Self:
@@ -298,3 +300,40 @@ class Block(BaseModel, ABC):
         # Schema versions may be sibling shapes rather than an ever-widening inheritance chain.
         # Report the closest shape; on a tie prefer the newest vocabulary.
         raise min(enumerate(failures), key=lambda item: (len(item[1].errors()), -item[0]))[1].with_traceback(None)
+
+
+def _warn_if_unregistered(memory_type: MemoryType, cls: type[Block]) -> None:
+    """Say something when a schema is defined that the protocol's registry does not carry.
+
+    ``schema_version`` sits inside the envelope and therefore inside ``block_id``, so "registered"
+    cannot mean "whatever this process happens to define". It means present in the companion
+    document versioned with the protocol (paper Section 6.6). A schema only this deployment knows
+    produces blocks only this deployment can name -- two parties holding identical knowledge compute
+    different identifiers for it, which is the silent divergence canonical serialization exists to
+    prevent, re-entering through the version field.
+
+    A warning rather than a refusal, and deliberately. Defining a schema is how one comes to be
+    proposed for registration in the first place, and an exception here would make the SDK unusable
+    for the work that precedes registration. What must not happen is for it to pass unremarked.
+    """
+    try:
+        from boltzmann.conformance import golden
+
+        published = golden.registry()["schemas"]
+    except Exception:
+        return
+
+    versions = {entry["schema_version"] for entry in published.get(memory_type.value, ())}
+    if cls.SCHEMA_VERSION in versions:
+        return
+
+    logging.getLogger(__name__).warning(
+        "%s defines %s schema_version %d, which the schema registry does not carry. Blocks written "
+        "under it are named in a way no other implementation reproduces, so they will not be "
+        "recognized as the same knowledge elsewhere. Register the schema in the protocol's companion "
+        "document (%s) before writing blocks under it",
+        cls.__name__,
+        memory_type.value,
+        cls.SCHEMA_VERSION,
+        golden.CORPUS_REPOSITORY,
+    )
