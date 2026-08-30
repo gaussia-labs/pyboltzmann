@@ -24,6 +24,7 @@ from boltzmann.authenticity.chain import (
     Position,
     SnapshotRole,
     descends_from,
+    genesis_of,
     locate,
     observed_revisions,
     walk_first_parents,
@@ -138,6 +139,7 @@ class FindingKind(StrEnum):
     UNSIGNED_BRAIN = "unsigned_brain"
     CHAIN_TRUNCATED = "chain_truncated"
     TRUST_ROOT_MISMATCH = "trust_root_mismatch"
+    PIN_BRAIN_MISMATCH = "pin_brain_mismatch"
     SINCE_REFUTED = "since_refuted"
     QUORUM_FAILURE = "quorum_failure"
     REVISION_CHANGED_CONTENT = "revision_changed_content"
@@ -370,6 +372,8 @@ class AuthenticationReport(BaseModel):
             raise RemovalInvariantError(self.detail(FindingKind.REMOVAL_INVARIANT))
         if state is AuthorshipState.UNSIGNED:
             raise UnsignedBrainError(f"snapshot {self.snapshot} carries no signature")
+        if self.has(FindingKind.PIN_BRAIN_MISMATCH):
+            raise TrustRootMismatchError(self.detail(FindingKind.PIN_BRAIN_MISMATCH))
         if self.has(FindingKind.TRUST_ROOT_MISMATCH):
             raise TrustRootMismatchError(self.detail(FindingKind.TRUST_ROOT_MISMATCH))
         if self.has(FindingKind.SINCE_REFUTED) or self.has(FindingKind.CHAIN_TRUNCATED):
@@ -1100,6 +1104,27 @@ class Authenticator:
         """
         if pin is None:
             return False, []
+
+        # Identity before authority. A brain is its genesis: tags are re-assignable and the trust
+        # root rotates, so the pin's own recorded genesis is what says the anchor is about *this*
+        # brain at all. Without the check, a pin taken for one brain would be evaluated against
+        # another's chain, and the answer -- match or mismatch -- would be meaningless either way.
+        # An unresolvable genesis is undecidable, not negative: a pruned history cannot answer, and
+        # the truncation is already reported.
+        if pin.genesis is not None:
+            genesis = genesis_of(self.store, snapshot)
+            if genesis is not None and genesis != pin.genesis:
+                return False, [
+                    Finding(
+                        kind=FindingKind.PIN_BRAIN_MISMATCH,
+                        detail=(
+                            f"the pin was taken for the brain whose genesis is {pin.genesis.short}, and "
+                            f"this chain resolves to {genesis.short}: a different brain, not a change of "
+                            f"authority within this one. Pin this brain explicitly if that is what was meant"
+                        ),
+                    )
+                ]
+
         anchored = pin.trust_root
         in_force = position.in_force
         if in_force is not None and in_force.digest == anchored:

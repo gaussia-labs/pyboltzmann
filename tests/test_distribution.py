@@ -856,7 +856,9 @@ class TestSignedDistribution:
         forged = self._governed(tmp_path / "mallory", mallory)
         await forged.push(registry, REFERENCE, "v1", force=True)
 
-        with pytest.raises(TrustRootMismatchError, match="before transferring"):
+        # Mallory's brain has its own genesis, so the sharper diagnosis is available: this is not a
+        # change of authority within the pinned brain, it is a different brain on the same tag.
+        with pytest.raises(TrustRootMismatchError, match="not the brain this pin was taken for"):
             await consumer.pull(registry, REFERENCE, "v1")
 
     async def test_a_forged_trust_root_annotation_does_not_bypass_the_pin(

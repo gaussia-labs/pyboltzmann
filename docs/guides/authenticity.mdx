@@ -193,6 +193,20 @@ revisions that each satisfied the quorum rule — an approved rotation is the me
 mismatch. On `pull`, the manifest's `trust-root` annotation is compared **before any module layer is
 transferred**; when it differs, only the small documents move until the custody walk decides.
 
+**A pin is for one brain, and a brain is its genesis.** Tags are re-assignable and the trust root
+rotates, so neither identifies a brain; the genesis digest never changes. `pin()` records it, and the
+verifier checks it first — otherwise an anchor taken for one brain would be evaluated against
+another's chain, and match or mismatch would both be answers to the wrong question.
+
+```python
+report.has(FindingKind.PIN_BRAIN_MISMATCH)   # a different brain, not a change of authority in this one
+report.has(FindingKind.TRUST_ROOT_MISMATCH)  # this brain, authority that does not descend from the pin
+```
+
+The same brain under a new repository reference still matches. A history pruned below its genesis
+cannot answer the question, and that is reported as undecidable rather than as a mismatch — refusing
+it would punish pruning, which the protocol permits.
+
 ## Publication: signatures accumulate around the artifact
 
 A signature is never a layer of the brain manifest — countersigning would change the brain's digest, and

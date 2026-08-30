@@ -180,6 +180,28 @@ def walk_first_parents(store: BlockStore, snapshot: Snapshot) -> list[Position]:
         current = position.parent
 
 
+def genesis_of(store: BlockStore, snapshot: Snapshot) -> OciDigest | None:
+    """
+    The genesis a snapshot resolves to, walking first parents.
+
+    A brain's identity is the digest of its genesis: tags are re-assignable and the trust root
+    rotates, so two snapshots are the same brain exactly when they resolve to the same genesis
+    (paper Section 8.9).
+
+    Args:
+        store (BlockStore): Where parent documents are read from.
+        snapshot (Snapshot): Where to start.
+
+    Returns:
+        OciDigest | None: The genesis digest, or ``None`` when the chain truncates before reaching
+        one. ``None`` is undecidable rather than negative: a legitimately pruned history cannot
+        answer the question, and treating that as a mismatch would refuse brains that pruned.
+    """
+    walk = walk_first_parents(store, snapshot)
+    last = walk[-1]
+    return last.digest if last.role is SnapshotRole.GENESIS else None
+
+
 def observed_revisions(store: BlockStore, snapshot: Snapshot) -> list[TrustRoot]:
     """
     Every distinct trust root observable from a snapshot, walking first parents.
