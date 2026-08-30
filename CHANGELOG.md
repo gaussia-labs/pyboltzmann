@@ -1,6 +1,58 @@
 # CHANGELOG
 
 
+## v0.8.0-b.13 (2026-08-30)
+
+### Features
+
+- **blocks**: Warn when a schema the registry does not carry is defined
+  ([`59534b2`](https://github.com/gaussia-labs/pyboltzmann/commit/59534b253fd7dfdcc9e7e0cddbb366ec318aaa5e))
+
+Defining a block class registers its schema with this process, and nothing said whether the protocol
+  had registered it. Those are different claims, and schema_version sits inside the envelope and
+  therefore inside block_id -- so a schema only one deployment knows produces blocks only that
+  deployment can name. Two parties holding identical knowledge compute different identifiers for it,
+  which is the silent divergence canonical serialization exists to prevent, arriving through the
+  version field instead.
+
+Registration is now checked against the companion the corpus publishes, which is what the paper
+  means by registered.
+
+It warns rather than refuses, because defining a schema is how one comes to be proposed for
+  registration in the first place, and an exception would make the SDK unusable for the work that
+  precedes it. What must not happen is for it to pass unremarked and leave a deployment with a
+  private registry it never chose. A missing or unreadable companion is ignored rather than fatal:
+  this check exists to prevent a silent divergence, not to become one more way an import can fail.
+
+### Refactoring
+
+- **conformance**: Consume the published corpus instead of owning it
+  ([`2c38bbf`](https://github.com/gaussia-labs/pyboltzmann/commit/2c38bbfe69b602fa62f7702a5acfd83dff9e1072))
+
+The vectors lived in this package, so their location, naming and shape were governed by a Python
+  layout, and "conforming" quietly degraded into "matches pyboltzmann, bugs included". The paper
+  promises data readable without executing any implementation of the protocol, and a corpus an SDK
+  owns cannot make that promise about itself.
+
+The corpus now lives at gaussia-labs/boltzmann-conformance and is vendored here at CORPUS_VERSION.
+  Vendored rather than fetched, so a plain pip install still carries the vectors and a reader in
+  another language still needs no Python -- and a CI job diffs the copy against what is published,
+  because a vendored copy nobody checks is just the old arrangement with extra steps.
+
+Two categories the paper names had never been authored and arrive with it: schema selection, where
+  oldest-that-fits is checked against the registered set rather than against whatever this package
+  implements, and reconciliation, with Equation 4 alongside the two refusals. The existing
+  categories gain the cases the amended paper names -- a non-BMP object key, an NFC/NFD pair,
+  duplicate-key and lone-surrogate documents that MUST be rejected, duplicate-leaf collapse, and
+  proofs at sizes one and a power of two.
+
+The schema registry companion ships too. Without it, "registered" would mean "whatever this package
+  implements", which is the per-deployment registry the protocol forbids -- arrived at by accident
+  rather than by decision. Two tests now pin the set both ways.
+
+The generator moves to the corpus repository, where its output belongs.
+
+
 ## v0.8.0-b.12 (2026-08-30)
 
 ### Bug Fixes
