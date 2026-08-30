@@ -146,6 +146,7 @@ class FindingKind(StrEnum):
     PROPOSED_HEAD = "proposed_head"
     COMPROMISED_KEY = "compromised_key"
     GENESIS_BELOW_QUORUM = "genesis_below_quorum"
+    QUORUM_MARGIN = "quorum_margin"
     EVIDENCE_INCOMPLETE = "evidence_incomplete"
     REMOVAL_INVARIANT = "removal_invariant"
     UNVERIFIABLE = "unverifiable"
@@ -946,6 +947,25 @@ class Authenticator:
         findings: list[Finding],
     ) -> tuple[int | None, int | None]:
         """The revision and genesis rules, yielding the quorum columns of the report."""
+        introduced = snapshot.trust_root
+        if (
+            introduced is not None
+            and position.role in (SnapshotRole.GENESIS, SnapshotRole.REVISION)
+            and not introduced.has_governance_margin
+        ):
+            findings.append(
+                Finding(
+                    kind=FindingKind.QUORUM_MARGIN,
+                    detail=(
+                        f"revision {introduced.revision} sets a govern quorum of "
+                        f"{introduced.govern_quorum} with {len(introduced.govern_holders)} govern "
+                        f"holder(s), so losing one key freezes governance permanently: no compromise "
+                        f"record and no replacement could ever be admitted, and the protocol has no "
+                        f"recovery path. Keep more holders than the quorum requires"
+                    ),
+                    blocking=False,
+                )
+            )
         if position.role is SnapshotRole.REVISION:
             parent = position.parent
             if parent is not None and snapshot.modules != parent.modules:
