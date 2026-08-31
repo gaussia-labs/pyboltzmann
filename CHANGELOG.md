@@ -1,6 +1,67 @@
 # CHANGELOG
 
 
+## v0.9.0 (2026-08-31)
+
+### Bug Fixes
+
+- **sandbox**: Match the index interface that changed in v0.2.0
+  ([`c07a45f`](https://github.com/gaussia-labs/pyboltzmann/commit/c07a45f5b0b15aebf6d3605dca30e18f6ddb417f))
+
+Index.build gained a ContentReader in 838fb72 and the sandbox's two engines never followed, so every
+  planner test has errored since -- eighteen of them, long enough that the breakage read as
+  background noise rather than a signal.
+
+Both engines accept the reader and neither uses it, which is the honest shape for a bag-of-words
+  example: term matching reads the symbolic fields, and fetching a datum per block to index text
+  already in the payload would make every commit pay for nothing. The parameter is documented as
+  accepted-and-unused so the next reader does not go looking for the call.
+
+Unrelated to the attribution work, and separate from it for that reason. It is here because the
+  sandbox has to run before anything about the sandbox can be verified.
+
+### Documentation
+
+- **attribution**: A guide for who did the work
+  ([`7078f33`](https://github.com/gaussia-labs/pyboltzmann/commit/7078f33f5267ca42529ac694cf1f153bb04cf544))
+
+There was no provenance guide at all, and the records were documented in a table that said six when
+  there have been seven since validation landed -- so the one member every record carries, the
+  actor, went unmentioned in the place a reader would look for it.
+
+The new guide is organised around the distinction that took the longest to settle: the actor, the
+  assisting parties, and the key subject answer three different questions, and only two of them are
+  ever checked against a signature. It states plainly that the protocol assigns no responsibility,
+  which is a decision worth being able to point at rather than infer.
+
+Also: every page that used `curator` now defines it. Eight of them referenced a variable out of
+  nowhere, which is fine when the value is obvious and stopped being fine when the identifier
+  acquired a form.
+
+Every example in the guide was executed before it was written down.
+
+### Features
+
+- **sandbox**: Record the agent that did the work
+  ([`561b6aa`](https://github.com/gaussia-labs/pyboltzmann/commit/561b6aa2598fa1579577cd9597df7f78db35d1a7))
+
+The sandbox is the one place an agent actually calls in, and every write here claimed
+  ActorKind.HUMAN -- including the MCP server paths, where the caller is by construction an agent.
+  The record said a person did work a model did, which is the one thing an audit trail must not do
+  quietly.
+
+BOLTZMANN_AGENT names the runtime writing on the actor's behalf and BOLTZMANN_AGENT_MODEL the model
+  it ran; both land in assisted_by beside the actor, never instead of it. The actor is whose account
+  the work runs under and the agent is what did it, and neither substitutes for the other.
+
+Empty is the ordinary case for a person working directly, and it matters that it stays empty: naming
+  an agent unconditionally would take every brain the sandbox writes out of schema version 1 for
+  nothing.
+
+boltzmann-doctor prints who is assisting, so the answer to "what will this record" is visible before
+  the first write rather than after it.
+
+
 ## v0.9.0-b.4 (2026-08-31)
 
 ### Features
