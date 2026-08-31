@@ -33,7 +33,7 @@ from boltzmann.retention.reachability import mark, sweep
 from boltzmann.retention.requests import DropRequest, ProducerDropRequest
 from boltzmann.store.memory import MemoryBlockStore
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="2026-07")
 OTHER_MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="2026-05")
 REQUEST = RegistrationRequest(media_type="application/pdf", actor=CURATOR)

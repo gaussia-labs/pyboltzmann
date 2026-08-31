@@ -21,7 +21,7 @@ from boltzmann.store.memory import MemoryBlockStore
 from boltzmann_sandbox.indices import InvertedIndex, VectorIndex
 from boltzmann_sandbox.planner import RRF_K, HybridPlanner
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="test", version="1")
 
 FACTS = [

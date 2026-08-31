@@ -1,6 +1,150 @@
 # CHANGELOG
 
 
+## v0.9.0-b.4 (2026-08-31)
+
+### Features
+
+- **authenticity**: Report which claimed actors a signature vouches for
+  ([`a02488f`](https://github.com/gaussia-labs/pyboltzmann/commit/a02488fa2c6564bc518df0fc4637faf2f35f9fcd))
+
+The reader half of the trust root's subject. Until a key stands behind a name, the actor in a
+  provenance record is a declared identifier -- whoever can write to a brain can write any name into
+  its audit trail -- and this is where the names and the signatures are finally put side by side.
+
+Reported, never enforced, and the restraint is the point. A snapshot legitimately names actors that
+  never signed it: every merge does, because reconciliation brings another party's records into a
+  history the local key signs. Refusing an unvouched actor would refuse reconciliation itself. What
+  must not happen is passing unremarked, since an unvouched actor is exactly what every actor was
+  before subjects existed.
+
+Only the records a snapshot introduces are compared -- judging inherited ones would re-report every
+  ancestor's contributors at every position -- and only against keys whose signature actually
+  verified, so a retired or under-scoped key identifies its holder without vouching for anyone.
+
+asserted and legacy are kept apart because the remedies differ: one is a governance act, the other a
+  rewrite nobody can perform on published bytes. Assisting parties are never compared; nothing
+  expects a model to hold a key.
+
+check_attribution follows removals.py, including its resolvable/undecidable split: a composition
+  that cannot be read is reported rather than passed, or a withheld one would turn the comparison
+  off.
+
+
+## v0.9.0-b.3 (2026-08-31)
+
+### Features
+
+- **authenticity**: Name who a trusted key belongs to
+  ([`365104a`](https://github.com/gaussia-labs/pyboltzmann/commit/365104ad93aaf6ad8222079f742cd83f158afb51))
+
+The paper makes this connection load-bearing -- Section 5 says a signature is what turns a declared
+  actor into an authenticated identity, and Section 8.3 rests the Ed25519 strictness on it -- and no
+  mechanism existed. A trust-root entry carried five members and none was an identity, the SSH
+  comment is deliberately stripped, and Brain.sign never reads the actor. So provenance named a
+  person, the signature named a fingerprint, and nothing asserted they were the same.
+
+TrustedKey gains an optional subject: an actor identifier, inside the signed bytes, changed only by
+  a revision and therefore only by a quorum. The claim is narrow on purpose and stays narrow: it is
+  what this brain's governance asserts, not a certificate, and the grounds for believing a key is
+  someone's remain outside the protocol. What it adds is that once those grounds exist the
+  conclusion is written where a verifier reads it.
+
+An absent subject is omitted rather than serialized as null, so a trust root that names none keeps
+  exactly the digest it had and every pin still holds.
+
+SignatureVerdict and Authorship report it, so a quorum's holders are all readable rather than just
+  the first. An attributable key reports none, which is the whole state: nobody here has said whose
+  it is.
+
+AgentSigner stops discarding the agent comment and offers it as a suggested subject when it already
+  is an identifier. Offered, never adopted -- the comment is a label the key's own holder typed.
+
+
+## v0.9.0-b.2 (2026-08-31)
+
+### Features
+
+- **provenance**: Record everyone who took part
+  ([`6b74f6f`](https://github.com/gaussia-labs/pyboltzmann/commit/6b74f6f497d78da3e9784a1a9f40830c90b54e62))
+
+Most brains are hydrated through an agent, so the record of who actually did the work was the
+  missing part. A record has always named an actor; what it could not say is that a model wrote the
+  interpretation, which harness it ran inside, or that a second person was in the session. producer
+  answered part of that, for derivations alone, in a shape that made a version string load-bearing.
+
+Schema version 2 adds assisted_by: people and agents in one list, each agent naming the model it
+  ran, so the pair stays intact when several agents write into one snapshot. The same model under a
+  different harness is a different collaborator. No version strings -- a version is the member most
+  likely to be invented by whoever fills the record in, and it buys less than the identity beside
+  it.
+
+A derivation's two versions are disjoint rather than nested, since version 2 replaces producer
+  instead of adding to it. DerivationRecordV2 is therefore a sibling, as SemanticBlockV3 already is,
+  and requires assisted_by: version 1 obliged a writer to say what produced a derived block and
+  version 2 must not relax that. A record naming nobody keeps the bytes, and the block_id, it had
+  before version 2 existed.
+
+A removal never leaves version 1. It is the one record a verifier must decode to decide a blocking
+  question, and _reachable_removals skips what it cannot decode -- so an older client would read a
+  valid brain, miss the record, and reject the snapshot for violating an invariant it satisfies. Not
+  being able to read something must never be reported as that thing being wrong.
+
+Ledger.made_by resolves one query across both shapes, because a brain holds records of both at once
+  and a batch invalidation that read one would silently miss blocks. A person is never matched as a
+  model: a human collaborator carries none.
+
+Corpus 1.1 vendored, which is what registers provenance 2.
+
+### Testing
+
+- Measure the merkle scaling bound with the fastest run, not one run
+  ([`5351583`](https://github.com/gaussia-labs/pyboltzmann/commit/53515835134a6b57d2f827c14065cbd296d74abe))
+
+The assertion is narrow on purpose: doubling the leaves costs twice as much when verify is linear
+  and four times when it is quadratic, so the bar sits between at three. That leaves it about 50% of
+  headroom over the real ratio, and a shared CI runner spends more than that preempting the process
+  -- twice on 3.13 the same code that measures 2.05 locally measured 3.5 and failed, while passing
+  on 3.11 and 3.12 in the same run.
+
+Timing noise can only make a run slower, never faster, so the minimum of several runs is the closest
+  reading to the work actually performed. Five repetitions bring the measured ratio to 2.17 with a
+  variance of 0.01, and cost a few milliseconds.
+
+A fresh tree per repetition, because MerkleTree memoizes its internal nodes: verifying one instance
+  twice would time a warm cache and report a speed nothing in production sees. The leaves are built
+  once, outside the timer, since building them is not what is being measured.
+
+Widening the bar was the alternative and is worse. At four it stops distinguishing linear from
+  quadratic, which retires the assertion instead of stabilising it. Checked against a deliberately
+  quadratic stand-in, which still measures 4.07 and still fails.
+
+
+## v0.9.0-b.1 (2026-08-31)
+
+### Features
+
+- **identity**: Give an actor an identifier two implementations resolve
+  ([`a22853f`](https://github.com/gaussia-labs/pyboltzmann/commit/a22853f655e8356d543b88723650ae26ce1e1adc))
+
+Actor.id was an unconstrained string, and the repository spelled it five ways: role nouns, a first
+  name, $USER. A provenance record is a block, so that string is hashed into block_id -- two
+  spellings of one person are two names for one fact, and neither party fails. It is the divergence
+  canonical serialization exists to prevent, arriving through a field nobody had canonicalized.
+
+An identifier now takes one of two forms: an address, or a namespaced name. Lowercase ASCII, refused
+  rather than normalized, because lowering one would mint a block_id the caller neither asked for
+  nor can predict.
+
+The check is deliberately asymmetric. Actor itself stays permissive, since every record ever written
+  decodes through it and a validator on the type would strand every brain that predates the rule.
+  Enforcement attaches where an identifier is chosen -- Brain.__init__ and the request models --
+  where a caller can still be told what to choose instead.
+
+The sandbox derived its actor from $USER, a name that resolves on one machine and nowhere else; the
+  fallback is now namespaced under sandbox/ to say so.
+
+
 ## v0.8.0 (2026-08-31)
 
 

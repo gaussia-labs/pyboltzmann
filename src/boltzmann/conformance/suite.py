@@ -79,7 +79,7 @@ def _supersedes(block: BlockId, superseded: BlockId) -> ProvenanceBlock:
         record=SupersessionRecord(
             block=block,
             supersedes=superseded,
-            actor=Actor(id="curator", kind=ActorKind.HUMAN),
+            actor=Actor(id="curator@example.org", kind=ActorKind.HUMAN),
             at=utc_timestamp(),
         )
     )
@@ -376,7 +376,7 @@ class ReconciliationConformance:
                     block=derived,
                     derived_from=[source],
                     producer=Producer(kind=ProducerKind.MODEL, id="some-model", version="1"),
-                    actor=Actor(id="curator", kind=ActorKind.HUMAN),
+                    actor=Actor(id="curator@example.org", kind=ActorKind.HUMAN),
                     at=utc_timestamp(),
                 )
             )
@@ -782,3 +782,34 @@ class AuthenticityConformance(ABC):
         store_record(store, SignatureRecord.model_validate(vectors["signatures"]["A-over-S7"]))
         snapshot = Snapshot.from_document(store.get_bytes(OciDigest.parse(described["digest"])))
         assert snapshot.digest == digest
+
+    def test_attribution_is_reported_and_never_decides(self) -> None:
+        """An actor no signature stands behind must be reported, and must change no verdict.
+
+        Both halves are conformance requirements and each is easy to get wrong on its own. Skipping
+        the comparison leaves the actor field a declared name, which is what it was before subjects
+        existed. Letting it block refuses every merge, since reconciliation is precisely the
+        operation that brings in records their authors did not sign.
+        """
+        from boltzmann.authenticity.authenticator import Authenticator, AuthorshipState, FindingKind
+        from boltzmann.authenticity.record import SignatureRecord, store_record
+        from boltzmann.conformance.golden import load
+        from boltzmann.identity.digest import OciDigest
+        from boltzmann.module.snapshot import Snapshot
+
+        pytest.importorskip("cryptography")
+        vectors = load("signatures.json")
+        store = self.make_store()
+        described = vectors["snapshots"]["S7"]
+        store.put_bytes(described["canonical"].encode("utf-8"))
+        store_record(store, SignatureRecord.model_validate(vectors["signatures"]["A-over-S7"]))
+        snapshot = Snapshot.from_document(store.get_bytes(OciDigest.parse(described["digest"])))
+
+        report = Authenticator(store).authenticate(snapshot)
+
+        assert report.attribution is not None, "a verifier must answer which actors it vouches for"
+        if report.has(FindingKind.ATTRIBUTION_UNVERIFIED):
+            assert not any(
+                finding.blocking for finding in report.findings if finding.kind is FindingKind.ATTRIBUTION_UNVERIFIED
+            )
+            assert report.state is not AuthorshipState.UNAUTHORIZED

@@ -29,7 +29,7 @@ from boltzmann_sandbox.indices import (
     tokenize,
 )
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="test", version="1")
 
 FACTS = [
@@ -42,7 +42,7 @@ FACTS = [
 def index_of(blocks: list) -> VectorIndex:
     """A vector index built over these blocks."""
     index = VectorIndex()
-    index.build(blocks)
+    index.build(blocks, MemoryBlockStore())
     return index
 
 
@@ -152,21 +152,21 @@ class TestTheInterface:
 class TestInvertedIndex:
     def test_building_indexes_every_block(self, blocks: list) -> None:
         index = InvertedIndex()
-        index.build(blocks)
+        index.build(blocks, MemoryBlockStore())
         assert index.documents == len(FACTS)
         assert "fourier" in index.postings
 
     def test_rebuilding_discards_the_previous_composition(self, blocks: list) -> None:
         """A version is a set of blocks, so the index is rebuilt rather than patched."""
         index = InvertedIndex()
-        index.build(blocks)
-        index.build(blocks[:1])
+        index.build(blocks, MemoryBlockStore())
+        index.build(blocks[:1], MemoryBlockStore())
         assert index.documents == 1
 
     def test_a_rare_term_outranks_a_common_one(self, blocks: list) -> None:
         """Which is the whole of what makes term matching useful."""
         index = InvertedIndex()
-        index.build(blocks)
+        index.build(blocks, MemoryBlockStore())
         ranked = index.search("fourier frequency")
         assert len(ranked) >= 2
 
@@ -177,12 +177,12 @@ class TestInvertedIndex:
 
     def test_an_unknown_term_matches_nothing(self, blocks: list) -> None:
         index = InvertedIndex()
-        index.build(blocks)
+        index.build(blocks, MemoryBlockStore())
         assert index.search("thermodynamics") == []
 
     def test_an_empty_query_matches_nothing(self, blocks: list) -> None:
         index = InvertedIndex()
-        index.build(blocks)
+        index.build(blocks, MemoryBlockStore())
         assert index.search("") == []
 
     def test_searching_before_building_is_empty_rather_than_an_error(self) -> None:
@@ -190,7 +190,7 @@ class TestInvertedIndex:
 
     def test_the_limit_is_respected(self, blocks: list) -> None:
         index = InvertedIndex()
-        index.build(blocks)
+        index.build(blocks, MemoryBlockStore())
         assert len(index.search("function frequency sampling", limit=1)) == 1
 
 
@@ -211,13 +211,13 @@ class TestVectorIndex:
         """Not only when dumped: a consumer that loaded the index must hold what the publisher holds, or
         the two ends rank with different numbers."""
         index = VectorIndex()
-        index.build(blocks)
+        index.build(blocks, MemoryBlockStore())
         for vector in index.vectors.values():
             assert all(value == round(value, VectorIndex.PRECISION) for value in vector)
 
     def test_a_block_matches_its_own_text_best(self, blocks: list) -> None:
         index = VectorIndex()
-        index.build(blocks)
+        index.build(blocks, MemoryBlockStore())
         for block in blocks:
             ranked = index.search(block.statement)
             assert ranked[0][0] == block.block_id
@@ -226,13 +226,13 @@ class TestVectorIndex:
         """Two clients that indexed the same blocks have to produce the same bytes, or the layer digest
         would differ for identical content."""
         first, second = VectorIndex(), VectorIndex()
-        first.build(blocks)
-        second.build(blocks)
+        first.build(blocks, MemoryBlockStore())
+        second.build(blocks, MemoryBlockStore())
         assert first.dump() == second.dump()
 
     def test_the_dump_round_trips(self, blocks: list) -> None:
         index = VectorIndex()
-        index.build(blocks)
+        index.build(blocks, MemoryBlockStore())
         restored = VectorIndex()
         restored.load(index.dump())
         assert restored.vectors == index.vectors
@@ -241,7 +241,7 @@ class TestVectorIndex:
     def test_an_index_from_another_model_is_refused(self, blocks: list) -> None:
         """Vectors from two models occupy different spaces, so the ranking would be meaningless."""
         index = VectorIndex()
-        index.build(blocks)
+        index.build(blocks, MemoryBlockStore())
 
         class Foreign(VectorIndex):
             MODEL_TAG = "some-other-model/9"
@@ -251,7 +251,7 @@ class TestVectorIndex:
 
     def test_an_index_of_another_dimensionality_is_refused(self, blocks: list) -> None:
         index = VectorIndex()
-        index.build(blocks)
+        index.build(blocks, MemoryBlockStore())
 
         class Wider(VectorIndex):
             DIMS = 512

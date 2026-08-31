@@ -12,7 +12,7 @@ Layout, so nothing here is a simulation of publishing.
 from boltzmann import Actor, Brain
 from boltzmann.blocks import ActorKind
 
-curator = Actor(id="curator", kind=ActorKind.HUMAN)
+curator = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 brain = Brain.open("./my-brain", actor=curator)
 ```
 

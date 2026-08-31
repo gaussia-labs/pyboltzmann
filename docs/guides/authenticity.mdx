@@ -39,13 +39,34 @@ root = TrustRoot(
     keys=(
         TrustedKey(
             key=signer.public_key,
+            subject=signer.suggested_subject,      # or your own: "alex@example.org"
             scopes=(Scope.INGEST, Scope.COMMIT, Scope.GOVERN),
             since=1,
         ),
     ),
 )
+curator = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 brain = Brain.init("./brain", actor=curator, trust_root=root, signers=[signer])
 ```
+
+`subject` names who holds the key, as an [actor identifier](/sdks/boltzmann/concepts/identity#actor-identifiers).
+It is the one thing that connects a signature to the actor a provenance record names — without it, provenance
+says a person and the signature says a fingerprint, and nothing asserts they are the same.
+
+<Note>
+  **It is not a certificate.** A subject is asserted by *this brain's* governance and nowhere else: changing
+  one changes the trust root, which is a revision, which needs a quorum. It is as trustworthy as that quorum
+  and no more. Whether a key really belongs to a particular person in the world is still settled outside the
+  protocol — what a subject adds is that once it *is* settled, the conclusion lives where a verifier reads it
+  instead of in a maintainer's memory.
+
+  `AgentSigner.suggested_subject` offers the key's ssh-agent comment when it already is an actor identifier,
+  which it usually is. Offered, never adopted: the comment is a label the key's own holder typed, so a quorum
+  has to make the claim deliberately.
+</Note>
+
+Omitting it costs nothing. An absent subject is left out of the canonical bytes entirely, so a trust root that
+names none has exactly the digest it had before this member existed, and every pin against it still holds.
 
 A genesis proves nothing by itself — any party can construct an indistinguishable one. What gives it
 meaning happens outside: consumers **pin** the trust root's digest on first contact, and from that moment
@@ -61,9 +82,40 @@ report.state                             # authorized | unsigned | attributable 
 report.role                              # genesis | ordinary | revision
 report.required_scopes                   # computed from the diff against the first parent
 report.outcomes()                        # one verdict per signature, by fingerprint
+report.authorship().subject              # who the trust root says holds the key that signed
+report.attribution                       # which claimed actors those signatures stand behind
 report.findings                          # everything blocking or diagnostic, named
 report.require_authorized()              # or raise the most specific typed error
 ```
+
+## Which actors a signature stands behind
+
+A provenance record names who performed an operation. Until a key stands behind that name it is a
+*declared* identifier — whoever can write to a brain can write any name into its audit trail. Once the
+trust root names subjects, the two can be compared:
+
+```python
+attribution = brain.audit_attribution()
+
+attribution.verified      # actors a signing key vouches for
+attribution.asserted      # actors nobody vouches for
+attribution.legacy        # identifiers that predate the actor-id rule
+attribution.is_fully_vouched
+```
+
+<Warning>
+  **It never decides anything.** An unvouched actor produces a non-blocking `ATTRIBUTION_UNVERIFIED`
+  finding and leaves `state` at `authorized`. It has to: a snapshot legitimately names actors that never
+  signed it — every merge does, because reconciliation brings another party's records into a history your
+  key signs. Refusing an unvouched actor would refuse reconciliation itself.
+</Warning>
+
+Only the records a snapshot *introduces* are compared, and only against keys whose signature actually
+verified. Assisting parties are never compared — nothing expects a model to hold a key, and counting its
+absence would bury the one comparison that means something.
+
+`asserted` and `legacy` are kept apart because the remedy differs: an unvouched actor needs a governance
+act, and a legacy identifier needs a rewrite nobody can perform on bytes already published.
 
 Three rules do most of the work:
 

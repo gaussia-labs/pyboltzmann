@@ -14,6 +14,7 @@ import sys
 from textwrap import dedent
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
 
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
@@ -174,20 +175,53 @@ class TestSerializationVectors:
 class TestSchemaSelectionVectors:
     """Oldest-that-fits, checked against the registered set rather than against this SDK's opinion."""
 
-    @pytest.mark.parametrize("vector", golden.load("schema_selection.json")["vectors"], ids=lambda v: v["name"])
+    @pytest.mark.parametrize(
+        "vector",
+        [v for v in golden.load("schema_selection.json")["vectors"] if not v.get("refused")],
+        ids=lambda v: v["name"],
+    )
     def test_the_payload_is_written_under_the_published_version(self, vector: dict) -> None:
         block = Block.build(MemoryType(vector["memory_type"]), vector["payload"])
         assert vector["schema_version"] == block.SCHEMA_VERSION
         assert str(block.block_id) == vector["block_id"]
 
-    @pytest.mark.parametrize("vector", golden.load("schema_selection.json")["vectors"], ids=lambda v: v["name"])
+    @pytest.mark.parametrize(
+        "vector",
+        [v for v in golden.load("schema_selection.json")["vectors"] if not v.get("refused")],
+        ids=lambda v: v["name"],
+    )
     def test_the_published_version_is_the_oldest_that_fits(self, vector: dict) -> None:
         assert vector["schema_version"] == min(vector["satisfies"])
+
+    @pytest.mark.parametrize(
+        "vector",
+        [v for v in golden.load("schema_selection.json")["vectors"] if v.get("refused")],
+        ids=lambda v: v["name"],
+    )
+    def test_a_payload_satisfying_no_registered_schema_is_refused(self, vector: dict) -> None:
+        """Not every payload has an answer, and pretending otherwise is how one gets invented.
+
+        Evolution is usually additive, so oldest-that-fits is usually a choice among schemas that
+        all accept the payload. A version that *removes* a required member makes the two disjoint
+        instead, and then a payload can satisfy neither -- carrying both members, or neither. The
+        rule needs no amendment for it, because "satisfies" already admits no member a schema does
+        not name; what it needs is for an implementation to refuse rather than pick the closest.
+        """
+        assert vector["satisfies"] == []
+        assert "schema_version" not in vector
+        with pytest.raises(PydanticValidationError):
+            Block.build(MemoryType(vector["memory_type"]), vector["payload"])
 
     def test_a_payload_satisfying_several_schemas_is_covered(self) -> None:
         """The case the rule exists for. Without it the vectors would pin only the easy answers."""
         vectors = golden.load("schema_selection.json")["vectors"]
         assert any(len(vector["satisfies"]) > 1 for vector in vectors)
+
+    def test_both_sides_of_a_disjoint_pair_are_covered(self) -> None:
+        """A removal is the case oldest-that-fits had never met, so it gets both halves and both
+        refusals rather than one example and an assurance."""
+        vectors = golden.load("schema_selection.json")["vectors"]
+        assert sum(1 for vector in vectors if vector.get("refused")) >= 2
 
 
 class TestReconciliationVectors:

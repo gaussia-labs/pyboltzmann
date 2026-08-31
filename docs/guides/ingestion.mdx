@@ -22,6 +22,8 @@ observed, so every later claim can be traced back to it.
 ```python
 from boltzmann.ingest import RegistrationRequest
 
+curator = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
+
 request = RegistrationRequest(
     media_type="application/pdf",
     actor=curator,

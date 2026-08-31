@@ -28,7 +28,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from boltzmann.blocks.memory_type import MemoryType
-from boltzmann.blocks.provenance import Actor, Producer, RemovalMechanism
+from boltzmann.blocks.provenance import Producer, RemovalMechanism, WritingActor
 from boltzmann.identity.digest import BlockId, Digest, MerkleRoot, OciDigest
 from boltzmann.module.snapshot import Snapshot
 
@@ -55,7 +55,7 @@ class DropRequest(BaseModel):
 
     blocks: list[BlockId] = Field(min_length=1)
     memory_type: MemoryType
-    actor: Actor
+    actor: WritingActor
     reason: str = Field(min_length=1)
     policy_name: str | None = None
     rederive_against: BlockId | None = None
@@ -82,7 +82,7 @@ class ProducerDropRequest(BaseModel):
 
     producer: Producer
     memory_types: list[MemoryType] = Field(min_length=1)
-    actor: Actor
+    actor: WritingActor
     reason: str = Field(min_length=1)
     policy_name: str | None = None
 

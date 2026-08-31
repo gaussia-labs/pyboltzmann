@@ -122,6 +122,12 @@ def check_settings() -> tuple[Settings | None, list[Check]]:
             else "anonymous. Reading a public repository works; pushing will not",
         ),
         Check(OK, "actor", settings.actor),
+        Check(
+            OK,
+            "assisted by",
+            ", ".join(f"{party.id} running {party.model}" if party.model else party.id for party in settings.assisting)
+            or "nobody -- a person working alone, recorded at schema version 1",
+        ),
     ]
 
     if settings.is_docker_hub and settings.insecure:

@@ -56,6 +56,9 @@ class AgentSigner:
     Attributes:
         public_key (SshPublicKey): The key this signer signs with, confirmed held by the agent
             at construction.
+        comment (str): The comment the agent stores for the key, kept rather than discarded. It is
+            conventionally an address or ``user@host``, which is exactly the shape a trust root's
+            ``subject`` takes -- see :meth:`suggested_subject`.
         socket_path (str | None): Where the agent listens, when not the environment's default.
         timeout (float): Seconds to wait on the agent -- generous by default, because a hardware
             token waits for a human touch.
@@ -90,7 +93,9 @@ class AgentSigner:
         self.socket_path = socket_path
         self.timeout = timeout
         with SshAgentClient(socket_path=socket_path, timeout=timeout) as agent:
-            held = [identity for identity, _ in agent.request_identities()]
+            identities = agent.request_identities()
+        held = [identity for identity, _ in identities]
+        comments = {identity.fingerprint: comment for identity, comment in identities}
         selected: SshPublicKey | None = None
         if key is None:
             candidates = [identity for identity in held if identity.is_ed25519]
@@ -120,6 +125,7 @@ class AgentSigner:
                 f"signing with it would produce signatures no conforming consumer here accepts"
             )
         self.public_key = selected
+        self.comment = comments.get(selected.fingerprint, "")
 
     @classmethod
     def identities(cls, socket_path: str | None = None, timeout: float = 30.0) -> list[SshPublicKey]:
@@ -137,6 +143,27 @@ class AgentSigner:
 
         with SshAgentClient(socket_path=socket_path, timeout=timeout) as agent:
             return [identity for identity, _ in agent.request_identities()]
+
+    @property
+    def suggested_subject(self) -> str | None:
+        """
+        The key's agent comment, when it is already a usable actor identifier.
+
+        A convenience for authoring a trust root, and never more than that. The comment is a label
+        the key's own holder typed into their agent: unauthenticated, unverified, and trivially
+        set to anyone's address. It is offered so a maintainer does not have to retype what they
+        already have, and it is never adopted on its own -- a subject is a claim this brain's
+        governance makes, so a quorum has to make it deliberately.
+
+        Returns:
+            str | None: The comment if it is an actor identifier, otherwise ``None``. Most
+            comments are (``alex@laptop`` is not, but ``alex@example.org`` is), and a comment that
+            is not one is simply not offered rather than repaired.
+        """
+        from boltzmann.identity.principal import is_actor_id
+
+        candidate = self.comment.strip().lower()
+        return candidate if candidate and is_actor_id(candidate) else None
 
     def sign_blob(self, data: bytes) -> bytes:
         """

@@ -28,7 +28,7 @@ from boltzmann.ingest.task import ProcessingTask, TaskOperation
 from boltzmann.query.evidence import EvidenceBundle, Match, SourceRef
 from boltzmann.store.memory import MemoryBlockStore
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
 SOURCE = BlockId.of(b"%PDF-1.7 lecture notes")
 

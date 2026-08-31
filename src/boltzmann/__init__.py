@@ -58,6 +58,7 @@ from boltzmann.blocks import (
     ActorKind,
     Block,
     CanonicalBlock,
+    Collaborator,
     ContentRef,
     EpisodicBlock,
     EpisodicBlockV2,
@@ -68,6 +69,7 @@ from boltzmann.blocks import (
     ProceduralBlockV2,
     Producer,
     ProvenanceBlock,
+    ProvenanceBlockV2,
     Relation,
     RemovalMechanism,
     SemanticBlock,
@@ -153,7 +155,7 @@ from boltzmann.retention import (
 )
 from boltzmann.store import BlockStore, MemoryBlockStore, OciLayoutStore
 
-__version__ = "0.8.0"
+__version__ = "0.9.0-b.4"
 
 __all__ = [
     "Actor",
@@ -233,7 +235,9 @@ __all__ = [
     "ProcessingTask",
     "Producer",
     "ProducerDropRequest",
+    "Collaborator",
     "ProvenanceBlock",
+    "ProvenanceBlockV2",
     "PruneReport",
     "Query",
     "QueryFilters",

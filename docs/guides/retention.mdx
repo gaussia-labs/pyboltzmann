@@ -35,6 +35,8 @@ whose source was removed can no longer be justified.
 ```python
 from boltzmann.retention import DropRequest
 
+curator = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
+
 plan = brain.plan_drop(DropRequest(
     blocks=[source_id],
     memory_type=MemoryType.CANONICAL,

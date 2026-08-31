@@ -42,21 +42,31 @@ from boltzmann.blocks.content import ContentRef
 from boltzmann.blocks.episodic import EpisodicBlock, EpisodicBlockV2
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.procedural import ProceduralBlock, ProceduralBlockV2
-from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind
+from boltzmann.blocks.provenance import (
+    Actor,
+    ActorKind,
+    Collaborator,
+    Producer,
+    ProducerKind,
+    RegistrationRecord,
+    RemovalMechanism,
+    RemovalRecord,
+    provenance_block,
+)
 from boltzmann.blocks.semantic import SemanticBlock, SemanticBlockV2
 from boltzmann.brain import Brain
 from boltzmann.distribution.local import LocalLayoutRegistry
 from boltzmann.distribution.manifest import require_supported_schemas, schema_versions_of
 from boltzmann.distribution.media_types import ANNOTATION_SCHEMA_VERSIONS
 from boltzmann.exceptions import BlockSchemaError, DistributionError, ProtocolError
-from boltzmann.identity.digest import OciDigest
+from boltzmann.identity.digest import BlockId, OciDigest
 from boltzmann.identity.time import utc_timestamp
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.query.scan import searchable_text
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
-SAM = Actor(id="sam", kind=ActorKind.AGENT)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
+SAM = Actor(id="example.com/sam", kind=ActorKind.AGENT)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
 REFERENCE = "registry.example/org/brain"
 
@@ -163,8 +173,52 @@ class TestWhichVersionABlockIsWrittenAs:
         assert type(Block.build(memory_type, {**payload, "content": reference.model_dump(mode="json")})) is v2
 
     def test_provenance_gained_no_content_field(self) -> None:
-        """Deliberate: the removal ledger must stay readable by every client, of every version."""
-        assert Block.schemas(MemoryType.PROVENANCE) == (Block.registry()[(MemoryType.PROVENANCE, 1)],)
+        """A provenance record names bytes, it never carries them."""
+        for schema in Block.schemas(MemoryType.PROVENANCE):
+            assert "content" not in schema.model_fields
+
+    def test_a_removal_record_stays_at_version_one_even_when_a_session_names_who_assisted(self) -> None:
+        """The removal ledger must stay readable by every client, of every version.
+
+        Every other provenance record is informational to a verifier. A removal record is the one
+        it must *decode* to decide a blocking question, because the removal invariant asks whether
+        every block absent from a composition has a reachable record explaining it -- and
+        ``_reachable_removals`` skips a block it cannot decode. So a client without the version-2
+        schema would read a valid brain, silently miss the record, and reject the snapshot for
+        violating an invariant it in fact satisfies.
+
+        That is the worst shape a failure can take: specific, confident, wrong, and with no way to
+        withdraw it. Not being able to read something must never be reported as that thing being
+        wrong, so a removal never leaves version 1 -- it gives up naming who assisted, and keeps
+        the property the ledger exists for.
+        """
+        agent = Collaborator(id="anthropic/claude-code", kind=ActorKind.AGENT, model="anthropic/fable-5")
+        removal = RemovalRecord(
+            blocks=[BlockId.of(b"a block that left")],
+            mechanism=RemovalMechanism.DROP,
+            memory_type=MemoryType.SEMANTIC,
+            actor=Actor(id="curator@example.org", kind=ActorKind.HUMAN),
+            at="2026-08-31T00:00:00Z",
+            reason="ingested in error",
+        )
+
+        unassisted = provenance_block(removal)
+        assisted = provenance_block(removal, [agent])
+
+        assert assisted.SCHEMA_VERSION == 1
+        assert assisted.block_id == unassisted.block_id, "naming who assisted must not change a removal"
+
+    def test_every_other_record_does_take_version_two(self) -> None:
+        """The exception above is a removal's alone, not a general retreat from version 2."""
+        agent = Collaborator(id="openai/codex", kind=ActorKind.AGENT)
+        record = RegistrationRecord(
+            block=BlockId.of(b"a source"),
+            actor=Actor(id="curator@example.org", kind=ActorKind.HUMAN),
+            at="2026-08-31T00:00:00Z",
+        )
+
+        assert provenance_block(record).SCHEMA_VERSION == 1
+        assert provenance_block(record, [agent]).SCHEMA_VERSION == 2
 
     def test_an_invalid_payload_reports_the_closest_schema_error(self) -> None:
         """Sibling schema shapes must report the family the payload was trying to use.

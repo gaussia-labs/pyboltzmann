@@ -19,6 +19,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from boltzmann.authenticity.attribution import AttributionReport, check_attribution
 from boltzmann.authenticity.backend import signature_backend_available
 from boltzmann.authenticity.chain import (
     Position,
@@ -150,6 +151,10 @@ class FindingKind(StrEnum):
     GENESIS_BELOW_QUORUM = "genesis_below_quorum"
     QUORUM_MARGIN = "quorum_margin"
     EVIDENCE_INCOMPLETE = "evidence_incomplete"
+    ATTRIBUTION_UNVERIFIED = "attribution_unverified"
+    """Actors a snapshot introduces that no signing key vouches for. Never blocking: every merge
+    carries records whose authors did not sign the snapshot that brings them in."""
+
     REMOVAL_INVARIANT = "removal_invariant"
     REMOVAL_UNDECIDABLE = "removal_undecidable"
     UNVERIFIABLE = "unverifiable"
@@ -182,6 +187,10 @@ class SignatureVerdict(BaseModel):
         key (str): The fingerprint the record names.
         embedded_key (str | None): The fingerprint of the key actually inside the signature
             blob, when the armor parses. This one is the authority; the named one is an index.
+        subject (str | None): Who the trust root says holds the key, when it says. A fingerprint
+            answers *which* key signed and nothing at all about whose it is, which is why a
+            consumer reading a report has had no way to connect a signature to the actor a
+            provenance record names.
         claimed_scopes (tuple[Scope, ...]): What the record claims -- diagnosis, never decision.
         held_scopes (tuple[Scope, ...]): What the trust root in force actually grants the key.
         outcome (SignatureOutcome): The fate.
@@ -192,6 +201,7 @@ class SignatureVerdict(BaseModel):
 
     key: str
     embedded_key: str | None = None
+    subject: str | None = None
     claimed_scopes: tuple[Scope, ...] = ()
     held_scopes: tuple[Scope, ...] = ()
     outcome: SignatureOutcome
@@ -216,6 +226,8 @@ class Authorship(BaseModel):
         state (AuthorshipState): Authorized, unsigned, or unauthorized.
         snapshot (OciDigest): The snapshot the evidence was served from.
         key (str | None): A fingerprint that authorized it, when one did.
+        subject (str | None): Who the trust root says holds that key. A bundle whose only answer to
+            "who" is a base64 hash makes the reader go looking; this is the answer they were after.
         trust_root (OciDigest | None): The trust root in force at that position.
         pinned (bool): Whether that trust root is anchored by this consumer's pin.
     """
@@ -225,6 +237,7 @@ class Authorship(BaseModel):
     state: AuthorshipState
     snapshot: OciDigest
     key: str | None = None
+    subject: str | None = None
     trust_root: OciDigest | None = None
     pinned: bool = False
 
@@ -255,6 +268,10 @@ class AuthenticationReport(BaseModel):
         stance (SnapshotStance): How the snapshot was presented. Recorded because it is what decides
             whether an unlisted key reads as attributable or as unauthorized, and a report that did
             not say which question it answered would be unreadable a second time.
+        attribution (AttributionReport | None): Which of the actors this snapshot introduces its
+            signatures stand behind. Reported and never enforced: a merge legitimately carries
+            records whose authors never signed the snapshot bringing them in, so refusing would
+            refuse reconciliation itself.
         integrity (bool | None): The *other* verification, carried alongside and never combined.
     """
 
@@ -275,6 +292,7 @@ class AuthenticationReport(BaseModel):
     findings: tuple[Finding, ...] = ()
     signatures_required: int = Field(default=1, ge=1)
     stance: SnapshotStance = SnapshotStance.HEAD
+    attribution: AttributionReport | None = None
     integrity: bool | None = None
 
     @property
@@ -430,16 +448,20 @@ class AuthenticationReport(BaseModel):
         Returns:
             Authorship: The summary, with the key named when one is identified.
         """
-        valid = next(
-            (verdict.embedded_key for verdict in self.signatures if verdict.outcome is SignatureOutcome.VALID),
+        chosen = next(
+            (verdict for verdict in self.signatures if verdict.outcome is SignatureOutcome.VALID),
             None,
         )
+        valid = chosen.embedded_key if chosen is not None else None
         if valid is None and self.state is AuthorshipState.ATTRIBUTABLE:
             valid = next(iter(self.attributable_keys), None)
         return Authorship(
             state=self.state,
             snapshot=self.snapshot,
             key=valid,
+            # An attributable key is by definition not in the trust root, so there is no subject to
+            # report for one: nobody in this brain has said whose it is, which is the whole state.
+            subject=chosen.subject if chosen is not None else None,
             trust_root=self.trust_root,
             pinned=self.pinned,
         )
@@ -677,10 +699,12 @@ class Authenticator:
             detail: str | None = None,
             embedded: str | None = None,
             held: tuple[Scope, ...] = (),
+            subject: str | None = None,
         ) -> SignatureVerdict:
             return SignatureVerdict(
                 key=record.key,
                 embedded_key=embedded,
+                subject=subject,
                 claimed_scopes=record.scopes,
                 held_scopes=held,
                 outcome=outcome,
@@ -776,6 +800,7 @@ class Authenticator:
                     f"signatures stand",
                     embedded=embedded.fingerprint,
                     held=held_scopes,
+                    subject=entry.subject,
                 ),
                 embedded.blob,
                 False,
@@ -791,6 +816,7 @@ class Authenticator:
                         f"signature at and after that position is withdrawn",
                         embedded=embedded.fingerprint,
                         held=held_scopes,
+                        subject=entry.subject,
                     ),
                     embedded.blob,
                     True,
@@ -803,6 +829,7 @@ class Authenticator:
                         f"and the chain truncates before it can be ordered against this snapshot",
                         embedded=embedded.fingerprint,
                         held=held_scopes,
+                        subject=entry.subject,
                     ),
                     embedded.blob,
                     False,
@@ -823,11 +850,16 @@ class Authenticator:
                     f"{embedded.fingerprint} is authorized but does not hold: {missing}",
                     embedded=embedded.fingerprint,
                     held=held_scopes,
+                    subject=entry.subject,
                 ),
                 embedded.blob,
                 False,
             )
-        return verdict(outcome, embedded=embedded.fingerprint, held=held_scopes), embedded.blob, False
+        return (
+            verdict(outcome, embedded=embedded.fingerprint, held=held_scopes, subject=entry.subject),
+            embedded.blob,
+            False,
+        )
 
     @staticmethod
     def _compromise_position(key: SshPublicKey, entry: TrustedKey, current: TrustRoot | None) -> OciDigest | None:
@@ -1180,6 +1212,32 @@ class Authenticator:
         stance: SnapshotStance = SnapshotStance.HEAD,
     ) -> AuthenticationReport:
         in_force: TrustRoot | None = position.in_force
+        findings = list(findings)
+        attribution = check_attribution(
+            self.store,
+            snapshot,
+            # Only a signature that actually verified may vouch for a name. A retired, compromised
+            # or under-scoped key still identifies its holder, but letting one stand behind an
+            # actor would make attribution the one place a rejected signature still counted.
+            [
+                verdict.subject
+                for verdict in verdicts
+                if verdict.subject is not None
+                and verdict.outcome in {SignatureOutcome.VALID, SignatureOutcome.VALID_AS_PROPOSAL}
+            ],
+            position.parent,
+        )
+        if not attribution.is_fully_vouched:
+            findings.append(
+                Finding(
+                    kind=FindingKind.ATTRIBUTION_UNVERIFIED,
+                    detail=(
+                        f"snapshot {position.digest.short} names actors its signatures do not stand "
+                        f"behind: {attribution.detail}"
+                    ),
+                    blocking=False,
+                )
+            )
         return AuthenticationReport(
             snapshot=position.digest,
             role=position.role,
@@ -1196,4 +1254,5 @@ class Authenticator:
             findings=tuple(findings),
             signatures_required=self.policy.required_signatures,
             stance=stance,
+            attribution=attribution,
         )

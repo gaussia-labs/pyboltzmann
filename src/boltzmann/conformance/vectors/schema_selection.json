@@ -77,6 +77,120 @@
       "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"procedural\",\"payload\":{\"goal\":\"recover readable text\",\"label\":\"normalize a PDF\",\"steps\":[{\"action\":\"extract text\"},{\"action\":\"strip headers\"}]},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
       "block_id": "sha256:003f7558cd897f933fc82929f1357eea35cabc26ad2bced9fbd7acbccdc4e608",
       "why": "A procedure that uses no later vocabulary stays readable by the oldest client that knows procedures."
+    },
+    {
+      "name": "provenance_naming_nobody_stays_at_one",
+      "memory_type": "provenance",
+      "payload": {
+        "record": {
+          "record_type": "derivation",
+          "block": "sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8",
+          "derived_from": [
+            "sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d"
+          ],
+          "actor": {
+            "id": "alex@example.org",
+            "kind": "human"
+          },
+          "at": "2026-08-31T00:00:00Z",
+          "producer": {
+            "kind": "actor",
+            "id": "alex@example.org"
+          }
+        }
+      },
+      "satisfies": [
+        1
+      ],
+      "schema_version": 1,
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"provenance\",\"payload\":{\"record\":{\"actor\":{\"id\":\"alex@example.org\",\"kind\":\"human\"},\"at\":\"2026-08-31T00:00:00Z\",\"block\":\"sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8\",\"derived_from\":[\"sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d\"],\"producer\":{\"id\":\"alex@example.org\",\"kind\":\"actor\"},\"record_type\":\"derivation\"}},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:da496e9f7a12365b16b945040f3153f35e913fa691d90ca2084f15bff893b4e7",
+      "note": "Version 2 removes a required member rather than adding one, so the two are disjoint rather than nested. A payload carrying producer satisfies version 1 alone."
+    },
+    {
+      "name": "provenance_naming_who_assisted_takes_two",
+      "memory_type": "provenance",
+      "payload": {
+        "record": {
+          "record_type": "derivation",
+          "block": "sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8",
+          "derived_from": [
+            "sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d"
+          ],
+          "actor": {
+            "id": "alex@example.org",
+            "kind": "human"
+          },
+          "at": "2026-08-31T00:00:00Z",
+          "assisted_by": [
+            {
+              "id": "anthropic/claude-code",
+              "kind": "agent",
+              "model": "anthropic/fable-5"
+            }
+          ]
+        }
+      },
+      "satisfies": [
+        2
+      ],
+      "schema_version": 2,
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"provenance\",\"payload\":{\"record\":{\"actor\":{\"id\":\"alex@example.org\",\"kind\":\"human\"},\"assisted_by\":[{\"id\":\"anthropic/claude-code\",\"kind\":\"agent\",\"model\":\"anthropic/fable-5\"}],\"at\":\"2026-08-31T00:00:00Z\",\"block\":\"sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8\",\"derived_from\":[\"sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d\"],\"record_type\":\"derivation\"}},\"schema_version\":2,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:d8f213a04f531908830cccd85c6df8c9de08091c33c0ec821ad7516203b98900",
+      "note": "And the mirror: a payload carrying assisting parties satisfies version 2 alone. Oldest-that-fits needs no new rule for a removal, because 'satisfies' already admits no member a schema does not name."
+    },
+    {
+      "name": "provenance_carrying_both_is_refused",
+      "memory_type": "provenance",
+      "payload": {
+        "record": {
+          "record_type": "derivation",
+          "block": "sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8",
+          "derived_from": [
+            "sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d"
+          ],
+          "actor": {
+            "id": "alex@example.org",
+            "kind": "human"
+          },
+          "at": "2026-08-31T00:00:00Z",
+          "producer": {
+            "kind": "actor",
+            "id": "alex@example.org"
+          },
+          "assisted_by": [
+            {
+              "id": "anthropic/claude-code",
+              "kind": "agent",
+              "model": "anthropic/fable-5"
+            }
+          ]
+        }
+      },
+      "satisfies": [],
+      "refused": true,
+      "note": "producer belongs to version 1 and assisted_by to version 2; a payload with both satisfies neither, and a writer that meant one of them must say which."
+    },
+    {
+      "name": "provenance_carrying_neither_is_refused",
+      "memory_type": "provenance",
+      "payload": {
+        "record": {
+          "record_type": "derivation",
+          "block": "sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8",
+          "derived_from": [
+            "sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d"
+          ],
+          "actor": {
+            "id": "alex@example.org",
+            "kind": "human"
+          },
+          "at": "2026-08-31T00:00:00Z"
+        }
+      },
+      "satisfies": [],
+      "refused": true,
+      "note": "Version 1 obliged a writer to say what produced a derived block. Dropping producer must not quietly relax that into 'derived, and I decline to say by what', so version 2 requires the parties instead."
     }
   ]
 }
