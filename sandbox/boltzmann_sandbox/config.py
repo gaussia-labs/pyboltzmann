@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from boltzmann.blocks.provenance import ActorKind, Collaborator
 from dotenv import load_dotenv
 
 TOKEN_URL: Final = "Docker Hub -> Account settings -> Personal access tokens"
@@ -152,6 +153,12 @@ class Settings:
             address, or a namespaced name. Set ``BOLTZMANN_ACTOR`` to your own; the fallback
             derived from ``$USER`` is namespaced under ``sandbox/`` precisely because a bare
             login name means nothing on any other machine.
+        agent (str): The runtime writing on the actor's behalf, when one is -- an MCP client, an
+            agent harness. Empty when a person is driving directly. Recorded beside the actor, not
+            instead of it: the actor is whose account the work runs under, and the agent is what
+            did it.
+        agent_model (str): The model that agent ran, when it is known. Empty otherwise, which is a
+            smaller claim than naming a model that was guessed.
         username (str): Registry account, empty when anonymous.
         token (str): Registry token, empty when anonymous.
         anonymous (bool): Whether to talk to the registry without credentials.
@@ -163,10 +170,34 @@ class Settings:
     tag: str
     brain_path: Path
     actor: str
+    agent: str
+    agent_model: str
     username: str
     token: str
     anonymous: bool
     insecure: bool
+
+    @property
+    def assisting(self) -> list[Collaborator]:
+        """Who takes part besides the actor, as provenance will record them.
+
+        Empty when a person is working alone, which is what keeps those records at schema version 1
+        with the bytes they would have had before assisting parties existed. The runtime and the
+        model it ran stay one entry, because the same model under a different harness is a
+        different collaborator.
+
+        Returns:
+            list[Collaborator]: The assisting parties, or empty.
+        """
+        if not self.agent:
+            return []
+        return [
+            Collaborator(
+                id=self.agent,
+                kind=ActorKind.AGENT,
+                model=self.agent_model or None,
+            )
+        ]
 
     @property
     def reference(self) -> str:
@@ -248,6 +279,8 @@ def load(env_file: Path | str | None = None) -> Settings:
         tag=_text("BOLTZMANN_TAG", DEFAULT_TAG),
         brain_path=_resolve(_text("BOLTZMANN_BRAIN_PATH", DEFAULT_BRAIN_PATH), source),
         actor=_text("BOLTZMANN_ACTOR", _sandbox_actor()),
+        agent=_text("BOLTZMANN_AGENT"),
+        agent_model=_text("BOLTZMANN_AGENT_MODEL"),
         username=username,
         token=token,
         anonymous=anonymous,

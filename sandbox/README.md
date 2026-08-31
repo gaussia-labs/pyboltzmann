@@ -61,7 +61,9 @@ $EDITOR .env
 | `DOCKER_TOKEN` | **yes** | A **Personal Access Token**, not your password |
 | `BOLTZMANN_TAG` | no (`latest`) | Tag that push and pull default to |
 | `BOLTZMANN_BRAIN_PATH` | no (`./brain`) | The on-disk OCI layout. This directory *is* the brain |
-| `BOLTZMANN_ACTOR` | no (`$USER`) | Who registers knowledge; provenance records it on every write |
+| `BOLTZMANN_ACTOR` | no (`sandbox/$USER`) | Who registers knowledge. An actor identifier — an address, or a `namespace/name` |
+| `BOLTZMANN_AGENT` | no | The runtime writing on their behalf, e.g. `anthropic/claude-code`. Recorded beside the actor, never instead of it |
+| `BOLTZMANN_AGENT_MODEL` | no | The model that agent ran, e.g. `anthropic/fable-5`. Empty beats a guess |
 | `BOLTZMANN_ANONYMOUS` | no (`0`) | `1` to talk to a registry with no credentials |
 | `BOLTZMANN_INSECURE` | no (`0`) | `1` to allow plain HTTP; local registries only |
 

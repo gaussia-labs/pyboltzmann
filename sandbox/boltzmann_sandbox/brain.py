@@ -62,12 +62,14 @@ def open_brain(settings: Settings, path: Path | None = None) -> Brain:
             passes an explicit one to install into a second, empty brain.
 
     Returns:
-        Brain: A brain with a hybrid planner, indices, and canonical drops permitted.
+        Brain: A brain with a hybrid planner, indices, canonical drops permitted, and whatever
+        agent is configured recorded beside the actor on every write.
     """
     indices = build_indices()
     return Brain.open(
         path if path is not None else settings.brain_path,
         actor=Actor(id=settings.actor, kind=ActorKind.HUMAN),
+        assisted_by=settings.assisting,
         planner=HybridPlanner(indices),
         indices=indices,
         policy=RetentionPolicy(canonical_drop_allowed=True),

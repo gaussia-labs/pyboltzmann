@@ -32,7 +32,7 @@ from typing import Any, ClassVar, Final
 
 from boltzmann.blocks.base import Block
 from boltzmann.identity.digest import BlockId
-from boltzmann.indices.base import AbstractIndex, IndexKind
+from boltzmann.indices.base import AbstractIndex, ContentReader, IndexKind
 from boltzmann.query.scan import searchable_text
 
 _WORD = re.compile(r"[a-z0-9]+")
@@ -144,7 +144,7 @@ class InvertedIndex(AbstractIndex):
         self.postings: dict[str, dict[BlockId, int]] = {}
         self.documents = 0
 
-    def build(self, blocks: Iterable[Block]) -> None:
+    def build(self, blocks: Iterable[Block], content: ContentReader) -> None:
         """
         Populate from a composition, discarding whatever was indexed before.
 
@@ -153,6 +153,9 @@ class InvertedIndex(AbstractIndex):
 
         Args:
             blocks (Iterable[Block]): The blocks of the version being indexed.
+            content (ContentReader): Resolves the bytes a block names but does not carry. Accepted and
+                unused: term matching reads the symbolic fields, and fetching a datum per block to index
+                text that is already in the payload would make every commit pay for nothing.
         """
         self.postings = {}
         self.documents = 0
@@ -247,12 +250,15 @@ class VectorIndex(AbstractIndex):
         """The model behind these vectors."""
         return self.MODEL_TAG
 
-    def build(self, blocks: Iterable[Block]) -> None:
+    def build(self, blocks: Iterable[Block], content: ContentReader) -> None:
         """
         Embed every block, discarding whatever was indexed before.
 
         Args:
             blocks (Iterable[Block]): The blocks of the version being indexed.
+            content (ContentReader): Resolves the bytes a block names but does not carry. Accepted and
+                unused for the same reason as above: this is a bag-of-words example, and the datum it
+                would fetch is not text it could embed.
         """
         self.vectors = {}
         for block in blocks:
