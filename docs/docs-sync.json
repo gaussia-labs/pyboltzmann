@@ -33,6 +33,7 @@
           "sdks/boltzmann/guides/retention",
           "sdks/boltzmann/guides/distribution",
           "sdks/boltzmann/guides/authenticity",
+          "sdks/boltzmann/guides/attribution",
           "sdks/boltzmann/guides/reconciliation",
           "sdks/boltzmann/guides/conformance"
         ]
