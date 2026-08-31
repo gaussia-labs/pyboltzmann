@@ -28,6 +28,7 @@ Every one is `runtime_checkable`:
 from boltzmann import BoltzmannProtocol, Brain, BrainReader
 
 assert isinstance(my_client, BrainReader)
+curator = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 assert isinstance(Brain.open("./b", actor=curator), BoltzmannProtocol)
 ```
 

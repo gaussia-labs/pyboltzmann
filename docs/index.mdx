@@ -8,6 +8,8 @@ against an OCI artifact. `Brain` implements the complete protocol, including hie
 navigation.
 
 ```python
+curator = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
+
 brain = Brain.open("./my-brain", actor=curator)
 brain.ingest(pdf, request, my_llm)          # register → delegate → validate → commit
 brain.search(Query(text="Fourier"))         # filter, resolve, verify

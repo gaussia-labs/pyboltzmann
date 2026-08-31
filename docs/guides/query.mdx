@@ -109,6 +109,7 @@ class MyPlanner:
     def plan(self, query: Query, modules: dict[MemoryType, Module]) -> EvidenceBundle:
         ...
 
+curator = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 brain = Brain.open("./my-brain", actor=curator, planner=MyPlanner())
 ```
 

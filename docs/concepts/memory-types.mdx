@@ -150,7 +150,7 @@ EpisodicBlock(
 ## Provenance
 
 A single immutable entry in the provenance ledger. You do not construct these — the brain writes them,
-and every one of the six record types is discriminated on `record_type`:
+and every one of the seven record types is discriminated on `record_type`:
 
 | Record | Written when |
 | --- | --- |
@@ -159,7 +159,12 @@ and every one of the six record types is discriminated on `record_type`:
 | `normalization` | A normalized view was produced from an original blob |
 | `supersession` | A block takes precedence over an earlier one |
 | `demotion` | A block's retrieval priority was lowered |
+| `validation` | A committed block received its verdict, under which checks |
 | `removal` | Knowledge left the brain, and by which mechanism |
+
+Every one of them names an `actor`, and every one but `removal` may name who
+[assisted](/sdks/boltzmann/guides/attribution) — the agents a session ran through, a second person in
+it. The actor is whose account the work ran under; the assisting parties are what did it.
 
 Reading the ledger back is what makes cascades and accessibility computable:
 

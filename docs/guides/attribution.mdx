@@ -1,0 +1,134 @@
+---
+title: "Attribution"
+description: "Who performed an operation, who assisted, and which of those names a signature stands behind."
+---
+
+Provenance has always recorded *what* happened precisely. Who did it was the weak part: `Actor.id` was an
+unconstrained string, and since most brains are hydrated through an agent, the record of who actually did
+the work was missing entirely.
+
+Three things answer it now, and they are deliberately separate.
+
+| | Answers | Verified against a key? |
+| --- | --- | --- |
+| `actor` | Who performed the operation | Yes |
+| `assisted_by` | Who else took part — people and agents | **Never** |
+| `TrustedKey.subject` | Whose key that is | It *is* the verification |
+
+<Note>
+  **The protocol assigns no responsibility.** There is an actor, and there is whoever assisted. Who answers
+  for a piece of knowledge is a matter for the deployment, the jurisdiction and the people involved — a
+  field claiming to settle it would be one every implementation had to interpret, and none of them would
+  agree.
+</Note>
+
+## Identifying an actor
+
+A provenance record is a block, so the identifier is hashed into `block_id`. Two spellings of one person
+are two names for one fact — see [Actor identifiers](/sdks/boltzmann/concepts/identity#actor-identifiers)
+for the grammar and why it is refused rather than normalized.
+
+```python
+from boltzmann import Actor, Brain, Collaborator
+from boltzmann.blocks import ActorKind
+
+alex = Actor(id="alex@alquimia.ai", kind=ActorKind.HUMAN, name="Alex Fiorenza")
+```
+
+## Recording who assisted
+
+Set it once on the handle and every entry it writes carries it:
+
+```python
+brain = Brain.open(
+    "./my-brain",
+    actor=alex,
+    assisted_by=[
+        Collaborator(id="anthropic/claude-code", kind=ActorKind.AGENT, model="anthropic/fable-5"),
+        Collaborator(id="juan@example.org", kind=ActorKind.HUMAN),
+    ],
+)
+```
+
+```json
+"actor": { "id": "alex@alquimia.ai", "kind": "human", "name": "Alex Fiorenza" },
+"assisted_by": [
+  { "id": "anthropic/claude-code", "kind": "agent", "model": "anthropic/fable-5" },
+  { "id": "juan@example.org", "kind": "human" }
+]
+```
+
+People and agents share one shape, so reading "who took part" never branches. An agent names the model it
+ran **in the same entry**, because the same model under a different harness is a different collaborator —
+the harness decides what the model sees, how many turns it gets, and which tools it can reach. Keeping them
+together is what stays unambiguous when several agents write into one snapshot.
+
+A person carries no `model`; naming one is refused, because it reads as "this person is a model" to
+everything that groups by model — including a batch invalidation, which would then reach a person's work.
+
+<Warning>
+  **No version strings.** A version is the field most likely to be invented by whoever fills the record in,
+  it ages faster than everything beside it, and it buys less than the identity it would sit next to. This is
+  the one place the protocol gives something up for it: `drop_by_producer` reaches everything a model made
+  rather than one release of it.
+</Warning>
+
+## What it costs to record nobody
+
+Nothing, and that is the design. A record naming no one stays at **schema version 1** with the bytes — and
+the `block_id` — it had before any of this existed:
+
+```python
+solo = Brain.open("./my-brain", actor=alex)     # no assisted_by
+```
+
+Only a record that actually names someone pays for version 2, so a brain stops being readable by an older
+client exactly at the point where it genuinely uses something that client has no schema for.
+
+<Note>
+  **A removal never leaves version 1**, even in a session that names assisting parties. It is the one record
+  a verifier must *decode* to decide a blocking question — the removal invariant asks whether every absent
+  block has a reachable record explaining it. A client without the v2 schema would read a valid brain, miss
+  the record, and reject the snapshot for violating an invariant it satisfies. Not being able to read
+  something must never be reported as that thing being wrong.
+</Note>
+
+## Which names a signature stands behind
+
+Until a key stands behind it, an actor is a *declared* identifier: whoever can write to a brain can write
+any name into its audit trail. [`TrustedKey.subject`](/sdks/boltzmann/guides/authenticity#creating-a-governed-brain)
+is what makes it checkable.
+
+```python
+attribution = brain.audit_attribution()
+
+attribution.verified          # actors a signing key vouches for
+attribution.asserted          # actors nobody vouches for
+attribution.legacy            # identifiers written before the form rule
+attribution.is_fully_vouched
+```
+
+It **reports and never refuses**. A snapshot legitimately names actors that never signed it — every merge
+does, since reconciliation brings another party's records into a history your key signs — so refusing would
+refuse reconciliation itself. `asserted` and `legacy` are kept apart because the remedies differ: one needs
+a governance act, the other needs a rewrite nobody can perform on bytes already published.
+
+## Batch invalidation, across both shapes
+
+A brain holds records of both versions at once, so one query looks in two places. A query that read only
+one would silently miss blocks, which is worse than reaching further than necessary.
+
+```python
+from boltzmann.retention import ProducerDropRequest
+from boltzmann.blocks import Producer, ProducerKind
+
+brain.drop_by_producer(ProducerDropRequest(
+    producer=Producer(kind=ProducerKind.MODEL, id="anthropic/fable-5"),
+    memory_types=[MemoryType.SEMANTIC],
+    actor=alex,
+    reason="the extraction prompt cited the wrong section",
+))
+```
+
+A version given in the query still narrows version-1 records, and cannot narrow version-2 ones. A person is
+never matched as a model — a human collaborator carries none, so asking for one cannot reach their work.
