@@ -39,6 +39,7 @@ root = TrustRoot(
     keys=(
         TrustedKey(
             key=signer.public_key,
+            subject=signer.suggested_subject,      # or your own: "alex@example.org"
             scopes=(Scope.INGEST, Scope.COMMIT, Scope.GOVERN),
             since=1,
         ),
@@ -46,6 +47,25 @@ root = TrustRoot(
 )
 brain = Brain.init("./brain", actor=curator, trust_root=root, signers=[signer])
 ```
+
+`subject` names who holds the key, as an [actor identifier](/sdks/boltzmann/concepts/identity#actor-identifiers).
+It is the one thing that connects a signature to the actor a provenance record names — without it, provenance
+says a person and the signature says a fingerprint, and nothing asserts they are the same.
+
+<Note>
+  **It is not a certificate.** A subject is asserted by *this brain's* governance and nowhere else: changing
+  one changes the trust root, which is a revision, which needs a quorum. It is as trustworthy as that quorum
+  and no more. Whether a key really belongs to a particular person in the world is still settled outside the
+  protocol — what a subject adds is that once it *is* settled, the conclusion lives where a verifier reads it
+  instead of in a maintainer's memory.
+
+  `AgentSigner.suggested_subject` offers the key's ssh-agent comment when it already is an actor identifier,
+  which it usually is. Offered, never adopted: the comment is a label the key's own holder typed, so a quorum
+  has to make the claim deliberately.
+</Note>
+
+Omitting it costs nothing. An absent subject is left out of the canonical bytes entirely, so a trust root that
+names none has exactly the digest it had before this member existed, and every pin against it still holds.
 
 A genesis proves nothing by itself — any party can construct an indistinguishable one. What gives it
 meaning happens outside: consumers **pin** the trust root's digest on first contact, and from that moment
@@ -61,6 +81,7 @@ report.state                             # authorized | unsigned | attributable 
 report.role                              # genesis | ordinary | revision
 report.required_scopes                   # computed from the diff against the first parent
 report.outcomes()                        # one verdict per signature, by fingerprint
+report.authorship().subject              # who the trust root says holds the key that signed
 report.findings                          # everything blocking or diagnostic, named
 report.require_authorized()              # or raise the most specific typed error
 ```

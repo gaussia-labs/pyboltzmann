@@ -182,6 +182,10 @@ class SignatureVerdict(BaseModel):
         key (str): The fingerprint the record names.
         embedded_key (str | None): The fingerprint of the key actually inside the signature
             blob, when the armor parses. This one is the authority; the named one is an index.
+        subject (str | None): Who the trust root says holds the key, when it says. A fingerprint
+            answers *which* key signed and nothing at all about whose it is, which is why a
+            consumer reading a report has had no way to connect a signature to the actor a
+            provenance record names.
         claimed_scopes (tuple[Scope, ...]): What the record claims -- diagnosis, never decision.
         held_scopes (tuple[Scope, ...]): What the trust root in force actually grants the key.
         outcome (SignatureOutcome): The fate.
@@ -192,6 +196,7 @@ class SignatureVerdict(BaseModel):
 
     key: str
     embedded_key: str | None = None
+    subject: str | None = None
     claimed_scopes: tuple[Scope, ...] = ()
     held_scopes: tuple[Scope, ...] = ()
     outcome: SignatureOutcome
@@ -216,6 +221,8 @@ class Authorship(BaseModel):
         state (AuthorshipState): Authorized, unsigned, or unauthorized.
         snapshot (OciDigest): The snapshot the evidence was served from.
         key (str | None): A fingerprint that authorized it, when one did.
+        subject (str | None): Who the trust root says holds that key. A bundle whose only answer to
+            "who" is a base64 hash makes the reader go looking; this is the answer they were after.
         trust_root (OciDigest | None): The trust root in force at that position.
         pinned (bool): Whether that trust root is anchored by this consumer's pin.
     """
@@ -225,6 +232,7 @@ class Authorship(BaseModel):
     state: AuthorshipState
     snapshot: OciDigest
     key: str | None = None
+    subject: str | None = None
     trust_root: OciDigest | None = None
     pinned: bool = False
 
@@ -430,16 +438,20 @@ class AuthenticationReport(BaseModel):
         Returns:
             Authorship: The summary, with the key named when one is identified.
         """
-        valid = next(
-            (verdict.embedded_key for verdict in self.signatures if verdict.outcome is SignatureOutcome.VALID),
+        chosen = next(
+            (verdict for verdict in self.signatures if verdict.outcome is SignatureOutcome.VALID),
             None,
         )
+        valid = chosen.embedded_key if chosen is not None else None
         if valid is None and self.state is AuthorshipState.ATTRIBUTABLE:
             valid = next(iter(self.attributable_keys), None)
         return Authorship(
             state=self.state,
             snapshot=self.snapshot,
             key=valid,
+            # An attributable key is by definition not in the trust root, so there is no subject to
+            # report for one: nobody in this brain has said whose it is, which is the whole state.
+            subject=chosen.subject if chosen is not None else None,
             trust_root=self.trust_root,
             pinned=self.pinned,
         )
@@ -677,10 +689,12 @@ class Authenticator:
             detail: str | None = None,
             embedded: str | None = None,
             held: tuple[Scope, ...] = (),
+            subject: str | None = None,
         ) -> SignatureVerdict:
             return SignatureVerdict(
                 key=record.key,
                 embedded_key=embedded,
+                subject=subject,
                 claimed_scopes=record.scopes,
                 held_scopes=held,
                 outcome=outcome,
@@ -776,6 +790,7 @@ class Authenticator:
                     f"signatures stand",
                     embedded=embedded.fingerprint,
                     held=held_scopes,
+                    subject=entry.subject,
                 ),
                 embedded.blob,
                 False,
@@ -791,6 +806,7 @@ class Authenticator:
                         f"signature at and after that position is withdrawn",
                         embedded=embedded.fingerprint,
                         held=held_scopes,
+                        subject=entry.subject,
                     ),
                     embedded.blob,
                     True,
@@ -803,6 +819,7 @@ class Authenticator:
                         f"and the chain truncates before it can be ordered against this snapshot",
                         embedded=embedded.fingerprint,
                         held=held_scopes,
+                        subject=entry.subject,
                     ),
                     embedded.blob,
                     False,
@@ -823,11 +840,16 @@ class Authenticator:
                     f"{embedded.fingerprint} is authorized but does not hold: {missing}",
                     embedded=embedded.fingerprint,
                     held=held_scopes,
+                    subject=entry.subject,
                 ),
                 embedded.blob,
                 False,
             )
-        return verdict(outcome, embedded=embedded.fingerprint, held=held_scopes), embedded.blob, False
+        return (
+            verdict(outcome, embedded=embedded.fingerprint, held=held_scopes, subject=entry.subject),
+            embedded.blob,
+            False,
+        )
 
     @staticmethod
     def _compromise_position(key: SshPublicKey, entry: TrustedKey, current: TrustRoot | None) -> OciDigest | None:

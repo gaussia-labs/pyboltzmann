@@ -30,6 +30,7 @@ from boltzmann.authenticity.keys import SshPublicKey
 from boltzmann.authenticity.scopes import Scope
 from boltzmann.constants import PROTOCOL_VERSION, SNAPSHOT_NAMESPACE
 from boltzmann.identity.digest import OciDigest
+from boltzmann.identity.principal import parse_actor_id
 from boltzmann.identity.serialization import canonicalize
 
 
@@ -41,6 +42,23 @@ class TrustedKey(BaseModel):
         key (SshPublicKey): The public key, in the canonical two-field authorized_keys form. A
             key with a comment or an options prefix is rejected outright: two spellings of one
             key would be two different trust-root digests, and a pin has to mean something.
+        subject (str | None): Who holds the key, as an actor identifier. This is what finally
+            connects the two halves of the paper's own promise -- that a signature is what turns a
+            declared actor into an authenticated identity -- because without it a snapshot's
+            provenance names a person, its signature names a fingerprint, and nothing asserts the
+            two are the same.
+
+            The claim it makes is narrow on purpose. A subject is asserted by *this brain's*
+            governance and nowhere else: changing one changes the trust root, which is a revision,
+            which needs a quorum evaluated against the previous revision. It is as trustworthy as
+            that quorum and no more, and it is not a certificate. The grounds for believing a key
+            belongs to a particular person in the world stay outside the protocol; what a subject
+            adds is that once those grounds exist, the conclusion is written where a verifier will
+            read it instead of living in a maintainer's memory.
+
+            Absent is the ordinary case for a brain that never needed it, and an absent subject is
+            omitted rather than serialized as null, so a trust root that names none keeps exactly
+            the digest it had before this member existed and every pin against it still holds.
         scopes (tuple[Scope, ...]): What this key is authorized to do. Order is preserved as
             authored -- the document travels as bytes and is never reconstructed -- but a scope
             listed twice is rejected, because a duplicate changes the digest while changing
@@ -60,6 +78,7 @@ class TrustedKey(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     key: SshPublicKey
+    subject: str | None = None
     scopes: tuple[Scope, ...] = Field(min_length=1)
     since: int = Field(ge=1)
     retired_from: int | None = Field(default=None, ge=1)
@@ -67,9 +86,15 @@ class TrustedKey(BaseModel):
 
     @model_validator(mode="after")
     def _reject_incoherent_positions(self) -> Self:
-        """A scope listed twice changes the digest while changing nothing, and a key retired at or
-        before its own admission was never authorized at all -- both are authoring mistakes, not
-        states."""
+        """Authoring mistakes, caught where they are made rather than where they surface.
+
+        A scope listed twice changes the digest while changing nothing; a key retired at or before
+        its own admission was never authorized at all; and a subject that is not an actor
+        identifier could never be compared against one a provenance record claims, which is the
+        only thing a subject is for.
+        """
+        if self.subject is not None:
+            parse_actor_id(self.subject, field=f"subject of key {self.key.fingerprint}")
         if len(set(self.scopes)) != len(self.scopes):
             listed = ", ".join(scope.value for scope in self.scopes)
             raise ValueError(f"a key's scopes are a set; {self.key.fingerprint} lists one twice: {listed}")
