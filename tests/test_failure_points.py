@@ -16,6 +16,7 @@ from __future__ import annotations
 import gzip
 import io
 import json
+import math
 import tarfile
 import time
 from pathlib import Path
@@ -311,19 +312,40 @@ def test_merkle_verify_scales_subquadratically() -> None:
     per tree, which is O(n) of them, so the same 2000 blocks take milliseconds.
     """
 
-    def elapsed(count: int) -> float:
+    def elapsed(count: int, repetitions: int = 5) -> float:
+        """The fastest of several runs, which is the only statistic worth comparing here.
+
+        A mean or a single sample measures the machine as much as the code: a shared runner
+        preempts the process, and the delay lands inside the timed section. Noise can only ever make
+        a run *slower*, never faster, so the minimum is the closest reading to the work actually
+        performed -- and taking it costs a few milliseconds.
+
+        This matters because the threshold below is narrow on purpose. Doubling the leaves costs
+        twice as much when the implementation is linear and four times when it is quadratic, so the
+        bar sits between at three, and a single noisy sample can clear it while the code is fine.
+        Widening the bar instead would have retired the assertion: at four it stops distinguishing
+        the two shapes, which is the whole question.
+
+        A fresh tree per repetition, deliberately. ``MerkleTree`` memoizes its internal nodes, so
+        verifying the same instance twice would time a warm cache the second time and report a
+        speed nothing in production ever sees. The leaves are built once, outside the timer, since
+        constructing them is not what is being measured.
+        """
         leaves = [
             SemanticBlock(label=f"l{index}", statement=f"s{index}", kind=SemanticKind.FACT).block_id
             for index in range(count)
         ]
-        tree = MerkleTree(leaves)
-        start = time.perf_counter()
-        tree.verify()
-        return time.perf_counter() - start
+        best = math.inf
+        for _ in range(repetitions):
+            tree = MerkleTree(leaves)
+            start = time.perf_counter()
+            tree.verify()
+            best = min(best, time.perf_counter() - start)
+        return best
 
     baseline = elapsed(500)
     doubled = elapsed(1000)
-    assert doubled < baseline * 3
+    assert doubled < baseline * 3, f"doubling the leaves cost {doubled / baseline:.2f}x, not the linear 2x"
 
 
 def test_planning_a_multi_block_drop_does_not_rescan_per_block() -> None:
