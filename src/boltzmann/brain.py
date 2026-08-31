@@ -34,6 +34,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from boltzmann.authenticity.attribution import AttributionReport
 from boltzmann.authenticity.authenticator import (
     AuthenticationReport,
     Authenticator,
@@ -1459,6 +1460,30 @@ class Brain:
                 bucket.setdefault(memory_type, []).append(block_id)
 
         return ValidationAudit(accounted=accounted, unaccounted=unaccounted)
+
+    def audit_attribution(self) -> AttributionReport:
+        """
+        Report which actors this snapshot introduces its signatures actually stand behind.
+
+        The reader half of the trust root's ``subject``. Until a key stands behind a name, the
+        actor a provenance record carries is a *declared* identifier -- whoever can write to a
+        brain can write any name into its audit trail -- and this is where the names and the
+        signatures are finally put side by side.
+
+        It reports and never refuses, and it must. A snapshot legitimately names actors that never
+        signed it: every merge does, because reconciliation brings another party's records into a
+        history the local key signs. Refusing an unvouched actor would refuse reconciliation
+        itself. What must not happen is for it to pass unremarked, since an actor nobody vouches
+        for is exactly what every actor was before subjects existed.
+
+        Assisting parties are not compared. Nothing expects a model to have signed anything, and
+        counting their absence would bury the one comparison that means something.
+
+        Returns:
+            AttributionReport: Actors backed by a signature, actors backed by nothing, actors whose
+            identifier predates the form rule, and whatever could not be read.
+        """
+        return self.authenticate().attribution or AttributionReport(snapshot=self._snapshot.digest)
 
     def open_index(self, memory_type: MemoryType, kind: IndexKind) -> Index:
         """
