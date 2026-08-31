@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 # where `pygaussia` provides `gaussia`. What a user types to install and what they type to import differ
 # by three letters, which is why the README says both.
 name = "pyboltzmann"
-version = "0.8.0"
+version = "0.9.0-b.1"
 description = "An SDK for the Boltzmann Protocol: portable, verifiable, model-agnostic knowledge"
 readme = "README.md"
 license = {text = "MIT"}

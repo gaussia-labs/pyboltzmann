@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v0.9.0-b.1 (2026-08-31)
+
+### Features
+
+- **identity**: Give an actor an identifier two implementations resolve
+  ([`a22853f`](https://github.com/gaussia-labs/pyboltzmann/commit/a22853f655e8356d543b88723650ae26ce1e1adc))
+
+Actor.id was an unconstrained string, and the repository spelled it five ways: role nouns, a first
+  name, $USER. A provenance record is a block, so that string is hashed into block_id -- two
+  spellings of one person are two names for one fact, and neither party fails. It is the divergence
+  canonical serialization exists to prevent, arriving through a field nobody had canonicalized.
+
+An identifier now takes one of two forms: an address, or a namespaced name. Lowercase ASCII, refused
+  rather than normalized, because lowering one would mint a block_id the caller neither asked for
+  nor can predict.
+
+The check is deliberately asymmetric. Actor itself stays permissive, since every record ever written
+  decodes through it and a validator on the type would strand every brain that predates the rule.
+  Enforcement attaches where an identifier is chosen -- Brain.__init__ and the request models --
+  where a caller can still be told what to choose instead.
+
+The sandbox derived its actor from $USER, a name that resolves on one machine and nowhere else; the
+  fallback is now namespaced under sandbox/ to say so.
+
+
 ## v0.8.0 (2026-08-31)
 
 
