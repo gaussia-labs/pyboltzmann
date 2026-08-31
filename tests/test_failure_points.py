@@ -38,7 +38,7 @@ from boltzmann.retention.requests import ProducerDropRequest
 from boltzmann.store.memory import MemoryBlockStore
 from boltzmann.store.oci_layout import OciLayoutStore
 
-ACTOR = Actor(kind=ActorKind.HUMAN, id="auditor")
+ACTOR = Actor(kind=ActorKind.HUMAN, id="auditor@example.org")
 REDACTING_POLICY = RetentionPolicy(redactable_media_types=["*"])
 
 

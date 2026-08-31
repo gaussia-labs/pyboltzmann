@@ -57,6 +57,20 @@ def _text(name: str, default: str = "") -> str:
     return (os.environ.get(name) or "").strip() or default
 
 
+def _sandbox_actor() -> str:
+    """A usable actor identifier when nobody set one.
+
+    A login name is not an identifier: it names a person on one machine and nobody anywhere else,
+    which is the whole reason the form exists. Namespacing it under ``sandbox`` keeps the fallback
+    working and keeps it honest about what it is -- and anything that survives no character rule
+    falls back to the namespace alone rather than producing a brain nobody can open.
+    """
+    from boltzmann.identity.principal import is_actor_id
+
+    candidate = f"sandbox/{_text('USER', 'anonymous').lower()}"
+    return candidate if is_actor_id(candidate) else "sandbox/anonymous"
+
+
 def _resolve(value: str, source: Path) -> Path:
     """
     A configured path, made absolute.
@@ -133,7 +147,11 @@ class Settings:
             what they typed.
         tag (str): Tag that push and pull default to.
         brain_path (Path): The on-disk OCI layout. This directory *is* the brain.
-        actor (str): Who registers knowledge. Provenance records it on every write.
+        actor (str): Who registers knowledge. Provenance records it on every write, and it is
+            hashed into every block that names it, so it must be an actor identifier: an
+            address, or a namespaced name. Set ``BOLTZMANN_ACTOR`` to your own; the fallback
+            derived from ``$USER`` is namespaced under ``sandbox/`` precisely because a bare
+            login name means nothing on any other machine.
         username (str): Registry account, empty when anonymous.
         token (str): Registry token, empty when anonymous.
         anonymous (bool): Whether to talk to the registry without credentials.
@@ -229,7 +247,7 @@ def load(env_file: Path | str | None = None) -> Settings:
         configured=registry,
         tag=_text("BOLTZMANN_TAG", DEFAULT_TAG),
         brain_path=_resolve(_text("BOLTZMANN_BRAIN_PATH", DEFAULT_BRAIN_PATH), source),
-        actor=_text("BOLTZMANN_ACTOR", _text("USER", "sandbox")),
+        actor=_text("BOLTZMANN_ACTOR", _sandbox_actor()),
         username=username,
         token=token,
         anonymous=anonymous,

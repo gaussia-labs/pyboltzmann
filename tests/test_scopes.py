@@ -26,7 +26,7 @@ from boltzmann.module.composition import Composition
 from boltzmann.module.snapshot import ModuleRef, Snapshot
 from boltzmann.store.memory import MemoryBlockStore
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 
 
 def trust_root(revision: int = 1) -> TrustRoot:

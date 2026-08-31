@@ -34,7 +34,7 @@ from boltzmann.retention.policy import RetentionPolicy
 from boltzmann.store.memory import MemoryBlockStore
 from boltzmann.store.oci_layout import OciLayoutStore
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
 REQUEST = RegistrationRequest(media_type="application/pdf", actor=CURATOR)
 REFERENCE = "registry.example/org/brain"

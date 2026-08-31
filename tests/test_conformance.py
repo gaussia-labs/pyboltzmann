@@ -66,7 +66,7 @@ class TestBrainAsReader(BrainReaderConformance):
     """
 
     def make_reader(self) -> Brain:
-        actor = Actor(id="conformance", kind=ActorKind.HUMAN)
+        actor = Actor(id="conformance@example.org", kind=ActorKind.HUMAN)
         brain = Brain(MemoryBlockStore(), actor=actor)
         source = brain.register(
             b"%PDF-1.7 lecture notes on Fourier analysis",

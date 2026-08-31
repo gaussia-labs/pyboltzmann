@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from boltzmann.blocks.provenance import Actor
+from boltzmann.blocks.provenance import WritingActor
 from boltzmann.identity.digest import BlockId
 from boltzmann.ingest.commit import CommitResult
 
@@ -44,7 +44,7 @@ class RegistrationRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     media_type: str = Field(min_length=1)
-    actor: Actor
+    actor: WritingActor
     origin: str | None = None
     license: str | None = None
     retention_policy: str | None = None

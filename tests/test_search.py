@@ -25,7 +25,7 @@ from boltzmann.query.request import Query, RetrievalMode
 from boltzmann.query.scan import STOPWORDS, ProvenanceView, content_terms, searchable_text
 from boltzmann.store.memory import MemoryBlockStore
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
 PDF = b"%PDF-1.7 Lecture 07: a periodic function decomposes into sines and cosines"
 

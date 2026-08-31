@@ -33,7 +33,7 @@ from boltzmann.module.snapshot import Snapshot
 from boltzmann.store.memory import MemoryBlockStore
 
 PDF = b"%PDF-1.7 Lecture 07: a periodic function decomposes into sines and cosines."
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN, name="Example Curator")
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN, name="Example Curator")
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="2026-07")
 
 
@@ -140,7 +140,9 @@ class TestRegister:
         self, brain: Brain, request_: RegistrationRequest
     ) -> None:
         first = brain.register(PDF, request_)
-        other = RegistrationRequest(media_type="application/pdf", actor=Actor(id="sam", kind=ActorKind.AGENT))
+        other = RegistrationRequest(
+            media_type="application/pdf", actor=Actor(id="example.com/sam", kind=ActorKind.AGENT)
+        )
         assert brain.register(PDF, other).block_id == first.block_id
 
     def test_different_bytes_are_different_evidence(self, brain: Brain, request_: RegistrationRequest) -> None:

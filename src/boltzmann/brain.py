@@ -146,6 +146,7 @@ from boltzmann.exceptions import (
     UnsignedBrainError,
 )
 from boltzmann.identity.digest import BlockId, Digest, MerkleRoot, OciDigest
+from boltzmann.identity.principal import parse_actor_id
 from boltzmann.identity.serialization import canonicalize, parse_json_strict
 from boltzmann.identity.time import utc_timestamp
 from boltzmann.indices.base import Index, IndexKind, TravellingIndex
@@ -399,6 +400,10 @@ class Brain:
             validators (Sequence[Validator] | None): Checks to run at the validation gate.
         """
         self.store = store
+        # Checked here rather than on Actor, so that a brain written before this rule still reads.
+        # A handle is where an identifier is chosen, which is the last moment a caller can be told
+        # what to choose instead.
+        parse_actor_id(actor.id, field="actor id")
         self.actor = actor
         self.policy = policy if policy is not None else RetentionPolicy()
         self.planner = planner
