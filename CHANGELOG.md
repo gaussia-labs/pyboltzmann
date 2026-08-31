@@ -1,6 +1,36 @@
 # CHANGELOG
 
 
+## v0.9.0-b.4 (2026-08-31)
+
+### Features
+
+- **authenticity**: Report which claimed actors a signature vouches for
+  ([`a02488f`](https://github.com/gaussia-labs/pyboltzmann/commit/a02488fa2c6564bc518df0fc4637faf2f35f9fcd))
+
+The reader half of the trust root's subject. Until a key stands behind a name, the actor in a
+  provenance record is a declared identifier -- whoever can write to a brain can write any name into
+  its audit trail -- and this is where the names and the signatures are finally put side by side.
+
+Reported, never enforced, and the restraint is the point. A snapshot legitimately names actors that
+  never signed it: every merge does, because reconciliation brings another party's records into a
+  history the local key signs. Refusing an unvouched actor would refuse reconciliation itself. What
+  must not happen is passing unremarked, since an unvouched actor is exactly what every actor was
+  before subjects existed.
+
+Only the records a snapshot introduces are compared -- judging inherited ones would re-report every
+  ancestor's contributors at every position -- and only against keys whose signature actually
+  verified, so a retired or under-scoped key identifies its holder without vouching for anyone.
+
+asserted and legacy are kept apart because the remedies differ: one is a governance act, the other a
+  rewrite nobody can perform on published bytes. Assisting parties are never compared; nothing
+  expects a model to hold a key.
+
+check_attribution follows removals.py, including its resolvable/undecidable split: a composition
+  that cannot be read is reported rather than passed, or a withheld one would turn the comparison
+  off.
+
+
 ## v0.9.0-b.3 (2026-08-31)
 
 ### Features
