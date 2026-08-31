@@ -45,6 +45,7 @@ root = TrustRoot(
         ),
     ),
 )
+curator = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 brain = Brain.init("./brain", actor=curator, trust_root=root, signers=[signer])
 ```
 
