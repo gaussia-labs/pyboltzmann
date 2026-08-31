@@ -72,6 +72,9 @@ from boltzmann.blocks.canonical import CanonicalBlock, NormalizedView
 from boltzmann.blocks.content import ContentRef, require_media_type
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import (
+    Collaborator,
+    ProvenanceBlockV2,
+    provenance_block,
     Actor,
     DemotionRecord,
     DerivationRecord,
@@ -254,7 +257,7 @@ def _contenders(verdict: BlockVerdict) -> set[BlockId]:
     return set(verdict.conflicts_with)
 
 
-def _is_supported(record: ProvenanceBlock, members: Mapping[MemoryType, list[BlockId]]) -> bool:
+def _is_supported(record: ProvenanceBlock | ProvenanceBlockV2, members: Mapping[MemoryType, list[BlockId]]) -> bool:
     """Whether a version holds both blocks a precedence edge names.
 
     A tie-break is a supersession edge, and an edge whose winner or loser is not a member of the version it
@@ -368,6 +371,9 @@ class Brain:
     Attributes:
         store (BlockStore): Where blocks and blobs live.
         actor (Actor): Who this client acts as, recorded in every provenance entry it writes.
+        assisted_by (list[Collaborator]): Who else takes part, recorded beside the actor. The
+            agents a session runs through, and any second person working in it. Empty for
+            unassisted work, which is what keeps those records at schema version 1.
         policy (RetentionPolicy): What removals this deployment permits.
         planner (QueryPlanner | None): How queries are planned. ``None`` means the built-in scan.
         indices (dict[MemoryType, list[Index]]): Derived views to maintain, if any.
@@ -380,6 +386,7 @@ class Brain:
         store: BlockStore,
         actor: Actor,
         snapshot: Snapshot | None = None,
+        assisted_by: Sequence[Collaborator] | None = None,
         policy: RetentionPolicy | None = None,
         planner: QueryPlanner | None = None,
         indices: dict[MemoryType, list[Index]] | None = None,
@@ -393,6 +400,9 @@ class Brain:
             actor (Actor): Who this client acts as.
             snapshot (Snapshot | None): The state to open. Defaults to the store's current snapshot,
                 or an empty brain if it has none.
+            assisted_by (Sequence[Collaborator] | None): Who else takes part in what this handle
+                writes -- the agent a session runs through, the model it ran, a second person in
+                the room. Recorded on every entry, never used to decide anything.
             policy (RetentionPolicy | None): Retention policy. Defaults to the conservative one: no
                 canonical drops, no redaction.
             planner (QueryPlanner | None): Query planner to use.
@@ -405,6 +415,7 @@ class Brain:
         # what to choose instead.
         parse_actor_id(actor.id, field="actor id")
         self.actor = actor
+        self.assisted_by = list(assisted_by or ())
         self.policy = policy if policy is not None else RetentionPolicy()
         self.planner = planner
         self.indices = dict(indices or {})
@@ -434,6 +445,7 @@ class Brain:
         cls,
         path: Path | str,
         actor: Actor,
+        assisted_by: Sequence[Collaborator] | None = None,
         policy: RetentionPolicy | None = None,
         planner: QueryPlanner | None = None,
         indices: dict[MemoryType, list[Index]] | None = None,
@@ -447,6 +459,7 @@ class Brain:
         Args:
             path (Path | str): Directory holding the layout.
             actor (Actor): Who this client acts as.
+            assisted_by (Sequence[Collaborator] | None): Who else takes part in what it writes.
             policy (RetentionPolicy | None): Retention policy.
             planner (QueryPlanner | None): Query planner to use.
             indices (dict[MemoryType, list[Index]] | None): Indices to rebuild on commit.
@@ -458,6 +471,7 @@ class Brain:
         return cls(
             OciLayoutStore(Path(path)),
             actor=actor,
+            assisted_by=assisted_by,
             policy=policy,
             planner=planner,
             indices=indices,
@@ -470,6 +484,7 @@ class Brain:
         path: Path | str,
         actor: Actor,
         trust_root: TrustRoot,
+        assisted_by: Sequence[Collaborator] | None = None,
         signers: Sequence[Signer] = (),
         labels: dict[str, str] | None = None,
         policy: RetentionPolicy | None = None,
@@ -494,6 +509,7 @@ class Brain:
         Args:
             path (Path | str): Directory for the new brain's layout.
             actor (Actor): Who this client acts as.
+            assisted_by (Sequence[Collaborator] | None): Who else takes part in what it writes.
             trust_root (TrustRoot): The first key list, at whatever revision it declares.
             signers (Sequence[Signer]): Who signs the founding act. Empty produces an unsigned
                 genesis -- the zero-configuration case, which stays fully verifiable for
@@ -520,6 +536,7 @@ class Brain:
         brain = cls(
             store,
             actor=actor,
+            assisted_by=assisted_by,
             policy=policy,
             planner=planner,
             indices=indices,
@@ -1525,15 +1542,16 @@ class Brain:
         now = utc_timestamp()
         producer = Producer(kind=ProducerKind.ACTOR, id=self.actor.id)
         provenance = [
-            ProvenanceBlock(
-                record=DerivationRecord(
+            provenance_block(
+                DerivationRecord(
                     block=placement.block_id,
                     derived_from=[placement.source],
                     producer=producer,
                     actor=self.actor,
                     at=now,
                     task="catalog-placement",
-                )
+                ),
+                self.assisted_by,
             )
             for placement in placements
         ]
@@ -1593,9 +1611,11 @@ class Brain:
             license=request.license,
             retention_policy=request.retention_policy,
         )
-        records: list[ProvenanceBlock] = [ProvenanceBlock(record=registration)]
+        records: list[ProvenanceBlock | ProvenanceBlockV2] = [provenance_block(registration, self.assisted_by)]
         if normalization is not None:
-            records.append(ProvenanceBlock(record=normalization.model_copy(update={"block": block.block_id})))
+            records.append(
+                provenance_block(normalization.model_copy(update={"block": block.block_id}), self.assisted_by)
+            )
 
         commit = self._write(
             blocks={MemoryType.CANONICAL: [block]},
@@ -1639,28 +1659,32 @@ class Brain:
             )
 
         now = utc_timestamp()
-        records: list[ProvenanceBlock] = [
-            ProvenanceBlock(
-                record=RegistrationRecord(
+        records: list[ProvenanceBlock | ProvenanceBlockV2] = [
+            provenance_block(
+                RegistrationRecord(
                     block=block.block_id,
                     actor=request.actor,
                     at=now,
                     origin=request.origin,
                     license=request.license,
                     retention_policy=request.retention_policy,
-                )
+                ),
+                self.assisted_by,
             ),
-            ProvenanceBlock(
-                record=SupersessionRecord(
+            provenance_block(
+                SupersessionRecord(
                     block=block.block_id,
                     supersedes=supersedes,
                     actor=request.actor,
                     at=now,
-                )
+                ),
+                self.assisted_by,
             ),
         ]
         if normalization is not None:
-            records.append(ProvenanceBlock(record=normalization.model_copy(update={"block": block.block_id})))
+            records.append(
+                provenance_block(normalization.model_copy(update={"block": block.block_id}), self.assisted_by)
+            )
 
         already_present = block.block_id in canonical
         commit = self._write(
@@ -1884,14 +1908,14 @@ class Brain:
         checks = list(report.checks) or [_UNRECORDED_CHECKS]
 
         blocks: dict[MemoryType, list[Block]] = {}
-        provenance: list[ProvenanceBlock] = []
+        provenance: list[ProvenanceBlock | ProvenanceBlockV2] = []
         for result in committable:
             block = result.block
             assert block is not None  # is_committable guarantees it
             blocks.setdefault(block.MEMORY_TYPE, []).append(block)
             provenance.append(
-                ProvenanceBlock(
-                    record=DerivationRecord(
+                provenance_block(
+                    DerivationRecord(
                         block=block.block_id,
                         derived_from=list(result.candidate.evidence),
                         producer=producer,
@@ -1899,22 +1923,24 @@ class Brain:
                         at=now,
                         task=report.task_id,
                         locator=result.candidate.locator,
-                    )
+                    ),
+                    self.assisted_by,
                 )
             )
             # The verdict travels with the block rather than staying on the write path. A consumer that
             # meets this composition can then read what admitted each member instead of trusting whoever
             # committed it, which is the whole difference between a ledger and a habit.
             provenance.append(
-                ProvenanceBlock(
-                    record=ValidationRecord(
+                provenance_block(
+                    ValidationRecord(
                         block=block.block_id,
                         verdict=result.status,
                         checks=checks,
                         actor=self.actor,
                         at=now,
                         task=report.task_id,
-                    )
+                    ),
+                    self.assisted_by,
                 )
             )
 
@@ -1964,7 +1990,7 @@ class Brain:
     def _write(
         self,
         blocks: dict[MemoryType, list[Block]],
-        provenance: Sequence[ProvenanceBlock],
+        provenance: Sequence[ProvenanceBlock | ProvenanceBlockV2],
         without: dict[MemoryType, list[BlockId]] | None = None,
         tombstones: Mapping[MemoryType, Iterable[BlockId]] | None = None,
     ) -> CommitResult:
@@ -1980,7 +2006,8 @@ class Brain:
 
         Args:
             blocks (dict[MemoryType, list[Block]]): Blocks to add, by module.
-            provenance (Sequence[ProvenanceBlock]): Provenance entries to record alongside them.
+            provenance (Sequence[ProvenanceBlock | ProvenanceBlockV2]): Provenance entries to record
+                alongside them, each already under the oldest schema that can express it.
             without (dict[MemoryType, list[BlockId]] | None): Blocks to exclude from a composition. The
                 blocks themselves are untouched -- what changes is which composition names them.
             tombstones (Mapping[MemoryType, Iterable[BlockId]] | None): Destroyed identities to add
@@ -2250,8 +2277,8 @@ class Brain:
 
         now = utc_timestamp()
         records = [
-            ProvenanceBlock(
-                record=RemovalRecord(
+            provenance_block(
+                RemovalRecord(
                     blocks=blocks,
                     mechanism=RemovalMechanism.DROP,
                     memory_type=memory_type,
@@ -2260,7 +2287,8 @@ class Brain:
                     reason=request.reason,
                     policy=request.policy_name,
                     cascaded_from=None if memory_type is request.memory_type else plan.origin,
-                )
+                ),
+                self.assisted_by,
             )
             for memory_type, blocks in dropped.items()
         ]
@@ -2344,8 +2372,8 @@ class Brain:
         excluded = {kind: sorted(blocks, key=lambda value: value.hex) for kind, blocks in dropped.items()}
         now = utc_timestamp()
         records = [
-            ProvenanceBlock(
-                record=RemovalRecord(
+            provenance_block(
+                RemovalRecord(
                     blocks=blocks,
                     mechanism=RemovalMechanism.DROP,
                     memory_type=memory_type,
@@ -2354,7 +2382,8 @@ class Brain:
                     reason=request.reason,
                     policy=request.policy_name,
                     cascaded_from=None if memory_type in origins else cascaded_from.get(memory_type),
-                )
+                ),
+                self.assisted_by,
             )
             for memory_type, blocks in excluded.items()
         ]
@@ -2398,14 +2427,15 @@ class Brain:
             raise ProtocolError(f"a block cannot supersede itself ({block.short})")
         self._require_members([block, superseded], memory_type)
 
-        record = ProvenanceBlock(
-            record=SupersessionRecord(
+        record = provenance_block(
+            SupersessionRecord(
                 block=block,
                 supersedes=superseded,
                 actor=self.actor,
                 at=utc_timestamp(),
                 reason=reason,
-            )
+            ),
+            self.assisted_by,
         )
         commit = self._write(blocks={}, provenance=[record])
         return SupersessionResult(snapshot=commit.snapshot, provenance=commit.provenance)
@@ -2437,13 +2467,14 @@ class Brain:
         self.policy.authorize(RemovalMechanism.DEMOTE, memory_type)
         self._require_members([block], memory_type)
 
-        record = ProvenanceBlock(
-            record=DemotionRecord(
+        record = provenance_block(
+            DemotionRecord(
                 block=block,
                 actor=self.actor,
                 at=utc_timestamp(),
                 reason=reason,
-            )
+            ),
+            self.assisted_by,
         )
         commit = self._write(blocks={}, provenance=[record])
         return SupersessionResult(snapshot=commit.snapshot, provenance=commit.provenance)
@@ -2535,15 +2566,16 @@ class Brain:
         shared = self._content_named_elsewhere(block, memory_type)
         destroyed: list[Digest] = [block, *(digest for digest in named if digest.hex not in shared)]
 
-        record = ProvenanceBlock(
-            record=RemovalRecord(
+        record = provenance_block(
+            RemovalRecord(
                 blocks=[block],
                 mechanism=RemovalMechanism.TOMBSTONE,
                 memory_type=memory_type,
                 actor=self.actor,
                 at=utc_timestamp(),
                 reason=reason,
-            )
+            ),
+            self.assisted_by,
         )
         commit = self._write(blocks={}, provenance=[record], tombstones={memory_type: [block]})
 
@@ -3363,7 +3395,7 @@ class Brain:
         cascaded: Mapping[MemoryType, Sequence[BlockId]],
         theirs: OciDigest,
         accepted: RemovalAcceptance | None,
-    ) -> list[ProvenanceBlock]:
+    ) -> list[ProvenanceBlock | ProvenanceBlockV2]:
         """Removal records for the blocks the cascade takes with the evidence they cited.
 
         The exclusions Equation 1 itself performs need no record from here: the history that dropped those
@@ -3379,7 +3411,8 @@ class Brain:
             accepted (RemovalAcceptance | None): Who accepted the removals, and why.
 
         Returns:
-            list[ProvenanceBlock]: One record per module losing blocks, empty when nothing is.
+            list[ProvenanceBlock | ProvenanceBlockV2]: One record per module losing blocks, empty
+                when nothing is.
         """
         actor = accepted.actor if accepted is not None else self.actor
         at = accepted.at if accepted is not None else utc_timestamp()
@@ -3387,15 +3420,16 @@ class Brain:
         if accepted is not None and accepted.reason:
             reason = f"{reason}; accepted: {accepted.reason}"
         return [
-            ProvenanceBlock(
-                record=RemovalRecord(
+            provenance_block(
+                RemovalRecord(
                     blocks=list(blocks),
                     mechanism=RemovalMechanism.DROP,
                     memory_type=memory_type,
                     actor=actor,
                     at=at,
                     reason=reason,
-                )
+                ),
+                self.assisted_by,
             )
             for memory_type, blocks in cascaded.items()
             if blocks
@@ -3405,7 +3439,7 @@ class Brain:
         self,
         plan: ReconcilePlan,
         resolutions: dict[BlockId, Resolution],
-    ) -> list[ProvenanceBlock]:
+    ) -> list[ProvenanceBlock | ProvenanceBlockV2]:
         """The supersession edges that settle the precedence questions someone answered.
 
         Recorded as supersession rather than as a new kind of record, because that is what precedence already
@@ -3420,14 +3454,15 @@ class Brain:
                 continue
             for loser in _contenders(verdict) - {decision.prefer}:
                 records.append(
-                    ProvenanceBlock(
-                        record=SupersessionRecord(
+                    provenance_block(
+                        SupersessionRecord(
                             block=decision.prefer,
                             supersedes=loser,
                             actor=decision.actor,
                             at=decision.at,
                             reason=decision.reason or f"precedence settled while reconciling {plan.theirs.short}",
-                        )
+                        ),
+                        self.assisted_by,
                     )
                 )
         return records
@@ -3539,7 +3574,7 @@ class Brain:
         carried: dict[MemoryType, ModuleRef],
         merged: list[OciDigest],
         retain: Iterable[OciDigest] = (),
-        extra: Sequence[ProvenanceBlock] = (),
+        extra: Sequence[ProvenanceBlock | ProvenanceBlockV2] = (),
     ) -> tuple[Snapshot, dict[MemoryType, MerkleRoot]]:
         """
         Publish one reconciled version: compositions first, pointer last.
@@ -3560,7 +3595,7 @@ class Brain:
                 that is what publishing back from a partial install means.
             merged (list[OciDigest]): Additional parents to record, which is the other history for a merge
                 and nothing for a rebase or a squash.
-            extra (Sequence[ProvenanceBlock]): Records this reconciliation writes of its own -- the supersession
+            extra (Sequence[ProvenanceBlock | ProvenanceBlockV2]): Records this reconciliation writes of its own -- the supersession
                 edges that settle a precedence question someone answered. They land in the same version as the
                 composition they describe, because a decision recorded in a later commit would leave one
                 published version in which the ambiguity was unresolved.

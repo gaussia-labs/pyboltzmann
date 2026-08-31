@@ -40,6 +40,7 @@ golden.registry()          # the schema registry companion
 | --- | --- |
 | `serialization.json` | The canonical byte sequence for a given payload — and the documents that MUST be rejected |
 | `block_ids.json` | The identity of a given envelope |
+| `actor_ids.json` | The two forms an actor identifier takes, and the ones that MUST be refused |
 | `schema_selection.json` | The `schema_version` oldest-that-fits assigns a payload against the registered set |
 | `merkle_roots.json` | The root of a given set of block ids |
 | `inclusion_proofs.json` | The audit path for a given leaf and tree size, at sizes 1, a power of two, and odd |
