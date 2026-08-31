@@ -1,6 +1,65 @@
 # CHANGELOG
 
 
+## v0.9.0-b.2 (2026-08-31)
+
+### Features
+
+- **provenance**: Record everyone who took part
+  ([`6b74f6f`](https://github.com/gaussia-labs/pyboltzmann/commit/6b74f6f497d78da3e9784a1a9f40830c90b54e62))
+
+Most brains are hydrated through an agent, so the record of who actually did the work was the
+  missing part. A record has always named an actor; what it could not say is that a model wrote the
+  interpretation, which harness it ran inside, or that a second person was in the session. producer
+  answered part of that, for derivations alone, in a shape that made a version string load-bearing.
+
+Schema version 2 adds assisted_by: people and agents in one list, each agent naming the model it
+  ran, so the pair stays intact when several agents write into one snapshot. The same model under a
+  different harness is a different collaborator. No version strings -- a version is the member most
+  likely to be invented by whoever fills the record in, and it buys less than the identity beside
+  it.
+
+A derivation's two versions are disjoint rather than nested, since version 2 replaces producer
+  instead of adding to it. DerivationRecordV2 is therefore a sibling, as SemanticBlockV3 already is,
+  and requires assisted_by: version 1 obliged a writer to say what produced a derived block and
+  version 2 must not relax that. A record naming nobody keeps the bytes, and the block_id, it had
+  before version 2 existed.
+
+A removal never leaves version 1. It is the one record a verifier must decode to decide a blocking
+  question, and _reachable_removals skips what it cannot decode -- so an older client would read a
+  valid brain, miss the record, and reject the snapshot for violating an invariant it satisfies. Not
+  being able to read something must never be reported as that thing being wrong.
+
+Ledger.made_by resolves one query across both shapes, because a brain holds records of both at once
+  and a batch invalidation that read one would silently miss blocks. A person is never matched as a
+  model: a human collaborator carries none.
+
+Corpus 1.1 vendored, which is what registers provenance 2.
+
+### Testing
+
+- Measure the merkle scaling bound with the fastest run, not one run
+  ([`5351583`](https://github.com/gaussia-labs/pyboltzmann/commit/53515835134a6b57d2f827c14065cbd296d74abe))
+
+The assertion is narrow on purpose: doubling the leaves costs twice as much when verify is linear
+  and four times when it is quadratic, so the bar sits between at three. That leaves it about 50% of
+  headroom over the real ratio, and a shared CI runner spends more than that preempting the process
+  -- twice on 3.13 the same code that measures 2.05 locally measured 3.5 and failed, while passing
+  on 3.11 and 3.12 in the same run.
+
+Timing noise can only make a run slower, never faster, so the minimum of several runs is the closest
+  reading to the work actually performed. Five repetitions bring the measured ratio to 2.17 with a
+  variance of 0.01, and cost a few milliseconds.
+
+A fresh tree per repetition, because MerkleTree memoizes its internal nodes: verifying one instance
+  twice would time a warm cache and report a speed nothing in production sees. The leaves are built
+  once, outside the timer, since building them is not what is being measured.
+
+Widening the bar was the alternative and is worse. At four it stops distinguishing linear from
+  quadratic, which retires the assertion instead of stabilising it. Checked against a deliberately
+  quadratic stand-in, which still measures 4.07 and still fails.
+
+
 ## v0.9.0-b.1 (2026-08-31)
 
 ### Features
