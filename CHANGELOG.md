@@ -1,6 +1,36 @@
 # CHANGELOG
 
 
+## v0.9.0-b.3 (2026-08-31)
+
+### Features
+
+- **authenticity**: Name who a trusted key belongs to
+  ([`365104a`](https://github.com/gaussia-labs/pyboltzmann/commit/365104ad93aaf6ad8222079f742cd83f158afb51))
+
+The paper makes this connection load-bearing -- Section 5 says a signature is what turns a declared
+  actor into an authenticated identity, and Section 8.3 rests the Ed25519 strictness on it -- and no
+  mechanism existed. A trust-root entry carried five members and none was an identity, the SSH
+  comment is deliberately stripped, and Brain.sign never reads the actor. So provenance named a
+  person, the signature named a fingerprint, and nothing asserted they were the same.
+
+TrustedKey gains an optional subject: an actor identifier, inside the signed bytes, changed only by
+  a revision and therefore only by a quorum. The claim is narrow on purpose and stays narrow: it is
+  what this brain's governance asserts, not a certificate, and the grounds for believing a key is
+  someone's remain outside the protocol. What it adds is that once those grounds exist the
+  conclusion is written where a verifier reads it.
+
+An absent subject is omitted rather than serialized as null, so a trust root that names none keeps
+  exactly the digest it had and every pin still holds.
+
+SignatureVerdict and Authorship report it, so a quorum's holders are all readable rather than just
+  the first. An attributable key reports none, which is the whole state: nobody here has said whose
+  it is.
+
+AgentSigner stops discarding the agent comment and offers it as a suggested subject when it already
+  is an identifier. Offered, never adopted -- the comment is a label the key's own holder typed.
+
+
 ## v0.9.0-b.2 (2026-08-31)
 
 ### Features
