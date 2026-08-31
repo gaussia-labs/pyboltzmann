@@ -26,14 +26,17 @@ ARTIFACT_TYPE = "application/vnd.gaussia.boltzmann.brain.v1+json"
 CONFIG_MEDIA_TYPE = "application/vnd.gaussia.boltzmann.snapshot.v1+json"
 """Media type of the config blob, which is the snapshot document itself."""
 
+PROJECTION_MEDIA_TYPE = "application/vnd.gaussia.boltzmann.projection.v1+json"
+"""Media type of a selective artifact's projection config document."""
+
 MODULE_MEDIA_TYPE_TEMPLATE = "application/vnd.gaussia.boltzmann.module.{memory_type}.v1.tar+gzip"
 """Media type of one module layer. One layer per module keeps selective installation possible.
 
 gzip rather than zstd because it is in the standard library, and a protocol SDK that needed a
 compression dependency to read a published brain would be trading portability for a few percent.
-Both the tar and the gzip stream are written deterministically (see
-:mod:`boltzmann.distribution.layers`), so two clients packing the same module produce byte-identical
-layers -- without that, push deduplication would silently stop working.
+Packing is deterministic within this implementation (see :mod:`boltzmann.distribution.layers`), and
+an unchanged composition reuses its existing layer digest. Cross-implementation byte identity is not
+required: conforming gzip encoders may choose different streams for the same module contents.
 """
 
 VECTOR_INDEX_MEDIA_TYPE = "application/vnd.gaussia.boltzmann.index.vector.v1+bin"
@@ -142,9 +145,8 @@ REF_NAME_ANNOTATION = "org.opencontainers.image.ref.name"
 ANNOTATION_SOURCE_SNAPSHOT = "ai.gaussia.boltzmann.source-snapshot"
 """The publisher's full snapshot an artifact was projected from.
 
-Equal to the config digest for a complete publish. When a subset of modules is published the config
-carries a reduced snapshot, which by construction is not in the publisher's own history -- so without
-this a push of a projection back to the same tag would look like a divergence when nothing diverged.
+An unauthenticated pre-download hint. For a complete publish it equals the config digest; for a
+projection the authoritative binding is the ``source`` digest inside the projection document.
 """
 
 

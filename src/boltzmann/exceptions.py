@@ -110,6 +110,10 @@ class MembershipError(SnapshotError):
     """Exception raised when a block does not belong to the installed snapshot."""
 
 
+class RemovalInvariantError(SnapshotError):
+    """Exception raised when an absent block has no reachable removal record."""
+
+
 # --- Protocol operations ------------------------------------------------------
 
 
@@ -161,6 +165,15 @@ class DivergenceError(DistributionError):
     """
 
 
+class RollbackError(DistributionError):
+    """Exception raised when a pull serves a strict ancestor of the head already held.
+
+    Distinct from :class:`DivergenceError`: divergence means both histories contain work and calls
+    for reconciliation, while rollback means a mutable reference moved backwards and calls for
+    refusal unless the consumer explicitly chooses to forget its newer state.
+    """
+
+
 class ReconciliationError(ProtocolError):
     """Base exception for reconciling two histories (paper Section 12)."""
 
@@ -172,6 +185,15 @@ class NoCommonAncestorError(ReconciliationError):
     one composition and absent from the other is ambiguous between "they added it" and "I dropped it",
     and those demand opposite outcomes. Section 12.2 requires this to be a distinguishable failure
     rather than a merge computed on a guess.
+    """
+
+
+class MultipleMergeBasesError(ReconciliationError):
+    """Exception raised when reconciliation has more than one best common ancestor.
+
+    A criss-cross history can have several incomparable common ancestors. Choosing whichever one a
+    traversal happens to encounter first makes the three-way merge depend on parent order, so the
+    protocol requires the histories to be reconciled until a later merge has one unambiguous base.
     """
 
 
@@ -275,6 +297,16 @@ class UnsupportedKeyTypeError(AuthenticityError):
     perfectly signed and this SDK simply too narrow. Reporting it as
     :class:`SignatureInvalidError` would reject a legitimately signed brain as forged, which is
     a worse failure than naming the limit.
+    """
+
+
+class WeakKeyError(AuthenticityError):
+    """Exception raised when a key is below the protocol's verification security floor.
+
+    Distinct from :class:`UnsupportedKeyTypeError`: an unsupported key may become verifiable in
+    a wider client, while DSA and undersized RSA are deliberately refused even by a client that
+    otherwise implements them. Callers can therefore distinguish missing capability from a
+    security-policy rejection without treating either one as a forged signature.
     """
 
 

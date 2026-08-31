@@ -28,6 +28,7 @@ import json
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -39,8 +40,17 @@ from boltzmann.authenticity.authenticator import (
     Authorship,
     AuthorshipState,
     FindingKind,
+    SnapshotStance,
 )
-from boltzmann.authenticity.chain import SnapshotRole, load_snapshot, locate, observed_revisions, walk_first_parents
+from boltzmann.authenticity.chain import (
+    SnapshotRole,
+    descends_from,
+    load_snapshot,
+    locate,
+    observed_revisions,
+    walk_first_parents,
+)
+from boltzmann.authenticity.removals import check_removal_invariant
 from boltzmann.authenticity.diff import gather_evidence, required_scopes
 from boltzmann.authenticity.governance import RotationPlan, RotationResult
 from boltzmann.authenticity.keys import SshPublicKey
@@ -73,6 +83,7 @@ from boltzmann.blocks.provenance import (
     RemovalMechanism,
     RemovalRecord,
     SupersessionRecord,
+    ValidationRecord,
 )
 from boltzmann.catalog import (
     Catalog,
@@ -102,11 +113,13 @@ from boltzmann.distribution.media_types import (
     CONFIG_MEDIA_TYPE,
     EMPTY_CONFIG_BYTES,
     MANIFEST_MEDIA_TYPE,
+    PROJECTION_MEDIA_TYPE,
     REF_NAME_ANNOTATION,
     SIGNATURE_MEDIA_TYPE,
     VECTOR_INDEX_MEDIA_TYPE,
 )
 from boltzmann.distribution.registry import FetchResult, InstallPlan, RegistryClient, RegistryReferrers
+from boltzmann.distribution.projection import Projection
 from boltzmann.exceptions import (
     AuthenticityError,
     BlockError,
@@ -125,13 +138,15 @@ from boltzmann.exceptions import (
     ReconciliationHaltedError,
     ReferenceNotFoundError,
     ResolutionRefusedError,
+    RollbackError,
+    RemovalInvariantError,
     SnapshotError,
     TrustRootMismatchError,
     UnauthorizedKeyError,
     UnsignedBrainError,
 )
 from boltzmann.identity.digest import BlockId, Digest, MerkleRoot, OciDigest
-from boltzmann.identity.serialization import canonicalize
+from boltzmann.identity.serialization import canonicalize, parse_json_strict
 from boltzmann.identity.time import utc_timestamp
 from boltzmann.indices.base import Index, IndexKind, TravellingIndex
 from boltzmann.ingest.commit import CommitResult
@@ -140,7 +155,13 @@ from boltzmann.ingest.proposer import CandidateProposer, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest, RegistrationResult
 from boltzmann.ingest.schema import candidates_schema as _candidates_schema
 from boltzmann.ingest.task import PROPOSABLE_MEMORY_TYPES, ProcessingTask, TaskOperation
-from boltzmann.ingest.validation import ValidationReport, ValidationStatus, Validator, validate
+from boltzmann.ingest.validation import (
+    ValidationAudit,
+    ValidationReport,
+    ValidationStatus,
+    Validator,
+    validate,
+)
 from boltzmann.catalog_validation import ClassificationResult, validate_declarations
 from boltzmann.merkle.proof import InclusionProof
 from boltzmann.merkle.tree import sorted_leaves
@@ -193,6 +214,14 @@ from boltzmann.store.oci_layout import OciLayoutStore
 
 HEAD_POINTER = "head"
 """Name of the mutable pointer that says which snapshot is current."""
+
+_UNRECORDED_CHECKS = "unrecorded"
+"""Placeholder check identifier for a report built before the gate recorded its check set.
+
+A validation record must name at least one check, because a verdict under an unstated check set is
+not something a consumer can act on. A report assembled by hand, or by an older SDK, has no set to
+name -- so the record says so in the one way that cannot be mistaken for a check that ran.
+"""
 
 MAX_MERGED_PER_CALL = 4096
 """Ceiling on signature records merged from one referrers listing.
@@ -261,6 +290,24 @@ class Origin(BaseModel):
     tag: str = Field(min_length=1)
     snapshot: OciDigest
     partial: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedConfig:
+    """A config document resolved to the snapshot that gives it authority."""
+
+    document: Snapshot | Projection
+    source: Snapshot
+
+    @property
+    def modules(self) -> dict[MemoryType, ModuleRef]:
+        """Module references the artifact actually exposes."""
+        return self.document.modules
+
+    @property
+    def is_projection(self) -> bool:
+        """Whether installation is a partial view rather than the source snapshot itself."""
+        return isinstance(self.document, Projection) or self.document.digest != self.source.digest
 
 
 REMOTES_POINTER = "remotes"
@@ -487,7 +534,29 @@ class Brain:
                 trust_root.govern_quorum,
                 len(distinct),
             )
+        cls._warn_without_governance_margin(trust_root, path)
         return brain
+
+    @staticmethod
+    def _warn_without_governance_margin(trust_root: TrustRoot, where: object) -> None:
+        """Say so at the moment the margin is chosen, not the moment it is needed.
+
+        A quorum equal to the number of govern holders is not an error and no rule forbids it, so
+        this is a warning rather than a refusal. It is emitted here, at creation and at revision,
+        because that is the only moment anything can still be done about it: once the key is lost
+        the protocol has no recovery path, and a report noticing it afterwards arrives too late to
+        inform the decision it was about.
+        """
+        if trust_root.has_governance_margin:
+            return
+        logging.getLogger(__name__).warning(
+            "trust root of %s sets a govern quorum of %d with %d govern holder(s): losing one key "
+            "freezes governance permanently, with no recovery path inside the protocol. Keep more "
+            "govern holders than the quorum requires",
+            where,
+            trust_root.govern_quorum,
+            len(trust_root.govern_holders),
+        )
 
     def __repr__(self) -> str:
         installed = ", ".join(kind.value for kind in self._snapshot.installed) or "empty"
@@ -497,11 +566,11 @@ class Brain:
 
     def _read_state(self) -> BrainState | None:
         raw = self.store.read_pointer(HEAD_POINTER)
-        return BrainState.model_validate_json(raw) if raw else None
+        return BrainState.model_validate(parse_json_strict(raw)) if raw else None
 
     def _read_remotes(self) -> RemoteAuthenticity:
         raw = self.store.read_pointer(REMOTES_POINTER)
-        return RemoteAuthenticity.model_validate_json(raw) if raw else RemoteAuthenticity()
+        return RemoteAuthenticity.model_validate(parse_json_strict(raw)) if raw else RemoteAuthenticity()
 
     def _record_seen_signed(self, reference: str, snapshot: OciDigest) -> None:
         """Remember that this repository was seen authentically signed, once, forever."""
@@ -514,7 +583,7 @@ class Brain:
     def _load_snapshot(self) -> Snapshot:
         if self._state is None:
             return Snapshot()
-        return Snapshot.model_validate_json(self.store.get_bytes(self._state.snapshot))
+        return Snapshot.from_document(self.store.get_bytes(self._state.snapshot))
 
     def _advance(
         self,
@@ -555,7 +624,7 @@ class Brain:
         # pointer and adding one would change an interface third-party stores already implement.
         if not raw:
             return None
-        return ReconcileState.model_validate_json(raw)
+        return ReconcileState.model_validate(parse_json_strict(raw))
 
     def _put_reconcile_state(self, state: ReconcileState | None) -> None:
         """Record or clear the reconciliation in progress."""
@@ -607,7 +676,7 @@ class Brain:
             chain.append(parent)
             if not self.store.is_resolvable(parent):
                 break
-            snapshot = Snapshot.model_validate_json(self.store.get_bytes(parent))
+            snapshot = Snapshot.from_document(self.store.get_bytes(parent))
         return chain
 
     def reachable_history(self) -> set[OciDigest]:
@@ -638,7 +707,7 @@ class Brain:
                     continue
                 seen.add(parent)
                 if self.store.is_resolvable(parent):
-                    frontier.append(Snapshot.model_validate_json(self.store.get_bytes(parent)))
+                    frontier.append(Snapshot.from_document(self.store.get_bytes(parent)))
         return seen
 
     # --- Discovery ------------------------------------------------------------
@@ -697,7 +766,13 @@ class Brain:
                 f"the stored composition for {memory_type.value} has root {composition.root.short} but the "
                 f"snapshot files it under {reference.root.short}"
             )
-        module = Module(memory_type, self.store, composition, self._index_map(memory_type))
+        module = Module(
+            memory_type,
+            self.store,
+            composition,
+            self._index_map(memory_type),
+            tombstones=reference.tombstones or (),
+        )
         self._modules[memory_type] = module
         return module
 
@@ -811,6 +886,7 @@ class Brain:
         self,
         snapshot: OciDigest | None = None,
         policy: VerificationPolicy | None = None,
+        stance: SnapshotStance = SnapshotStance.HEAD,
     ) -> AuthenticationReport:
         """
         Check who signed a snapshot, against the trust root in force at its position.
@@ -825,9 +901,13 @@ class Brain:
                 one.
             policy (VerificationPolicy | None): Tolerances for this check. Defaults to the
                 paper's defaults: one valid signature, no propose-scoped heads.
+            stance (SnapshotStance): How the snapshot is being presented. ``HEAD`` -- the default --
+                asks about a brain's current state, where a key the trust root does not list is an
+                impersonation attempt. ``OFFERED`` asks about a proposal, where the same key is
+                attributable instead: the author is named and nothing is authorized.
 
         Returns:
-            AuthenticationReport: Every verdict and finding, with the three-state summary
+            AuthenticationReport: Every verdict and finding, with the four-state summary
             derived. Never raises for a protocol failure; call
             :meth:`AuthenticationReport.require_authorized` to turn the report into a typed
             refusal.
@@ -840,10 +920,12 @@ class Brain:
         else:
             if not self.store.is_resolvable(snapshot):
                 raise SnapshotError(f"snapshot {snapshot.short} is not held, so it cannot be authenticated")
-            document = Snapshot.model_validate_json(self.store.get_bytes(snapshot))
+            document = Snapshot.from_document(self.store.get_bytes(snapshot))
         # Compromise markers come from the newest revision this brain knows -- the head's trust
         # root -- because a compromise is recorded after the positions it withdraws.
-        return Authenticator(self.store, policy=policy).authenticate(document, current=self._snapshot.trust_root)
+        return Authenticator(self.store, policy=policy).authenticate(
+            document, current=self._snapshot.trust_root, stance=stance
+        )
 
     def pin(self, trust_root: OciDigest | None = None, source: PinSource | None = None) -> TrustPin:
         """
@@ -897,7 +979,7 @@ class Brain:
             return self._snapshot
         if not self.store.is_resolvable(digest):
             raise SnapshotError(f"snapshot {digest.short} is not held by this brain")
-        return Snapshot.model_validate_json(self.store.get_bytes(digest))
+        return Snapshot.from_document(self.store.get_bytes(digest))
 
     def _authorship(self) -> Authorship:
         """The head's authorship line, recomputed only when the head or its records change."""
@@ -1018,12 +1100,7 @@ class Brain:
                 refutes, or a parentless genesis this brain does not hold. Refusal names what
                 failed; nothing is signed.
         """
-        revision = Snapshot.model_validate_json(document)
-        if revision.canonical_bytes() != document:
-            raise SnapshotError(
-                "the received document is not in canonical form, so a signature over it would cover "
-                "bytes no verifier reconstructs; ask the initiator for plan_rotate's output verbatim"
-            )
+        revision = Snapshot.from_document(document)
         if revision.trust_root is None:
             raise ResolutionRefusedError(
                 "the document carries no trust root; countersigning is for governance acts, and "
@@ -1042,7 +1119,7 @@ class Brain:
                     f"the document's parent {parent_digest.short} is not in this brain's history; a "
                     f"countersigner endorses a transition of a history it can see"
                 )
-            parent = Snapshot.model_validate_json(self.store.get_bytes(parent_digest))
+            parent = Snapshot.from_document(self.store.get_bytes(parent_digest))
             if revision.modules != parent.modules:
                 raise ResolutionRefusedError(
                     "the document changes module roots as well as the trust root; a revision changes "
@@ -1129,8 +1206,8 @@ class Brain:
         if (trust_root is None) == (plan is None):
             raise SnapshotError("exactly one of trust_root (build fresh) or plan (reuse planned bytes) is given")
         if plan is not None:
-            revision = Snapshot.model_validate_json(plan.document)
-            if revision.canonical_bytes() != plan.document or revision.digest != plan.digest:
+            revision = Snapshot.from_document(plan.document)
+            if revision.digest != plan.digest:
                 raise SnapshotError("the plan's document and digest disagree; it was altered in transit")
             if revision.first_parent != self._snapshot.digest:
                 raise SnapshotError(
@@ -1182,6 +1259,7 @@ class Brain:
             store_record(self.store, record)
         self._advance(revision)
         assert revision.trust_root is not None
+        self._warn_without_governance_margin(revision.trust_root, self._snapshot.digest.short)
         return RotationResult(
             snapshot=digest,
             revision=revision.trust_root.revision,
@@ -1302,8 +1380,8 @@ class Brain:
             classified: set[str] = set()
 
             for block_id in module.block_ids:
-                if not self.store.is_resolvable(block_id):
-                    unreadable = tombstoned if self.store.has(block_id) else missing
+                if block_id in module.tombstones or not self.store.is_resolvable(block_id):
+                    unreadable = tombstoned if block_id in module.tombstones or self.store.has(block_id) else missing
                     unreadable.setdefault(memory_type, []).append(block_id)
                     continue
 
@@ -1330,6 +1408,35 @@ class Brain:
             content_tombstoned=content_tombstoned,
             content_missing=content_missing,
         )
+
+    def audit_validation(self) -> ValidationAudit:
+        """
+        Report which committed blocks can show the verdict that admitted them.
+
+        Every block entering a composition must be accompanied by a validation record in provenance
+        naming the verdict, the checks that ran, and the task (paper Section 10.3). This reads the
+        ledger back and says where that record is missing.
+
+        It reports rather than refuses. A brain written before the record existed is not a brain that
+        did anything wrong, and refusing it would take availability away to gain an auditability the
+        snapshot cannot retroactively supply. The invariant that *does* refuse is the removal one,
+        because there a missing record is how the ledger would be quietly emptied.
+
+        Returns:
+            ValidationAudit: The derived blocks whose verdict is readable, and those whose is not.
+        """
+        ledger = Ledger.of(self.modules())
+        accounted: dict[MemoryType, list[BlockId]] = {}
+        unaccounted: dict[MemoryType, list[BlockId]] = {}
+
+        for memory_type in self._snapshot.installed:
+            if memory_type in (MemoryType.CANONICAL, MemoryType.PROVENANCE):
+                continue
+            for block_id in self.module(memory_type).block_ids:
+                bucket = accounted if block_id in ledger.validations else unaccounted
+                bucket.setdefault(memory_type, []).append(block_id)
+
+        return ValidationAudit(accounted=accounted, unaccounted=unaccounted)
 
     def open_index(self, memory_type: MemoryType, kind: IndexKind) -> Index:
         """
@@ -1766,6 +1873,10 @@ class Brain:
 
         producer = report.producer or Producer(kind=ProducerKind.ACTOR, id=self.actor.id)
         now = utc_timestamp()
+        # A report from before the gate carried its check set would otherwise write a record naming no
+        # check, which the schema refuses -- correctly, since a verdict under an unstated check set is
+        # not a claim anyone can act on.
+        checks = list(report.checks) or [_UNRECORDED_CHECKS]
 
         blocks: dict[MemoryType, list[Block]] = {}
         provenance: list[ProvenanceBlock] = []
@@ -1783,6 +1894,21 @@ class Brain:
                         at=now,
                         task=report.task_id,
                         locator=result.candidate.locator,
+                    )
+                )
+            )
+            # The verdict travels with the block rather than staying on the write path. A consumer that
+            # meets this composition can then read what admitted each member instead of trusting whoever
+            # committed it, which is the whole difference between a ledger and a habit.
+            provenance.append(
+                ProvenanceBlock(
+                    record=ValidationRecord(
+                        block=block.block_id,
+                        verdict=result.status,
+                        checks=checks,
+                        actor=self.actor,
+                        at=now,
+                        task=report.task_id,
                     )
                 )
             )
@@ -1835,6 +1961,7 @@ class Brain:
         blocks: dict[MemoryType, list[Block]],
         provenance: Sequence[ProvenanceBlock],
         without: dict[MemoryType, list[BlockId]] | None = None,
+        tombstones: Mapping[MemoryType, Iterable[BlockId]] | None = None,
     ) -> CommitResult:
         """
         Store blocks, advance the affected compositions, and publish a snapshot.
@@ -1851,6 +1978,8 @@ class Brain:
             provenance (Sequence[ProvenanceBlock]): Provenance entries to record alongside them.
             without (dict[MemoryType, list[BlockId]] | None): Blocks to exclude from a composition. The
                 blocks themselves are untouched -- what changes is which composition names them.
+            tombstones (Mapping[MemoryType, Iterable[BlockId]] | None): Destroyed identities to add
+                to module references without changing their compositions or Merkle roots.
 
         Returns:
             CommitResult: The new snapshot and the new roots.
@@ -1862,7 +1991,12 @@ class Brain:
             by_module.setdefault(MemoryType.PROVENANCE, []).extend(provenance)
 
         excluded = {kind: list(ids) for kind, ids in (without or {}).items()}
-        touched = [*by_module, *(kind for kind in excluded if kind not in by_module)]
+        destroyed = {kind: list(ids) for kind, ids in (tombstones or {}).items()}
+        touched = [
+            *by_module,
+            *(kind for kind in excluded if kind not in by_module),
+            *(kind for kind in destroyed if kind not in by_module and kind not in excluded),
+        ]
 
         committed: list[BlockId] = []
         references: list[ModuleRef] = []
@@ -1876,8 +2010,11 @@ class Brain:
             module = self._module_or_empty(memory_type).with_blocks(block.block_id for block in items)
             if memory_type in excluded:
                 module = module.without_blocks(excluded[memory_type])
+            if memory_type in destroyed:
+                module = module.with_tombstones(destroyed[memory_type])
             self._rebuild_indices(module)
-            reference = module.persist(embedding_model=self._embedding_model(memory_type))
+            embedding_model, index_digest = self._travelling_index_binding(memory_type)
+            reference = module.persist(embedding_model=embedding_model, index_digest=index_digest)
             references.append(reference)
             roots[memory_type] = reference.root
             if memory_type is not MemoryType.PROVENANCE:
@@ -1967,7 +2104,11 @@ class Brain:
         if not indices:
             return
 
-        blocks = [block_id for block_id in module.block_ids if module.store.is_resolvable(block_id)]
+        blocks = [
+            block_id
+            for block_id in module.block_ids
+            if block_id not in module.tombstones and module.store.is_resolvable(block_id)
+        ]
         decoded = [module.get(block_id) for block_id in blocks]
         for index in indices:
             # The store is passed as a ContentReader: an index over blocks that name their content
@@ -1990,29 +2131,51 @@ class Brain:
         """
         for artifact in published_artifacts(self.store):
             manifest = artifact.manifest
-            if manifest is None or manifest.config.digest != self._snapshot.digest:
+            if manifest is None:
+                continue
+            if manifest.config.digest == self._snapshot.digest:
+                bound_modules = self._snapshot.modules
+            elif manifest.config.media_type == PROJECTION_MEDIA_TYPE:
+                try:
+                    projection = Projection.from_document(self.store.get_bytes(manifest.config.digest))
+                except (BlockError, DistributionError):
+                    continue
+                if projection.source not in self._snapshot.parents or any(
+                    projection.modules.get(kind) != reference for kind, reference in self._snapshot.modules.items()
+                ):
+                    continue
+                bound_modules = self._snapshot.modules
+            else:
                 continue  # Unreadable, or a manifest for some other version of this brain.
 
             for memory_type in self.indices:
-                layer = manifest.vector_index_for(memory_type)
-                if layer is None or not self.store.is_resolvable(layer.digest):
-                    continue
                 try:
+                    layer = self._validated_vector_index(manifest, bound_modules, memory_type)
+                    if layer is None or not self.store.is_resolvable(layer.digest):
+                        continue
                     self._load_index(memory_type, layer)
-                except DistributionError:
-                    # Most likely an index built by a model this client no longer uses. Refusing it is
-                    # right; refusing to *open the brain* over it is not. Opening is not a request to
-                    # install anything, so the layer is skipped and the module simply has no vector index
-                    # -- which ``travelling_indices`` reports, and a repack replaces.
+                except DistributionError as error:
+                    # Opening is not a request to install anything, so an unusable layer must not strand
+                    # the brain. It is skipped, but never loaded merely because a mutable local manifest
+                    # names it: the signed snapshot remains the authority over the payload digest.
+                    logging.getLogger(__name__).warning(
+                        "ignoring the %s travelling index while opening this brain: %s",
+                        memory_type.value,
+                        error,
+                    )
                     continue
             return
 
-    def _embedding_model(self, memory_type: MemoryType) -> str | None:
-        for index in self.indices.get(memory_type, []):
-            if index.model_tag is not None:
-                return index.model_tag
-        reference = self._snapshot.modules.get(memory_type)
-        return reference.embedding_model if reference else None
+    def _travelling_index_binding(self, memory_type: MemoryType) -> tuple[str | None, OciDigest | None]:
+        """Persist the exact travelling-index payload built for a new module reference."""
+        travelling = [index for index in self.indices.get(memory_type, []) if not index.rebuildable]
+        if not travelling or memory_type not in self._vouched:
+            return None, None
+        index = travelling[0]
+        if not isinstance(index, TravellingIndex) or index.model_tag is None:
+            return None, None
+        payload = index.dump()
+        return index.model_tag, self.store.put_bytes(payload)
 
     # --- Retention -------------------------------------------------------------
 
@@ -2340,10 +2503,10 @@ class Brain:
         names is destroyed; the redacted block's own envelope always is. When this holds bytes back,
         ``redacted`` says so by not listing them.
 
-        Two limits are worth restating. A hash of low-entropy content is not anonymous, so confirming a
-        guess may still be possible while the ``block_id`` is kept. And erasure does not propagate across
-        already-pulled copies: a revocation can be published, but a distributed brain can only signal
-        destruction, not guarantee it.
+        Two limits are worth restating. Low-entropy or enumerable content may still be recovered by
+        guessing and hashing candidates while the ``block_id`` is kept. And erasure does not propagate
+        across already-pulled copies: a revocation can be published, but a distributed brain can only
+        signal destruction, not guarantee it.
 
         Args:
             block (BlockId): The block to redact.
@@ -2377,7 +2540,7 @@ class Brain:
                 reason=reason,
             )
         )
-        commit = self._write(blocks={}, provenance=[record])
+        commit = self._write(blocks={}, provenance=[record], tombstones={memory_type: [block]})
 
         # The record goes in first. A tombstone with no ledger entry would be indistinguishable from
         # corruption, which is the one thing Section 10.6 forbids.
@@ -2598,8 +2761,25 @@ class Brain:
             collapsed=len(chain),
             replayable=len(replayable),
             untransferred=untransferred,
+            authorship=self._offered_authorship(head),
             carried=self._carried_verbatim(merged, head),
         )
+
+    def _offered_authorship(self, head: Snapshot) -> Authorship | None:
+        """Who signed an incoming head, judged as a proposal rather than as a head.
+
+        The stance is the whole point. The same signature by a key this brain's trust root does not
+        list is an impersonation attempt when a registry serves it as the current state, and an
+        ordinary contribution when someone offers it for review -- and a maintainer reading a plan is
+        in the second situation by construction. Reporting it as unauthorized here would make an open
+        project unable to describe the thing it does most often.
+        """
+        report = Authenticator(self.store).authenticate(
+            head,
+            current=self._snapshot.trust_root,
+            stance=SnapshotStance.OFFERED,
+        )
+        return None if report.state is AuthorshipState.UNSIGNED else report.authorship()
 
     def _cascade_for(self, merged: Mapping[MemoryType, ModuleReconciliation]) -> dict[MemoryType, list[BlockId]]:
         """The cascade a reconciled set of modules implies, read off that set alone.
@@ -3408,9 +3588,15 @@ class Brain:
                 self.store,
                 Composition(memory_type, block_ids),
                 self._index_map(memory_type),
+                tombstones=(
+                    block_id
+                    for block_id in block_ids
+                    if self.store.has(block_id) and not self.store.is_resolvable(block_id)
+                ),
             )
             self._rebuild_indices(module)
-            references.append(module.persist(embedding_model=self._embedding_model(memory_type)))
+            embedding_model, index_digest = self._travelling_index_binding(memory_type)
+            references.append(module.persist(embedding_model=embedding_model, index_digest=index_digest))
             roots[memory_type] = references[-1].root
 
         for memory_type, reference in carried.items():
@@ -3487,21 +3673,22 @@ class Brain:
         if history is not None:
             layers.append(history)
 
-        projected = self._projection(published)
-        config_bytes = projected.canonical_bytes()
+        config_document = self._projection(published)
+        config_bytes = config_document.canonical_bytes()
         config = Descriptor(
-            media_type=CONFIG_MEDIA_TYPE,
+            media_type=(PROJECTION_MEDIA_TYPE if isinstance(config_document, Projection) else CONFIG_MEDIA_TYPE),
             digest=self.store.put_bytes(config_bytes),
             size=len(config_bytes),
         )
         manifest = build_manifest(
-            projected,
+            self._snapshot,
             config,
             layers,
             annotations={
                 ANNOTATION_SOURCE_SNAPSHOT: str(self._snapshot.digest),
                 ANNOTATION_SCHEMA_VERSIONS: declare_schema_versions(schema_versions),
             },
+            published=config_document.modules.values(),
         )
         manifest_bytes = manifest.to_bytes()
         manifest_digest = self.store.put_bytes(manifest_bytes)
@@ -3621,12 +3808,21 @@ class Brain:
         anything the local store merely happens to hold: a hostile listing must not get to
         attach records to unrelated local snapshots and poison their per-snapshot caps.
         """
-        allowed: set[OciDigest] = {manifest.config.digest}
-        starts = [manifest.config.digest]
-        declared = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
-        if declared is not None:
-            with suppress(IdentityError):
-                starts.append(OciDigest.parse(declared))
+        if manifest.config.media_type == PROJECTION_MEDIA_TYPE:
+            try:
+                source = Projection.from_document(self.store.get_bytes(manifest.config.digest)).source
+            except (BlockError, DistributionError):
+                return set()
+            allowed: set[OciDigest] = {source}
+            starts = [source]
+        else:
+            # Legacy reduced-snapshot projections used the annotation as their only binding.
+            allowed = {manifest.config.digest}
+            starts = [manifest.config.digest]
+            declared = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
+            if declared is not None:
+                with suppress(IdentityError):
+                    starts.append(OciDigest.parse(declared))
         for digest in starts:
             document = load_snapshot(self.store, digest)
             if document is None:
@@ -3681,8 +3877,8 @@ class Brain:
                 except DistributionError:
                     continue
             try:
-                record = SignatureRecord.model_validate_json(self.store.get_bytes(record_layer.digest))
-            except (ValueError, BlockError):
+                record = SignatureRecord.from_document(self.store.get_bytes(record_layer.digest))
+            except (ValueError, BlockError, AuthenticityError):
                 continue
             if record.snapshot not in allowed:
                 continue
@@ -3719,15 +3915,21 @@ class Brain:
         manifest = await client.resolve(reference, tag)
         if not self.store.is_resolvable(manifest.config.digest):
             await client.pull_blob(reference, manifest.config.digest, self.store)
-        remote = self._read_remote_snapshot(manifest.config.digest)
         history = manifest.history
         if history is not None:
             if not self.store.is_resolvable(history.digest):
                 await client.pull_blob(reference, history.digest, self.store)
             unpack_history(self.store.get_bytes(history.digest), self.store)
+        resolved = self._resolve_config(manifest)
         await self._merge_signatures(client, reference, manifest)
-        subject = self._resolve_source_anchor(remote, manifest) or remote
+        subject = resolved.source
         report = Authenticator(self.store).authenticate(subject, current=subject.trust_root)
+        if report.has(FindingKind.PIN_BRAIN_MISMATCH):
+            raise TrustRootMismatchError(
+                f"{reference}:{tag} is not the brain this pin was taken for -- "
+                f"{report.detail(FindingKind.PIN_BRAIN_MISMATCH)} -- refused before transferring any "
+                f"module layer"
+            )
         if report.has(FindingKind.TRUST_ROOT_MISMATCH):
             raise TrustRootMismatchError(
                 f"{reference}:{tag} carries a trust root that neither matches the pinned "
@@ -3761,12 +3963,55 @@ class Brain:
         of leaking a validation traceback.
         """
         try:
-            return Snapshot.model_validate_json(self.store.get_bytes(digest))
-        except ValueError as error:
+            return Snapshot.from_document(self.store.get_bytes(digest))
+        except (ValueError, SnapshotError) as error:
             raise DistributionError(
                 f"the artifact's snapshot document {digest.short} cannot be read by this client: "
                 f"{error}; if the artifact was published by a newer SDK, upgrade pyboltzmann"
             ) from error
+
+    def _resolve_config(self, manifest: BrainManifest) -> _ResolvedConfig:
+        """Resolve a snapshot or projection config to the snapshot that authorizes it.
+
+        The caller has already fetched and unpacked the history layer. A projection's ``source``
+        field is the binding; the manifest annotation is deliberately ignored here because it is
+        only a registry-controlled transfer hint.
+        """
+        if manifest.config.media_type == CONFIG_MEDIA_TYPE:
+            document = self._read_remote_snapshot(manifest.config.digest)
+            # Compatibility with v0.7 subset artifacts, whose config was a reduced snapshot and
+            # whose only source binding was the annotation. New producers never take this path.
+            source = self._resolve_legacy_source_anchor(document, manifest) or document
+            return _ResolvedConfig(document=document, source=source)
+        if manifest.config.media_type != PROJECTION_MEDIA_TYPE:
+            raise DistributionError(
+                f"artifact config has unsupported media type {manifest.config.media_type!r}; expected "
+                f"{CONFIG_MEDIA_TYPE!r} or {PROJECTION_MEDIA_TYPE!r}"
+            )
+
+        projection = Projection.from_document(self.store.get_bytes(manifest.config.digest))
+        projected_source = load_snapshot(self.store, projection.source)
+        if projected_source is None:
+            raise DistributionError(
+                f"projection {projection.digest.short} binds source snapshot {projection.source.short}, "
+                "but that snapshot is not resolvable from the artifact's history layer"
+            )
+        mismatched = [
+            memory_type.value
+            for memory_type, reference in projection.modules.items()
+            if projected_source.modules.get(memory_type) != reference
+        ]
+        if mismatched:
+            raise DistributionError(
+                f"projection {projection.digest.short} is not a verbatim subset of source "
+                f"{projected_source.digest.short}; mismatched module references: {', '.join(sorted(mismatched))}"
+            )
+        if projection.boltzmann != projected_source.boltzmann:
+            raise DistributionError(
+                f"projection protocol version {projection.boltzmann} disagrees with source snapshot "
+                f"version {projected_source.boltzmann}"
+            )
+        return _ResolvedConfig(document=projection, source=projected_source)
 
     def _modules_to_publish(self, modules: Iterable[MemoryType] | None) -> list[MemoryType]:
         """Which modules an artifact will carry, refusing a subset that would strand a citation."""
@@ -3791,25 +4036,20 @@ class Brain:
             )
         return wanted
 
-    def _projection(self, published: list[MemoryType]) -> Snapshot:
+    def _projection(self, published: list[MemoryType]) -> Snapshot | Projection:
         """
-        The snapshot an artifact carries.
+        The snapshot or projection document an artifact carries.
 
-        For a complete publish this is the brain's own snapshot. For a subset it is a projection of it --
-        the same roots, fewer modules -- with no parent, because a projection is not a version in this
-        brain's history and chaining it would put a document nobody can resolve into the consumer's chain.
+        For a complete publish this is the brain's own snapshot. A subset uses a distinct projection
+        document: it binds the source digest and copies retained module references verbatim, without
+        pretending the view has its own lineage, authority, timestamp, or signatures.
         """
         if set(published) == set(self._snapshot.installed):
             return self._snapshot
-        # The trust root travels with every projection: a partial install must still be
-        # verifiable, which is the whole argument for why it is not a sixth module -- there is no
-        # install that does not fetch the snapshot, so there must be no snapshot that omits it.
-        return Snapshot(
+        return Projection(
             boltzmann=self._snapshot.boltzmann,
+            source=self._snapshot.digest,
             modules={kind: self._snapshot.modules[kind] for kind in published},
-            created_at=self._snapshot.created_at,
-            labels=self._snapshot.labels,
-            trust_root=self._snapshot.trust_root,
         )
 
     def _pack_history(self) -> Descriptor | None:
@@ -3836,7 +4076,7 @@ class Brain:
             # consumer can verify an old version but never reopen or *difference* it, and the
             # required-scope computation is a difference (paper Section 8.5). Only what is still
             # resolvable goes -- a pruned composition is gone here as well as there.
-            for reference in Snapshot.model_validate_json(raw).modules.values():
+            for reference in Snapshot.from_document(raw).modules.values():
                 if reference.composition.hex not in compositions and self.store.is_resolvable(reference.composition):
                     compositions[reference.composition.hex] = self.store.get_bytes(reference.composition)
         if not documents:
@@ -3854,30 +4094,31 @@ class Brain:
         travelling index, which is true.
         """
         travelling = [index for index in self.indices.get(memory_type, []) if not index.rebuildable]
-        if not travelling or memory_type not in self._vouched:
-            return None
-
-        index = travelling[0]
-        if not isinstance(index, TravellingIndex):
+        if travelling and memory_type in self._vouched and not isinstance(travelling[0], TravellingIndex):
+            index = travelling[0]
             raise DistributionError(
                 f"the {index.kind.value} index for {memory_type.value} reports rebuildable=False but "
                 f"cannot dump: an index that no client can rebuild has to be publishable, or the module "
                 f"arrives without it and nothing can regenerate it"
             )
-
-        payload = index.dump()
+        if reference.index_digest is None:
+            return None
+        if not self.store.is_resolvable(reference.index_digest):
+            raise DistributionError(
+                f"the {memory_type.value} snapshot binds travelling index {reference.index_digest.short}, "
+                "but its payload is not resolvable in this store"
+            )
+        payload = self.store.get_bytes(reference.index_digest)
+        assert reference.embedding_model is not None
         annotations = {
             ANNOTATION_MEMORY_TYPE: memory_type.value,
-            ANNOTATION_INDEX_KIND: index.kind.value,
+            ANNOTATION_INDEX_KIND: IndexKind.VECTOR.value,
+            ANNOTATION_EMBEDDING_MODEL: reference.embedding_model,
         }
-        if index.model_tag is not None:
-            annotations[ANNOTATION_EMBEDDING_MODEL] = index.model_tag
-        elif reference.embedding_model is not None:
-            annotations[ANNOTATION_EMBEDDING_MODEL] = reference.embedding_model
 
         return Descriptor(
             media_type=VECTOR_INDEX_MEDIA_TYPE,
-            digest=self.store.put_bytes(payload),
+            digest=reference.index_digest,
             size=len(payload),
             annotations=annotations,
         )
@@ -4008,6 +4249,7 @@ class Brain:
         *,
         ignore_vector_indices: bool = False,
         verification: VerificationPolicy | None = None,
+        allow_rollback: bool = False,
     ) -> Snapshot:
         """
         Fetch a published brain into this local layout, selectively.
@@ -4034,6 +4276,8 @@ class Brain:
                 warning on first contact and refused when this brain was previously seen signed,
                 and a head whose only valid signatures are ``propose``-scoped is refused. What is
                 never configurable is the reporting.
+            allow_rollback (bool): Install a served head that is a strict ancestor of the head
+                already held. Defaults to refusal. An override always emits a ``ROLLBACK`` warning.
 
         Returns:
             Snapshot: The newly installed state.
@@ -4041,50 +4285,56 @@ class Brain:
         Raises:
             DistributionError: If a wanted module is not in the artifact, a wanted module uses a block
                 schema this client does not implement, or a layer does not verify.
+            RollbackError: If the served head is a strict ancestor of the local head and
+                ``allow_rollback`` is false.
         """
         await self._require_pin_holds(client, reference, tag)
-        manifest, remote, references, _ = await self._retrieve(client, reference, tag, modules)
-        await self._merge_signatures(client, reference, manifest)
-        self._apply_verification_policy(
-            remote, verification, reference=reference, anchor=self._resolve_source_anchor(remote, manifest)
+        manifest, resolved, references, _ = await self._retrieve(client, reference, tag, modules)
+        source = resolved.source
+        self._guard_pull_rollback(
+            source,
+            reference=reference,
+            tag=tag,
+            allow=allow_rollback,
         )
+        await self._merge_signatures(client, reference, manifest)
+        self._apply_verification_policy(source, verification, reference=reference)
         wanted = [reference_.memory_type for reference_ in references]
 
         for memory_type in wanted:
             # The one derived structure a model-agnostic client cannot rebuild, so it travels.
-            index_layer = manifest.vector_index_for(memory_type)
+            index_layer = self._validated_vector_index(manifest, resolved.modules, memory_type, warn_legacy=False)
             if index_layer is not None and not ignore_vector_indices:
                 if not self.store.is_resolvable(index_layer.digest):
                     await client.pull_blob(reference, index_layer.digest, self.store)
                 self._load_index(memory_type, index_layer)
 
         complete = set(wanted) == set(manifest.modules)
-        if complete:
+        if complete and not resolved.is_projection:
             # Adopt the remote document verbatim. Rebuilding an equivalent one would give it a fresh
             # ``created_at`` and therefore a different digest, and the fast-forward check compares
             # digests -- so a push back to the same tag would look like a divergence when nothing
             # diverged at all.
-            installed = remote
+            assert isinstance(resolved.document, Snapshot)
+            installed = resolved.document
         else:
             # Chained to the version it was taken from, not parentless. A partial install *succeeds* that
             # version -- same roots, fewer modules -- and a snapshot that recorded no parent would leave a
             # consumer holding knowledge with no recorded origin, unable to say what it was installed from
             # and unable to be reconciled with the history it came from (paper Section 12.8).
-            source = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
-            published = OciDigest.parse(source) if source else manifest.config.digest
             installed = Snapshot(
-                boltzmann=remote.boltzmann,
+                boltzmann=source.boltzmann,
                 modules={reference_.memory_type: reference_ for reference_ in references},
-                parents=[published] if self.store.is_resolvable(published) else [],
-                labels=remote.labels,
-                trust_root=remote.trust_root,
+                parents=[source.digest],
+                labels=source.labels,
+                trust_root=source.trust_root,
             )
 
         origin = Origin(
             reference=reference,
             tag=tag,
-            snapshot=manifest.config.digest,
-            partial=not complete,
+            snapshot=source.digest,
+            partial=resolved.is_projection or not complete,
         )
         advanced = self._advance(installed, origin=origin)
 
@@ -4101,8 +4351,46 @@ class Brain:
         self.rebuild_indices(wanted)
         return advanced
 
-    def _resolve_source_anchor(self, remote: Snapshot, manifest: BrainManifest) -> Snapshot | None:
-        """The signed source a subset artifact is a projection of, validated fail-closed.
+    def _guard_pull_rollback(
+        self,
+        served: Snapshot,
+        *,
+        reference: str,
+        tag: str,
+        allow: bool,
+    ) -> None:
+        """Refuse a strict ancestor of the held head, or report an explicit override.
+
+        A missing local parent makes the ancestry question undecidable. The protocol permits a
+        warning in that pruned-history case but does not permit treating uncertainty as proof of a
+        rollback, so the pull continues with a distinguishable ``ROLLBACK_UNCHECKED`` report.
+        """
+        if self._state is None or served.digest == self._snapshot.digest:
+            return
+        relation = descends_from(self.store, self._snapshot, served.digest)
+        if relation is None:
+            logging.getLogger(__name__).warning(
+                "ROLLBACK_UNCHECKED: cannot determine whether %s:%s at %s predates held head %s "
+                "because local ancestry is pruned",
+                reference,
+                tag,
+                served.digest.short,
+                self._snapshot.digest.short,
+            )
+            return
+        if not relation:
+            return
+
+        detail = (
+            f"ROLLBACK: {reference}:{tag} serves {served.digest.short}, a strict ancestor of "
+            f"held head {self._snapshot.digest.short}"
+        )
+        if not allow:
+            raise RollbackError(f"{detail}; refused. Pass allow_rollback=True to override explicitly")
+        logging.getLogger(__name__).warning("%s; ROLLBACK override accepted", detail)
+
+    def _resolve_legacy_source_anchor(self, remote: Snapshot, manifest: BrainManifest) -> Snapshot | None:
+        """Resolve the signed source of a legacy reduced-snapshot projection.
 
         A projection is parentless and nobody signs it; what its module roots commit to is
         byte-identical content the source head attests. The annotation names the source, the
@@ -4152,7 +4440,6 @@ class Brain:
         verification: VerificationPolicy | None,
         *,
         reference: str,
-        anchor: Snapshot | None = None,
     ) -> None:
         """The install-time gate the verification policy configures (paper Section 8.10).
 
@@ -4164,13 +4451,17 @@ class Brain:
         Anything else unauthorized installs with a warning: what is not configurable is whether
         the result is reported, and the report is a call away either way.
 
-        A subset artifact is judged through its ``anchor`` -- the signed source it is a
-        validated projection of -- because the projection itself is parentless and unsigned by
-        design; its module roots are commitments the source attests, and the layers were
-        already verified against those roots.
+        A subset artifact passes its resolved source here, not the projection document: the view
+        is unsigned by design and its module roots are commitments the source attests.
         """
+        removals = check_removal_invariant(self.store, remote)
+        if not removals.is_valid:
+            raise RemovalInvariantError(
+                f"snapshot {remote.digest.short} has absences its reachable removal ledger does not "
+                f"account for: {removals.detail}"
+            )
         policy = verification if verification is not None else VerificationPolicy()
-        judged = anchor if anchor is not None else remote
+        judged = remote
         records = for_snapshot(self.store, judged.digest)
         if not records:
             previously = self._read_remotes().seen_signed.get(reference)
@@ -4194,6 +4485,8 @@ class Brain:
                 )
             return
         report = Authenticator(self.store, policy=policy).authenticate(judged, current=judged.trust_root)
+        if report.has(FindingKind.REMOVAL_INVARIANT):
+            raise RemovalInvariantError(report.detail(FindingKind.REMOVAL_INVARIANT))
         if report.is_proposal and not policy.allow_propose_head:
             raise InsufficientScopeError(
                 f"the remote head {judged.digest.short} is signed only under propose: attributable, "
@@ -4216,7 +4509,7 @@ class Brain:
         reference: str,
         tag: str,
         modules: Iterable[MemoryType] | None = None,
-    ) -> tuple[BrainManifest, Snapshot, list[ModuleRef], dict[MemoryType, list[BlockId]]]:
+    ) -> tuple[BrainManifest, _ResolvedConfig, list[ModuleRef], dict[MemoryType, list[BlockId]]]:
         """Download a published history's modules into the store, verifying each against the snapshot
         that names it.
 
@@ -4225,8 +4518,8 @@ class Brain:
         happens *after* the bytes land.
 
         Returns:
-            tuple: The manifest, the remote snapshot, the module references retrieved in the order they
-            were asked for, and the blocks each module's layer actually contributed to this store.
+            tuple: The manifest, its resolved config and source snapshot, the module references
+            retrieved in the requested order, and the blocks each module layer contributed.
         """
         manifest = await client.resolve(reference, tag)
         wanted = list(modules) if modules is not None else manifest.modules
@@ -4240,7 +4533,6 @@ class Brain:
 
         if not self.store.is_resolvable(manifest.config.digest):
             await client.pull_blob(reference, manifest.config.digest, self.store)
-        remote = self._read_remote_snapshot(manifest.config.digest)
 
         # Before the modules, because it is what makes the retrieved snapshot's parents resolvable, and a
         # caller that fetched a history in order to reconcile against it needs that whether or not the
@@ -4251,34 +4543,41 @@ class Brain:
                 await client.pull_blob(reference, history.digest, self.store)
             unpack_history(self.store.get_bytes(history.digest), self.store)
 
+        resolved = self._resolve_config(manifest)
+        for memory_type in wanted:
+            self._validated_vector_index(manifest, resolved.modules, memory_type)
+
         references: list[ModuleRef] = []
         incoming: dict[MemoryType, list[BlockId]] = {}
         for memory_type in wanted:
             layer = manifest.layer_for(memory_type)
             assert layer is not None  # checked above
+            expected = resolved.modules.get(memory_type)
+            if expected is None:
+                named = ", ".join(kind.value for kind in resolved.modules) or "none"
+                raise DistributionError(
+                    f"the artifact carries a {memory_type.value} layer but its config names no root for "
+                    f"it; the config names: {named}. The manifest and its config disagree, so there is "
+                    f"nothing to verify the layer against."
+                )
             if not self.store.is_resolvable(layer.digest):
                 await client.pull_blob(reference, layer.digest, self.store)
 
             # The manifest's layers and its config blob are two separate registry-supplied documents,
             # and nothing forces a registry to keep them consistent. Indexing straight into
-            # ``remote.modules`` turned that into a bare KeyError, which is neither documented here nor
+            # the resolved config turned that into a bare KeyError, which is neither documented here nor
             # actionable by a caller.
-            expected = remote.modules.get(memory_type)
-            if expected is None:
-                named = ", ".join(kind.value for kind in remote.installed) or "none"
-                raise DistributionError(
-                    f"the artifact carries a {memory_type.value} layer but its snapshot names no root for "
-                    f"it; the snapshot names: {named}. The manifest and its config disagree, so there is "
-                    f"nothing to verify the layer against."
-                )
-
             # Bounded by ``unpack_layer``'s own expansion ratio: the descriptor's size is the compressed
             # blob's, so it says nothing about what decompressing costs.
-            composition = unpack_layer(self.store.get_bytes(layer.digest), self.store)
+            composition = unpack_layer(
+                self.store.get_bytes(layer.digest),
+                self.store,
+                tombstones=expected.tombstones or (),
+            )
             if composition.root != expected.root:
                 raise DistributionError(
                     f"the {memory_type.value} layer unpacks to root {composition.root.short} but the "
-                    f"artifact's snapshot names {expected.root.short}"
+                    f"artifact's config names {expected.root.short}"
                 )
             references.append(expected)
 
@@ -4288,7 +4587,39 @@ class Brain:
             held = self._module_or_empty(memory_type)
             incoming[memory_type] = [block_id for block_id in composition.block_ids if block_id not in held]
 
-        return manifest, remote, references, incoming
+        return manifest, resolved, references, incoming
+
+    def _validated_vector_index(
+        self,
+        manifest: BrainManifest,
+        modules: Mapping[MemoryType, ModuleRef],
+        memory_type: MemoryType,
+        *,
+        warn_legacy: bool = True,
+    ) -> Descriptor | None:
+        """Resolve only an index layer whose payload digest the signed snapshot names."""
+        layers = [layer for layer in manifest.layers if layer.is_vector_index and layer.memory_type is memory_type]
+        reference = modules.get(memory_type)
+        expected = reference.index_digest if reference is not None else None
+        if expected is None:
+            if layers and warn_legacy:
+                logging.getLogger(__name__).warning(
+                    "ignoring the %s vector index: the snapshot does not bind its payload digest",
+                    memory_type.value,
+                )
+            return None
+        if len(layers) != 1:
+            raise DistributionError(
+                f"the signed snapshot names {memory_type.value} index {expected.short}, but the "
+                f"manifest carries {len(layers)} matching index layers; exactly one is required"
+            )
+        layer = layers[0]
+        if layer.digest != expected:
+            raise DistributionError(
+                f"the signed snapshot names {memory_type.value} index {expected.short}, but the "
+                f"artifact manifest substituted {layer.digest.short}"
+            )
+        return layer
 
     async def fetch(
         self,
@@ -4330,7 +4661,7 @@ class Brain:
                 schema this client does not implement, or a layer does not verify against the snapshot
                 that names it.
         """
-        manifest, remote, references, incoming = await self._retrieve(client, reference, tag, modules)
+        manifest, resolved, references, incoming = await self._retrieve(client, reference, tag, modules)
         # A contribution is a *signed* snapshot in someone else's repository; its records travel
         # with it, or the maintainer would judge attribution it cannot see.
         await self._merge_signatures(client, reference, manifest)
@@ -4339,8 +4670,8 @@ class Brain:
         return FetchResult(
             reference=reference,
             tag=tag,
-            snapshot=remote,
-            digest=manifest.config.digest,
+            snapshot=resolved.source,
+            digest=resolved.source.digest,
             modules=[reference_.memory_type for reference_ in references],
             incoming=incoming,
         )
@@ -4435,7 +4766,18 @@ class Brain:
         except ReferenceNotFoundError:
             return  # Nothing is published here, so nothing can be narrowed.
 
-        omitted = [kind.value for kind in manifest.modules if not self._snapshot.has_module(kind)]
+        remote_modules = manifest.modules
+        if manifest.config.media_type == PROJECTION_MEDIA_TYPE:
+            if not self.store.is_resolvable(manifest.config.digest):
+                await client.pull_blob(reference, manifest.config.digest, self.store)
+            history = manifest.history
+            if history is not None:
+                if not self.store.is_resolvable(history.digest):
+                    await client.pull_blob(reference, history.digest, self.store)
+                unpack_history(self.store.get_bytes(history.digest), self.store)
+            remote_modules = self._resolve_config(manifest).source.installed
+
+        omitted = [kind.value for kind in remote_modules if not self._snapshot.has_module(kind)]
         if omitted:
             installed = ", ".join(kind.value for kind in self._snapshot.installed) or "none"
             raise DistributionError(
@@ -4455,10 +4797,15 @@ class Brain:
         # one that treats "I could not tell" as "nothing is there" would let an expired credential or a
         # failing registry turn into a push over somebody else's version.
 
-        # A projection's config is not a version in anyone's history, so the manifest records the full
-        # snapshot it came from and that is what the ancestry has to contain.
-        source = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
-        remote = OciDigest.parse(source) if source else manifest.config.digest
+        # A projection's config is not a version in anyone's history. Its document binds the source;
+        # the annotation is only the compatibility path for v0.7 reduced-snapshot projections.
+        if manifest.config.media_type == PROJECTION_MEDIA_TYPE:
+            if not self.store.is_resolvable(manifest.config.digest):
+                await client.pull_blob(reference, manifest.config.digest, self.store)
+            remote = Projection.from_document(self.store.get_bytes(manifest.config.digest)).source
+        else:
+            source = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
+            remote = OciDigest.parse(source) if source else manifest.config.digest
         # Reachability over every parent, not the first-parent chain: a history this brain merged is
         # contained in it, and publishing over it drops nothing.
         if remote in self.reachable_history():
@@ -4487,7 +4834,7 @@ class Brain:
         snapshots = []
         for digest in self._state.retained:
             if self.store.is_resolvable(digest):
-                snapshots.append(Snapshot.model_validate_json(self.store.get_bytes(digest)))
+                snapshots.append(Snapshot.from_document(self.store.get_bytes(digest)))
         return snapshots
 
     def state(self) -> dict[str, Any]:

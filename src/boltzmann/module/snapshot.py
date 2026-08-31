@@ -14,14 +14,14 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from boltzmann.authenticity.trust_root import TrustRoot
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.constants import PROTOCOL_VERSION
-from boltzmann.exceptions import SnapshotError
-from boltzmann.identity.digest import MerkleRoot, OciDigest
-from boltzmann.identity.serialization import canonicalize
+from boltzmann.exceptions import SerializationError, SnapshotError
+from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
+from boltzmann.identity.serialization import canonicalize, parse_json_strict
 from boltzmann.identity.time import Timestamp, utc_timestamp
 from boltzmann.merkle.tree import LAYOUT_NAME
 
@@ -43,6 +43,15 @@ class ModuleRef(BaseModel):
             vector index, when one travels with it. The vector index is the one
             derived structure a model-agnostic client cannot rebuild on its own
             (paper Section 6.3).
+        index_digest (OciDigest | None): Digest of the travelling index payload. This places the
+            index inside the signed snapshot bytes instead of trusting the registry manifest.
+        tombstones (list[BlockId] | None): Destroyed block identities the composition still names.
+            Present exactly when a module has some: a reference with nothing destroyed omits the
+            member rather than carrying an empty list. The paper's snapshot document says a module
+            "additionally lists those identities" when its composition still names destroyed bytes,
+            so an empty list is not the same document -- and an implementation that emitted one
+            would compute a different snapshot digest from one that did not, for identical brain
+            state. That is the silent divergence the identity layer exists to prevent.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -53,6 +62,25 @@ class ModuleRef(BaseModel):
     block_count: int = Field(ge=0)
     layout: str = LAYOUT_NAME
     embedding_model: str | None = None
+    index_digest: OciDigest | None = None
+    tombstones: list[BlockId] | None = None
+
+    @field_validator("tombstones")
+    @classmethod
+    def _canonicalize_tombstones(cls, values: list[BlockId] | None) -> list[BlockId] | None:
+        """Tombstones are a set on the wire, so construction cannot make order an identity fact."""
+        return None if values is None else sorted(set(values), key=lambda value: value.raw)
+
+    @model_validator(mode="after")
+    def _require_a_model_for_a_bound_index(self) -> Self:
+        """A digest without the model that produced its vectors is not usable safely.
+
+        The reverse is accepted for compatibility with v0.7.0 snapshots. Those legacy references
+        remain readable, but their unbound index layers are never trusted or loaded.
+        """
+        if self.index_digest is not None and self.embedding_model is None:
+            raise ValueError("a module reference with index_digest must also name its embedding_model")
+        return self
 
 
 class Snapshot(BaseModel):
@@ -213,6 +241,30 @@ class Snapshot(BaseModel):
         elif parents:
             document["parents"] = parents
         return canonicalize(document)
+
+    @classmethod
+    def from_document(cls, data: bytes) -> Snapshot:
+        """Decode one canonical snapshot document without ambiguous JSON semantics.
+
+        Args:
+            data (bytes): The config or history bytes that physically identify the snapshot.
+
+        Returns:
+            Snapshot: The validated snapshot.
+
+        Raises:
+            SnapshotError: If the bytes are ambiguous JSON or are not the canonical representation
+                of the snapshot they decode to.
+            pydantic.ValidationError: If the decoded object does not satisfy the snapshot schema.
+        """
+        try:
+            document = parse_json_strict(data)
+        except SerializationError as error:
+            raise SnapshotError(f"snapshot document {error}") from error
+        snapshot = cls.model_validate(document)
+        if snapshot.canonical_bytes() != data:
+            raise SnapshotError("snapshot document is not in canonical jcs/1 form")
+        return snapshot
 
     @property
     def digest(self) -> OciDigest:

@@ -20,6 +20,8 @@ from boltzmann.blocks.provenance import (
     RemovalMechanism,
     RemovalRecord,
     SupersessionRecord,
+    ValidationRecord,
+    ValidationStatus,
 )
 from boltzmann.blocks.semantic import Relation, SemanticBlock, SemanticBlockV2, SemanticBlockV3, SemanticKind
 
@@ -48,6 +50,8 @@ __all__ = [
     "Relation",
     "RemovalMechanism",
     "RemovalRecord",
+    "ValidationRecord",
+    "ValidationStatus",
     "SemanticBlock",
     "SemanticBlockV2",
     "SemanticBlockV3",

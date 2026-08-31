@@ -193,7 +193,10 @@ first parent is the one every rule meaning *the parent* refers to. See
 [Reconciliation](/sdks/boltzmann/guides/reconciliation).
 
 Each `ModuleRef` carries the module's `root`, the `composition` digest, the `block_count`, the Merkle
-`layout` identifier, and the `embedding_model` behind a travelling vector index when one ships with it.
+`layout` identifier, the identities whose bytes were deliberately destroyed in `tombstones`, and the
+`embedding_model` behind a travelling vector index when one ships with it. Tombstones remain composition
+members: they preserve membership while making the loss explicit and signed. Snapshots written before the
+field existed remain readable; newly written snapshots always emit the list, including when it is empty.
 
 <Note>
   A brain may hold a **subset** of modules. Selective installation is the point of packaging each module

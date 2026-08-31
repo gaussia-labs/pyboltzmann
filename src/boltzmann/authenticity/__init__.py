@@ -75,7 +75,10 @@ _SNAPSHOT_FACING = {
     "Finding": "boltzmann.authenticity.authenticator",
     "FindingKind": "boltzmann.authenticity.authenticator",
     "SignatureOutcome": "boltzmann.authenticity.authenticator",
+    "SnapshotStance": "boltzmann.authenticity.authenticator",
     "SignatureVerdict": "boltzmann.authenticity.authenticator",
+    "RemovalIntegrity": "boltzmann.authenticity.removals",
+    "check_removal_invariant": "boltzmann.authenticity.removals",
 }
 """Names resolved lazily because their modules read snapshots.
 
@@ -112,6 +115,7 @@ __all__ = [
     "PinSource",
     "Position",
     "RequiredScopes",
+    "RemovalIntegrity",
     "SIG_VERSION",
     "SUPPORTED_KEY_TYPES",
     "RotationPlan",
@@ -121,6 +125,7 @@ __all__ = [
     "ScopeQuestion",
     "SignatureIndex",
     "SignatureOutcome",
+    "SnapshotStance",
     "SignatureRecord",
     "SignatureVerdict",
     "Signer",
@@ -136,6 +141,7 @@ __all__ = [
     "VerificationPolicy",
     "WireReader",
     "armor",
+    "check_removal_invariant",
     "confirm_since",
     "dearmor",
     "descends_from",

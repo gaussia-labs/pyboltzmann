@@ -19,6 +19,7 @@ from boltzmann.brain import Brain
 from boltzmann.distribution.local import LocalLayoutRegistry
 from boltzmann.exceptions import (
     DivergenceError,
+    MultipleMergeBasesError,
     NoCommonAncestorError,
     ReconciliationBlockedError,
     ReconciliationError,
@@ -32,8 +33,9 @@ from boltzmann.ingest.validation import ValidationStatus
 from boltzmann.ingest.validators import UndecidedValidator
 from boltzmann.module.ledger import Ledger
 from boltzmann.module.module import Module
+from boltzmann.module.snapshot import Snapshot
 from boltzmann.reconcile import MissingEvidence, ReconcileRequest, ReconcileStrategy
-from boltzmann.reconcile.ancestry import composition_at, snapshot_at
+from boltzmann.reconcile.ancestry import common_ancestor, composition_at, snapshot_at
 from boltzmann.reconcile.gate import RECONCILE_VALIDATORS
 from boltzmann.reconcile.resolution import ResolutionKind
 from boltzmann.retention.policy import PERMISSIVE_POLICY
@@ -157,6 +159,42 @@ class TestDivergence:
             upstream.plan_reconcile(fetched.digest)
 
 
+class TestBestCommonAncestor:
+    """The merge base is unique by ancestry, not by traversal order or distance."""
+
+    def test_criss_cross_history_is_refused_even_with_an_older_hint(self) -> None:
+        from boltzmann.store.memory import MemoryBlockStore
+
+        store = MemoryBlockStore()
+
+        def keep(snapshot: Snapshot) -> OciDigest:
+            assert store.put_bytes(snapshot.canonical_bytes()) == snapshot.digest
+            return snapshot.digest
+
+        root = Snapshot(created_at="2026-08-28T10:00:00Z")
+        keep(root)
+        left = Snapshot(parents=[root.digest], created_at="2026-08-28T10:01:00Z")
+        right = Snapshot(parents=[root.digest], created_at="2026-08-28T10:02:00Z")
+        keep(left)
+        keep(right)
+        ours = Snapshot(parents=[left.digest, right.digest], created_at="2026-08-28T10:03:00Z")
+        theirs = Snapshot(parents=[right.digest, left.digest], created_at="2026-08-28T10:04:00Z")
+        keep(ours)
+        keep(theirs)
+
+        with pytest.raises(MultipleMergeBasesError) as raised:
+            common_ancestor(
+                store,
+                {ours.digest, left.digest, right.digest, root.digest},
+                theirs,
+                theirs.digest,
+                hint=root.digest,
+            )
+
+        assert str(left.digest) in str(raised.value)
+        assert str(right.digest) in str(raised.value)
+
+
 class TestFetch:
     """Retrieving a history is not adopting it."""
 
@@ -244,6 +282,22 @@ class TestPlan:
 
         assert result.snapshots == []
         assert upstream.snapshot().digest == before
+
+
+class TestWhoOfferedIt:
+    """A contribution names its author, and being unlisted is not being an attacker."""
+
+    async def test_an_unsigned_contribution_reports_no_authorship(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        """Nothing was claimed, so nothing is reported -- the zero-configuration case, unchanged."""
+        upstream = await published(tmp_path / "upstream", registry)
+        await contributed(tmp_path / "contrib", registry)
+        fetched = await upstream.fetch(registry, PROPOSAL, "proposal")
+
+        plan = upstream.plan_reconcile(fetched.digest)
+
+        assert plan.authorship is None
 
 
 class TestStrategies:

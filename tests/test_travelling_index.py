@@ -17,11 +17,14 @@ from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind
 from boltzmann.brain import Brain
 from boltzmann.distribution.local import LocalLayoutRegistry
+from boltzmann.distribution.manifest import Descriptor
 from boltzmann.distribution.media_types import (
     ANNOTATION_EMBEDDING_MODEL,
     ANNOTATION_INDEX_KIND,
     ANNOTATION_SOURCE_SNAPSHOT,
+    PROJECTION_MEDIA_TYPE,
 )
+from boltzmann.distribution.projection import Projection
 from boltzmann.exceptions import DistributionError
 from boltzmann.identity.digest import BlockId
 from boltzmann.indices.base import AbstractIndex, Index, IndexKind, TravellingIndex
@@ -29,6 +32,7 @@ from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.retention.policy import RetentionPolicy
 from boltzmann.store.memory import MemoryBlockStore
+from boltzmann.store.oci_layout import OciLayoutStore
 
 CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
@@ -139,6 +143,37 @@ class TestTheInterface:
 
 
 class TestPackingTheIndex:
+    def test_the_snapshot_signs_the_exact_index_payload(self, tmp_path: Path) -> None:
+        index = FakeVectorIndex(model="some-embedder@3.1")
+        brain = Brain.open(tmp_path / "brain", actor=CURATOR, indices={MemoryType.SEMANTIC: [index]})
+        seed(brain)
+
+        reference = brain.snapshot().modules[MemoryType.SEMANTIC]
+        assert reference.embedding_model == "some-embedder@3.1"
+        assert reference.index_digest is not None
+        assert brain.store.get_bytes(reference.index_digest) == index.dump()
+
+        layer = brain.pack(tag="v1").vector_index_for(MemoryType.SEMANTIC)
+        assert layer is not None
+        assert layer.digest == reference.index_digest
+
+    def test_pruning_keeps_the_index_named_by_a_retained_snapshot(self, tmp_path: Path) -> None:
+        brain = Brain.open(
+            tmp_path / "brain",
+            actor=CURATOR,
+            indices={MemoryType.SEMANTIC: [FakeVectorIndex()]},
+        )
+        seed(brain)
+        digest = brain.snapshot().modules[MemoryType.SEMANTIC].index_digest
+        assert digest is not None
+
+        brain.prune(dry_run=False)
+
+        assert brain.store.is_resolvable(digest)
+        layer = brain.pack(tag="v1").vector_index_for(MemoryType.SEMANTIC)
+        assert layer is not None
+        assert layer.digest == digest
+
     def test_an_unrebuildable_index_gets_its_own_layer(self, tmp_path: Path) -> None:
         index = FakeVectorIndex()
         brain = Brain.open(tmp_path / "brain", actor=CURATOR, indices={MemoryType.SEMANTIC: [index]})
@@ -195,6 +230,49 @@ class TestPackingTheIndex:
 
 
 class TestPullingTheIndex:
+    async def test_a_signed_index_cannot_be_omitted_from_the_manifest(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        source = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        seed(source)
+        await source.push(registry, REFERENCE, "v1")
+        manifest = await registry.resolve(REFERENCE, "v1")
+        doctored = manifest.model_copy(
+            update={"layers": [layer for layer in manifest.layers if not layer.is_vector_index]}
+        )
+        await registry.push(REFERENCE, "v1", doctored, source.store)
+
+        target = Brain.open(tmp_path / "b", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        with pytest.raises(DistributionError, match="carries 0 matching index layers"):
+            await target.pull(registry, REFERENCE, "v1")
+
+    async def test_a_registry_cannot_substitute_the_signed_index_payload(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        source = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        seed(source)
+        await source.push(registry, REFERENCE, "v1")
+        manifest = await registry.resolve(REFERENCE, "v1")
+        original = manifest.vector_index_for(MemoryType.SEMANTIC)
+        assert original is not None
+
+        substituted = pickle.dumps({"chosen-by-the-registry": [999]})
+        substituted_digest = source.store.put_bytes(substituted)
+        replacement = Descriptor(
+            media_type=original.media_type,
+            digest=substituted_digest,
+            size=len(substituted),
+            annotations=original.annotations,
+        )
+        doctored = manifest.model_copy(
+            update={"layers": [replacement if layer == original else layer for layer in manifest.layers]}
+        )
+        await registry.push(REFERENCE, "v1", doctored, source.store)
+
+        target = Brain.open(tmp_path / "b", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        with pytest.raises(DistributionError, match="signed snapshot names"):
+            await target.pull(registry, REFERENCE, "v1")
+
     async def test_a_consumer_receives_the_index(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
         published = FakeVectorIndex()
         source = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [published]})
@@ -310,16 +388,17 @@ class TestSelectivePublish:
         with pytest.raises(DistributionError, match="no modules"):
             brain.pack(tag="v1", modules=[])
 
-    def test_the_config_carries_only_the_published_modules(self, tmp_path: Path) -> None:
-        """A consumer's full pull adopts this document, so it has to describe what is actually there."""
-        from boltzmann.module.snapshot import Snapshot
-
+    def test_the_config_is_a_typed_projection_of_verbatim_module_references(self, tmp_path: Path) -> None:
         brain = Brain.open(tmp_path / "brain", actor=CURATOR)
         seed(brain)
         manifest = brain.pack(tag="lite", modules=[MemoryType.CANONICAL, MemoryType.SEMANTIC])
-        projected = Snapshot.model_validate_json(brain.store.get_bytes(manifest.config.digest))
+        projected = Projection.from_document(brain.store.get_bytes(manifest.config.digest))
+        assert manifest.config.media_type == PROJECTION_MEDIA_TYPE
+        assert projected.source == brain.snapshot().digest
         assert projected.installed == [MemoryType.CANONICAL, MemoryType.SEMANTIC]
-        assert projected.parents == []
+        assert projected.modules == {
+            kind: brain.snapshot().modules[kind] for kind in (MemoryType.CANONICAL, MemoryType.SEMANTIC)
+        }
 
     def test_a_projection_records_the_snapshot_it_came_from(self, tmp_path: Path) -> None:
         """A projection is in nobody's history, so the divergence check needs the real source."""
@@ -334,6 +413,7 @@ class TestSelectivePublish:
         seed(brain)
         manifest = brain.pack(tag="v1")
         assert manifest.config.digest == brain.snapshot().digest
+        assert manifest.config.media_type != PROJECTION_MEDIA_TYPE
         assert manifest.annotations[ANNOTATION_SOURCE_SNAPSHOT] == str(brain.snapshot().digest)
 
     async def test_a_projection_can_be_pushed_and_installed(
@@ -349,6 +429,50 @@ class TestSelectivePublish:
         assert target.verify()
         assert target.root_of(MemoryType.SEMANTIC) == source.root_of(MemoryType.SEMANTIC)
 
+    async def test_a_projection_without_its_bound_source_history_is_refused(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        source = Brain.open(tmp_path / "a", actor=CURATOR)
+        seed(source)
+        manifest = source.pack(tag="lite", modules=[MemoryType.CANONICAL, MemoryType.SEMANTIC])
+        without_history = manifest.model_copy(
+            update={"layers": [layer for layer in manifest.layers if not layer.is_history]}
+        )
+        await registry.push(REFERENCE, "lite", without_history, source.store)
+
+        target = Brain.open(tmp_path / "b", actor=CURATOR)
+        with pytest.raises(DistributionError, match="not resolvable from the artifact's history"):
+            await target.pull(registry, REFERENCE, "lite")
+
+    async def test_a_legacy_reduced_snapshot_projection_remains_readable(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        from boltzmann.distribution.media_types import CONFIG_MEDIA_TYPE
+        from boltzmann.module.snapshot import Snapshot
+
+        source = Brain.open(tmp_path / "a", actor=CURATOR)
+        seed(source)
+        manifest = source.pack(tag="lite", modules=[MemoryType.CANONICAL, MemoryType.SEMANTIC])
+        legacy = Snapshot(
+            boltzmann=source.snapshot().boltzmann,
+            modules={kind: source.snapshot().modules[kind] for kind in (MemoryType.CANONICAL, MemoryType.SEMANTIC)},
+            created_at=source.snapshot().created_at,
+            labels=source.snapshot().labels,
+            trust_root=source.snapshot().trust_root,
+        )
+        raw = legacy.canonical_bytes()
+        config = Descriptor(
+            media_type=CONFIG_MEDIA_TYPE,
+            digest=source.store.put_bytes(raw),
+            size=len(raw),
+        )
+        legacy_manifest = manifest.model_copy(update={"config": config})
+        await registry.push(REFERENCE, "lite", legacy_manifest, source.store)
+
+        target = Brain.open(tmp_path / "b", actor=CURATOR)
+        await target.pull(registry, REFERENCE, "lite")
+        assert target.snapshot().installed == [MemoryType.CANONICAL, MemoryType.SEMANTIC]
+
     async def test_pushing_a_projection_twice_is_a_fast_forward(
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:
@@ -358,6 +482,19 @@ class TestSelectivePublish:
         subset = [MemoryType.CANONICAL, MemoryType.SEMANTIC]
         await brain.push(registry, REFERENCE, "lite", modules=subset)
         await brain.push(registry, REFERENCE, "lite", modules=subset)
+
+    async def test_a_projection_install_cannot_be_published_back_without_its_source_modules(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        source = Brain.open(tmp_path / "a", actor=CURATOR)
+        seed(source)
+        subset = [MemoryType.CANONICAL, MemoryType.SEMANTIC]
+        await source.push(registry, REFERENCE, "lite", modules=subset)
+
+        target = Brain.open(tmp_path / "b", actor=CURATOR)
+        await target.pull(registry, REFERENCE, "lite")
+        with pytest.raises(DistributionError, match="which this snapshot does not name"):
+            await target.push(registry, REFERENCE, "lite")
 
     async def test_a_projection_and_the_full_brain_can_share_a_repository(
         self, tmp_path: Path, registry: LocalLayoutRegistry
@@ -546,6 +683,36 @@ class TestSurvivingAReopen:
         Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [landed]})
         assert landed.vectors == {}
 
+    def test_reopening_does_not_load_an_index_substituted_in_the_local_manifest(self, tmp_path: Path) -> None:
+        brain = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        seed(brain)
+        manifest = brain.pack(tag="v1")
+        original = manifest.vector_index_for(MemoryType.SEMANTIC)
+        assert original is not None
+
+        substituted = pickle.dumps({"chosen-by-the-layout": [999]})
+        replacement = Descriptor(
+            media_type=original.media_type,
+            digest=brain.store.put_bytes(substituted),
+            size=len(substituted),
+            annotations=original.annotations,
+        )
+        doctored = manifest.model_copy(
+            update={"layers": [replacement if layer == original else layer for layer in manifest.layers]}
+        )
+        layout = brain.store
+        assert isinstance(layout, OciLayoutStore)
+        index = layout.index()
+        index["manifests"][0]["digest"] = str(layout.put_bytes(doctored.to_bytes()))
+        index["manifests"][0]["size"] = len(doctored.to_bytes())
+        layout.write_index(index)
+
+        landed = FakeVectorIndex()
+        Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [landed]})
+
+        assert landed.loads == 0
+        assert landed.vectors == {}
+
     def test_a_reclaimed_index_layer_is_skipped(self, tmp_path: Path) -> None:
         brain = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         seed(brain)
@@ -571,7 +738,7 @@ class TestOpeningIsNotInstalling:
     read, every write and every repack goes through opening it.
     """
 
-    def test_an_index_from_another_model_does_not_block_opening(self, tmp_path: Path) -> None:
+    def test_an_index_from_another_model_is_not_loaded_but_can_be_republished_verbatim(self, tmp_path: Path) -> None:
         brain = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
         seed(brain)
         brain.pack(tag="v1")
@@ -584,7 +751,43 @@ class TestOpeningIsNotInstalling:
 
         assert reopened.verify()
         assert MemoryType.SEMANTIC not in reopened.travelling_indices
-        assert reopened.pack(tag="v2").vector_index_for(MemoryType.SEMANTIC) is None
+        republished = reopened.pack(tag="v2").vector_index_for(MemoryType.SEMANTIC)
+        assert republished is not None
+        assert republished.digest == brain.snapshot().modules[MemoryType.SEMANTIC].index_digest
+
+    async def test_a_legacy_unbound_index_is_ignored(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        source = Brain.open(tmp_path / "a", actor=CURATOR, indices={MemoryType.SEMANTIC: [FakeVectorIndex()]})
+        seed(source)
+        await source.push(registry, REFERENCE, "v1")
+        manifest = await registry.resolve(REFERENCE, "v1")
+
+        reference = source.snapshot().modules[MemoryType.SEMANTIC].model_copy(update={"index_digest": None})
+        legacy = source.snapshot().model_copy(
+            update={"modules": {**source.snapshot().modules, MemoryType.SEMANTIC: reference}}
+        )
+        config_bytes = legacy.canonical_bytes()
+        legacy_config = Descriptor(
+            media_type=manifest.config.media_type,
+            digest=source.store.put_bytes(config_bytes),
+            size=len(config_bytes),
+        )
+        legacy_manifest = manifest.model_copy(
+            update={
+                "config": legacy_config,
+                "annotations": {**manifest.annotations, ANNOTATION_SOURCE_SNAPSHOT: str(legacy.digest)},
+            }
+        )
+        await registry.push(REFERENCE, "v1", legacy_manifest, source.store)
+
+        landed = FakeVectorIndex()
+        target = Brain.open(tmp_path / "b", actor=CURATOR, indices={MemoryType.SEMANTIC: [landed]})
+        with caplog.at_level("WARNING"):
+            await target.pull(registry, REFERENCE, "v1")
+
+        assert landed.loads == 0
+        assert any("does not bind its payload digest" in message for message in caplog.messages)
 
     async def test_a_pull_still_refuses_it(self, tmp_path: Path, registry: LocalLayoutRegistry) -> None:
         """Installing an artifact is a request, and mixing representation spaces is not what was asked."""

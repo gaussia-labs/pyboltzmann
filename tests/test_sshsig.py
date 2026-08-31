@@ -37,6 +37,7 @@ from boltzmann.exceptions import (
     SignatureFormatError,
     SignatureInvalidError,
     UnsupportedKeyTypeError,
+    WeakKeyError,
 )
 
 # The published test key: seed bytes(range(32)), deliberately non-secret. Never use it for
@@ -45,6 +46,8 @@ SEED = bytes(range(32))
 AUTHORIZED_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAOhB7/zzhC+HXDdGOdLwJln5NYwm6UNXx3chmQSVTG4"
 FINGERPRINT = "SHA256:lbmsoA0yIEcEiVDRnMWuzm+nV+3ZEEpVIURqFoeSspg"
 MESSAGE = b'{"boltzmann":1}'
+ED25519_FIELD = (1 << 255) - 19
+ED25519_ORDER = (1 << 252) + 27742317777372353535851937790883648493
 ARMORED = (
     "-----BEGIN SSH SIGNATURE-----\n"
     "U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgA6EHv/POEL4dcN0Y50vAmWfk1j\n"
@@ -246,6 +249,11 @@ class TestBlobParsing:
         with pytest.raises(SignatureFormatError, match="md5"):
             SshSignature.from_blob(blob)
 
+    def test_sha256_is_rejected_even_though_generic_sshsig_allows_it(self) -> None:
+        signature = dataclasses.replace(SshSignature.parse(ARMORED), hash_algorithm="sha256")
+        with pytest.raises(SignatureFormatError, match="sha256"):
+            SshSignature.from_blob(signature.to_blob())
+
     def test_an_empty_namespace_is_rejected(self) -> None:
         with pytest.raises(SignatureFormatError, match="empty"):
             signed_data(MESSAGE, namespace="")
@@ -268,8 +276,14 @@ class TestVerification:
         with pytest.raises(NamespaceMismatchError, match="genuine"):
             verify(SshSignature.parse(ARMORED), MESSAGE, namespace="git")
 
-    def test_an_unsupported_key_type_is_named_not_called_invalid(self) -> None:
-        blob = put_string(b"ssh-rsa") + put_string(b"\x01\x00\x01") + put_string(b"\x00" * 64)
+    def test_an_in_memory_sha256_signature_is_also_rejected(self) -> None:
+        signature = dataclasses.replace(SshSignature.parse(ARMORED), hash_algorithm="sha256")
+        with pytest.raises(SignatureFormatError, match="sha256"):
+            verify(signature, MESSAGE)
+
+    def test_a_strong_but_unsupported_key_type_is_named_not_called_invalid(self) -> None:
+        modulus = b"\x00\x80" + (b"\x00" * 383)
+        blob = put_string(b"ssh-rsa") + put_string(b"\x01\x00\x01") + put_string(modulus)
         signature = dataclasses.replace(
             SshSignature.parse(ARMORED),
             public_key=SshPublicKey.from_blob(blob),
@@ -278,9 +292,84 @@ class TestVerification:
         with pytest.raises(UnsupportedKeyTypeError, match="too narrow"):
             verify(signature, MESSAGE)
 
+    @pytest.mark.parametrize(
+        ("key_type", "fields", "detail"),
+        [
+            (b"ssh-dss", (b"\x01",) * 4, "ssh-dss"),
+            (
+                b"ssh-rsa",
+                (b"\x01\x00\x01", b"\x00\x80" + (b"\x00" * 255)),
+                "2048-bit RSA",
+            ),
+        ],
+    )
+    def test_a_key_below_the_security_floor_is_distinguishable(
+        self, key_type: bytes, fields: tuple[bytes, ...], detail: str
+    ) -> None:
+        blob = put_string(key_type) + b"".join(put_string(field) for field in fields)
+        signature = dataclasses.replace(
+            SshSignature.parse(ARMORED),
+            public_key=SshPublicKey.from_blob(blob),
+            signature_algorithm=key_type.decode("ascii"),
+        )
+        with pytest.raises(WeakKeyError, match=detail):
+            verify(signature, MESSAGE)
+
     def test_a_signature_algorithm_that_disagrees_with_the_key_is_malformed(self) -> None:
         signature = dataclasses.replace(SshSignature.parse(ARMORED), signature_algorithm="rsa-sha2-512")
         with pytest.raises(SignatureFormatError, match="cannot have produced"):
+            verify(signature, MESSAGE)
+
+    def test_an_ed25519_scalar_equal_to_the_group_order_is_rejected(self) -> None:
+        signature = SshSignature.parse(ARMORED)
+        forged = dataclasses.replace(
+            signature,
+            signature=signature.signature[:32] + ED25519_ORDER.to_bytes(32, "little"),
+        )
+        with pytest.raises(SignatureInvalidError):
+            verify(forged, MESSAGE)
+
+    def test_a_noncanonical_signature_point_is_rejected(self) -> None:
+        signature = SshSignature.parse(ARMORED)
+        noncanonical_r = ED25519_FIELD.to_bytes(32, "little")
+        forged = dataclasses.replace(signature, signature=noncanonical_r + signature.signature[32:])
+        with pytest.raises(SignatureInvalidError):
+            verify(forged, MESSAGE)
+
+    def test_the_strict_equation_rejects_a_signature_valid_only_after_multiplying_by_the_cofactor(self) -> None:
+        # This canonical mixed-order key is the published test key plus the order-two point.
+        # The signature satisfies [8][S]B = [8](R + [h]A), but not the required cofactorless
+        # [S]B = R + [h]A equation. It pins the backend semantic, not just input encoding.
+        mixed_order_key = bytes.fromhex("ea5ef8400c31ef41e28f22e718b43f66981b29cf645af2a0e223799bedaace47")
+        cofactored_only_signature = bytes.fromhex(
+            "b4b937fca95b2f1e93e41e62fc3c78818ff38a66096fad6e7973e5c90006d321"
+            "2aef4d4bc26c21335150064f7cb08df8dcfd375d6b4047a08ae776520b808404"
+        )
+        blob = put_string(b"ssh-ed25519") + put_string(mixed_order_key)
+        forged = dataclasses.replace(
+            SshSignature.parse(ARMORED),
+            public_key=SshPublicKey.from_blob(blob),
+            signature=cofactored_only_signature,
+        )
+        with pytest.raises(SignatureInvalidError):
+            verify(forged, MESSAGE)
+
+    @pytest.mark.parametrize(
+        "key_data",
+        [
+            ED25519_FIELD.to_bytes(32, "little"),
+            b"\x01" + (b"\x00" * 31),
+            b"\x01" + (b"\x00" * 30) + b"\x80",
+        ],
+        ids=["noncanonical-y", "small-order", "negative-zero"],
+    )
+    def test_a_malformed_or_small_order_ed25519_key_is_a_format_error(self, key_data: bytes) -> None:
+        blob = put_string(b"ssh-ed25519") + put_string(key_data)
+        signature = dataclasses.replace(
+            SshSignature.parse(ARMORED),
+            public_key=SshPublicKey.from_blob(blob),
+        )
+        with pytest.raises(SignatureFormatError, match="Ed25519 public key"):
             verify(signature, MESSAGE)
 
     def test_a_non_empty_outer_reserved_is_accepted_as_openssh_accepts_it(self, signer: SeededSigner) -> None:
@@ -325,9 +414,9 @@ class TestSigning:
     def test_the_default_hash_algorithm_matches_openssh(self, signer: SeededSigner) -> None:
         assert sign(MESSAGE, signer).hash_algorithm == "sha512"
 
-    def test_sha256_also_signs_and_verifies(self, signer: SeededSigner) -> None:
-        signature = sign(MESSAGE, signer, hash_algorithm="sha256")
-        assert verify(signature, MESSAGE).fingerprint == FINGERPRINT
+    def test_sha256_is_not_emitted(self, signer: SeededSigner) -> None:
+        with pytest.raises(SignatureFormatError, match="sha256"):
+            sign(MESSAGE, signer, hash_algorithm="sha256")
 
     def test_ed25519_signing_is_deterministic_so_an_honest_resign_is_byte_identical(self, signer: SeededSigner) -> None:
         assert sign(MESSAGE, signer).armored() == sign(MESSAGE, signer).armored()

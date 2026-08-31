@@ -44,6 +44,7 @@ from boltzmann.authenticity import (
     Scope,
     SignatureRecord,
     Signer,
+    SnapshotStance,
     SshPublicKey,
     TrustedKey,
     TrustPin,
@@ -105,6 +106,7 @@ from boltzmann.ingest import (
     ProcessingTask,
     RegistrationRequest,
     RegistrationResult,
+    ValidationAudit,
     ValidationReport,
     ValidationStatus,
     Validator,
@@ -151,7 +153,7 @@ from boltzmann.retention import (
 )
 from boltzmann.store import BlockStore, MemoryBlockStore, OciLayoutStore
 
-__version__ = "0.7.0"
+__version__ = "0.8.0-b.13"
 
 __all__ = [
     "Actor",
@@ -162,6 +164,7 @@ __all__ = [
     "Authenticator",
     "Authorship",
     "AuthorshipState",
+    "SnapshotStance",
     "Block",
     "BlockId",
     "BlockStore",
@@ -272,6 +275,7 @@ __all__ = [
     "TrustRoot",
     "TrustedKey",
     "UnsignedPolicy",
+    "ValidationAudit",
     "ValidationReport",
     "ValidationStatus",
     "Validator",

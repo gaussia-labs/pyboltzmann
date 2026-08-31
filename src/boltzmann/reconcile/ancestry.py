@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from boltzmann.blocks.memory_type import MemoryType
-from boltzmann.exceptions import NoCommonAncestorError, SnapshotError
+from boltzmann.exceptions import MultipleMergeBasesError, NoCommonAncestorError, SnapshotError
 from boltzmann.identity.digest import OciDigest
 from boltzmann.module.composition import Composition
 from boltzmann.module.snapshot import Snapshot
@@ -46,7 +46,7 @@ def snapshot_at(store: BlockStore, digest: OciDigest) -> Snapshot:
             f"snapshot {digest.short} is not resolvable in this store, so the history through it cannot "
             f"be read; it was never fetched, or it was pruned"
         )
-    return Snapshot.model_validate_json(store.get_bytes(digest))
+    return Snapshot.from_document(store.get_bytes(digest))
 
 
 def common_ancestor(
@@ -59,11 +59,9 @@ def common_ancestor(
     """
     The snapshot two histories parted from.
 
-    Their history is walked outwards from the head and the first snapshot that is also in ours wins, so
-    the answer is the nearest common ancestor by parent distance. A more distant one would still yield a
-    convergent merge -- Equation 1 is defined against any shared base -- but it would describe changes
-    as belonging to a side that did not make them, and the report a maintainer reads would be wrong even
-    though the resulting composition was right.
+    Their history is walked outwards from the head and every first common snapshot on a path is collected.
+    Candidates that are ancestors of another candidate are discarded. The remaining snapshots are the
+    best common ancestors: reconciliation proceeds only when exactly one remains.
 
     All parents are followed, not just the first. A history that already reconciled something contains
     the sides it merged, and treating those as unrelated would rediscover a divergence that was settled.
@@ -76,8 +74,8 @@ def common_ancestor(
         theirs_digest (OciDigest): Its digest, which is a candidate ancestor itself: if their head is
             already in our history there is nothing to reconcile, and the honest answer is their head.
         hint (OciDigest | None): A snapshot already known to be shared, such as the one
-            :class:`~boltzmann.brain.Origin` recorded at pull time. Used when it holds up, and ignored
-            rather than trusted when it does not.
+            :class:`~boltzmann.brain.Origin` recorded at pull time. It may bound traversal below that
+            point, but never selects the answer by itself.
 
     Returns:
         OciDigest: The nearest shared snapshot.
@@ -86,34 +84,72 @@ def common_ancestor(
         NoCommonAncestorError: If the two histories share nothing. Section 12.2 requires this to be a
             distinguishable failure: there is no three-way merge to compute, and computing a two-way one
             instead would guess at every asymmetry.
+        MultipleMergeBasesError: If several incomparable common ancestors remain. The histories must
+            reconcile those bases first; selecting one would make the result depend on traversal order.
     """
     contained = set(ours)
-
-    if hint is not None and hint in contained and _reaches(store, theirs, theirs_digest, hint):
-        return hint
-
+    candidates: set[OciDigest] = set()
     seen = {theirs_digest}
     frontier = [(theirs_digest, theirs)]
     while frontier:
-        generation: list[tuple[OciDigest, Snapshot]] = []
-        for digest, snapshot in frontier:
-            if digest in contained:
-                return digest
-            for parent in snapshot.parents:
-                if parent in seen:
-                    continue
-                seen.add(parent)
-                if parent in contained:
-                    return parent
-                if store.is_resolvable(parent):
-                    generation.append((parent, snapshot_at(store, parent)))
-        frontier = generation
+        digest, snapshot = frontier.pop()
+        if digest in contained:
+            candidates.add(digest)
+            continue
+        for parent in snapshot.parents:
+            if parent in seen:
+                continue
+            seen.add(parent)
+            if hint is not None and parent == hint and hint in contained:
+                candidates.add(hint)
+                continue
+            if parent in contained:
+                candidates.add(parent)
+                continue
+            if store.is_resolvable(parent):
+                frontier.append((parent, snapshot_at(store, parent)))
+
+    best = {
+        candidate
+        for candidate in candidates
+        if not any(
+            other != candidate and _digest_reaches(store, other, candidate, theirs, theirs_digest)
+            for other in candidates
+        )
+    }
+    if len(best) == 1:
+        return next(iter(best))
+    if len(best) > 1:
+        named = ", ".join(str(digest) for digest in sorted(best, key=lambda value: value.hex))
+        raise MultipleMergeBasesError(
+            f"snapshot {theirs_digest.short} and this brain's history have multiple best common "
+            f"ancestors: {named}. Reconcile those competing ancestors first so a later reconciliation "
+            f"has one unambiguous base."
+        )
 
     raise NoCommonAncestorError(
         f"snapshot {theirs_digest.short} and this brain's history share no ancestor, so there is no "
         f"three-way reconciliation to compute. Either the two brains are unrelated, or the snapshot "
         f"they parted from is no longer held here."
     )
+
+
+def _digest_reaches(
+    store: BlockStore,
+    head_digest: OciDigest,
+    target: OciDigest,
+    theirs: Snapshot,
+    theirs_digest: OciDigest,
+) -> bool:
+    """Whether one candidate descends from another, when its document is available."""
+    if head_digest == target:
+        return True
+    if head_digest == theirs_digest:
+        return _reaches(store, theirs, theirs_digest, target)
+    if not store.is_resolvable(head_digest):
+        return False
+    head = snapshot_at(store, head_digest)
+    return _reaches(store, head, head_digest, target)
 
 
 def _reaches(store: BlockStore, head: Snapshot, head_digest: OciDigest, target: OciDigest) -> bool:

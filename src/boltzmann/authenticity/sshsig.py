@@ -70,12 +70,15 @@ HASH_ALGORITHMS: dict[str, Callable[[bytes], bytes]] = {
     "sha256": lambda data: hashlib.sha256(data).digest(),
     "sha512": lambda data: hashlib.sha512(data).digest(),
 }
-"""The two message-hash algorithms ``PROTOCOL.sshsig`` allows.
+"""The two message-hash algorithms the generic SSHSIG framing defines.
 
 An explicit dict rather than ``hashlib.new(name)`` because the name comes out of a signature an
 attacker may have written, and ``hashlib.new`` would happily accept ``md5`` or a ``shake_*``
 variant whose ``digest()`` wants a length argument and raises deep inside the verifier.
 """
+
+BOLTZMANN_HASH_ALGORITHMS = frozenset({"sha512"})
+"""The subset a Boltzmann signature may use. Generic SSHSIG permits SHA-256; this protocol does not."""
 
 DEFAULT_HASH_ALGORITHM = "sha512"
 """What this SDK emits, matching what ``ssh-keygen -Y sign`` emits."""
@@ -146,7 +149,7 @@ class SshSignature:
 
         Raises:
             SignatureFormatError: On a bad preamble, an unsupported version, an empty namespace,
-                a hash algorithm outside :data:`HASH_ALGORITHMS`, a malformed key or signature
+                a hash algorithm outside :data:`BOLTZMANN_HASH_ALGORITHMS`, a malformed key or signature
                 blob, or trailing bytes.
         """
         if len(blob) > MAX_BLOB_LENGTH:
@@ -172,8 +175,8 @@ class SshSignature:
             hash_algorithm = raw_hash.decode("ascii")
         except UnicodeDecodeError as error:
             raise SignatureFormatError(f"SSHSIG hash algorithm {raw_hash!r} is not ASCII") from error
-        if hash_algorithm not in HASH_ALGORITHMS:
-            allowed = ", ".join(sorted(HASH_ALGORITHMS))
+        if hash_algorithm not in BOLTZMANN_HASH_ALGORITHMS:
+            allowed = ", ".join(sorted(BOLTZMANN_HASH_ALGORITHMS))
             raise SignatureFormatError(f"SSHSIG hash algorithm {hash_algorithm!r} is not allowed; expected {allowed}")
         signature_algorithm, signature = parse_rfc4253_signature(reader.string())
         reader.finish()
@@ -275,14 +278,14 @@ def message_hash(hash_algorithm: str, message: bytes) -> bytes:
     Hash the message under a named, allowed algorithm.
 
     Args:
-        hash_algorithm (str): ``"sha256"`` or ``"sha512"``.
+        hash_algorithm (str): ``"sha256"`` or ``"sha512"`` from generic SSHSIG framing.
         message (bytes): The bytes being signed -- for a snapshot, its canonical bytes.
 
     Returns:
         bytes: The raw digest.
 
     Raises:
-        SignatureFormatError: If the algorithm is not one of the two allowed.
+        SignatureFormatError: If the algorithm is not defined by SSHSIG.
     """
     digest = HASH_ALGORITHMS.get(hash_algorithm)
     if digest is None:
@@ -346,6 +349,7 @@ def verify(signature: SshSignature, message: bytes, namespace: str = SNAPSHOT_NA
     Raises:
         NamespaceMismatchError: If the signature was made under another namespace.
         UnsupportedKeyTypeError: If the embedded key is not one this SDK verifies.
+        WeakKeyError: If the embedded key is below the protocol security floor.
         SignatureFormatError: If the signature's algorithm disagrees with its key type.
         SignatureInvalidError: If the mathematics failed.
         VerificationUnavailableError: If the ``[authenticity]`` extra is not installed.
@@ -356,6 +360,12 @@ def verify(signature: SshSignature, message: bytes, namespace: str = SNAPSHOT_NA
             f"genuine and it covers something else"
         )
     key = signature.public_key
+    if signature.hash_algorithm not in BOLTZMANN_HASH_ALGORITHMS:
+        allowed = ", ".join(sorted(BOLTZMANN_HASH_ALGORITHMS))
+        raise SignatureFormatError(
+            f"SSHSIG hash algorithm {signature.hash_algorithm!r} is not allowed; expected {allowed}"
+        )
+    key.require_security_floor()
     if not key.is_supported:
         raise UnsupportedKeyTypeError(
             f"key type {key.key_type!r} ({key.fingerprint}) is not one this SDK verifies; the "
@@ -400,6 +410,9 @@ def sign(
             signer returned a signature whose algorithm disagrees with its key.
         SignerUnavailableError: If the signing backend cannot sign.
     """
+    if hash_algorithm not in BOLTZMANN_HASH_ALGORITHMS:
+        allowed = ", ".join(sorted(BOLTZMANN_HASH_ALGORITHMS))
+        raise SignatureFormatError(f"hash algorithm {hash_algorithm!r} is not allowed; expected {allowed}")
     data = signed_data(message, namespace=namespace, hash_algorithm=hash_algorithm)
     algorithm, raw = parse_rfc4253_signature(signer.sign_blob(data))
     key = signer.public_key

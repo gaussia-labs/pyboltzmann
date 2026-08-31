@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from boltzmann.blocks.memory_type import MemoryType
-from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind
+from boltzmann.blocks.provenance import Actor, ActorKind, Producer, ProducerKind, ValidationRecord
 from boltzmann.brain import Brain, Origin
 from boltzmann.distribution.layers import (
     SNAPSHOT_PREFIX,
@@ -30,9 +30,13 @@ from boltzmann.distribution.media_types import (
     REF_NAME_ANNOTATION,
     memory_type_of,
 )
-from boltzmann.exceptions import DistributionError, ReferenceNotFoundError
+from boltzmann.exceptions import DistributionError, ReferenceNotFoundError, RemovalInvariantError, RollbackError
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
+from boltzmann.ingest.validation import ValidationStatus
+from boltzmann.module.composition import Composition
+from boltzmann.module.module import Module
+from boltzmann.retention.policy import RetentionPolicy
 from boltzmann.store.memory import MemoryBlockStore
 
 CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
@@ -88,6 +92,23 @@ class TestLayers:
         canonical = brain.module(MemoryType.CANONICAL)
         block = canonical.get(canonical.block_ids[0])
         assert block.blob in required_blobs(canonical)
+
+    def test_a_signed_tombstone_is_never_republished_from_shared_store_bytes(
+        self, tmp_path: Path, request_: RegistrationRequest
+    ) -> None:
+        canonical = seeded(tmp_path / "brain", request_).module(MemoryType.CANONICAL)
+        target = canonical.block_ids[0]
+        content = canonical.get(target).blob
+        redacted_view = Module(
+            MemoryType.CANONICAL,
+            canonical.store,
+            canonical.composition,
+            tombstones=[target],
+        )
+
+        assert canonical.store.is_resolvable(target)
+        assert target not in required_blobs(redacted_view)
+        assert content not in required_blobs(redacted_view)
 
     def test_a_derived_layer_carries_only_its_blocks(self, tmp_path: Path, request_: RegistrationRequest) -> None:
         semantic = seeded(tmp_path / "brain", request_).module(MemoryType.SEMANTIC)
@@ -232,6 +253,61 @@ class TestPushAndPull:
         for memory_type in source.snapshot().installed:
             assert target.root_of(memory_type) == source.root_of(memory_type)
         assert target.verify()
+
+    async def test_a_redacted_module_round_trips_as_tombstones_not_missing(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> None:
+        policy = RetentionPolicy(canonical_drop_allowed=True, redactable_media_types=["application/pdf"])
+        source = Brain.open(tmp_path / "a", actor=CURATOR, policy=policy)
+        redacted = source.register(b"%PDF-1.7 personal data", request_).block_id
+        source.redact(redacted, MemoryType.CANONICAL, reason="erasure request")
+        await source.push(registry, REFERENCE, "v1")
+
+        target = Brain.open(tmp_path / "b", actor=SAM)
+        await target.pull(registry, REFERENCE, "v1")
+
+        assert target.snapshot().modules[MemoryType.CANONICAL].tombstones == [redacted]
+        assert target.store.has(redacted)
+        assert not target.store.is_resolvable(redacted)
+        assert target.verify()
+
+    async def test_pull_rejects_an_absence_without_a_reachable_removal_record(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> None:
+        source = seeded(tmp_path / "a", request_)
+        forged = source.snapshot().with_module(
+            Module(MemoryType.SEMANTIC, source.store, Composition(MemoryType.SEMANTIC)).persist()
+        )
+        source._advance(forged)
+        await source.push(registry, REFERENCE, "v1")
+
+        target = Brain.open(tmp_path / "b", actor=SAM)
+        with pytest.raises(RemovalInvariantError, match="reachable removal ledger"):
+            await target.pull(registry, REFERENCE, "v1")
+
+    async def test_a_verdict_travels_with_the_block_it_admitted(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> None:
+        """A consumer must be able to read what admitted a block out of the artifact it installed.
+
+        The record is an ordinary provenance block, so nothing special carries it -- which is the
+        point: the claim survives the wire because it is knowledge, not write-path bookkeeping.
+        """
+        source = seeded(tmp_path / "a", request_)
+        await source.push(registry, REFERENCE, "v1")
+
+        target = Brain.open(tmp_path / "b", actor=SAM)
+        await target.pull(registry, REFERENCE, "v1")
+
+        audit = target.audit_validation()
+        assert audit.is_complete
+        assert any(audit.accounted.values())
+
+        records = [b.record for b in target.module(MemoryType.PROVENANCE).blocks()]
+        verdicts = [r for r in records if isinstance(r, ValidationRecord)]
+        assert verdicts
+        assert all(v.verdict is ValidationStatus.VALIDATED for v in verdicts)
+        assert all(v.checks for v in verdicts)
 
     async def test_pushing_records_the_tag(
         self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
@@ -486,6 +562,78 @@ class TestDivergence:
         assert set(registry.tags(REFERENCE)) == {"v1", "totally-new"}
 
 
+class TestPullRollback:
+    """A mutable registry tag cannot make a consumer forget a head it already held."""
+
+    async def _published_versions(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> tuple:
+        publisher = seeded(tmp_path / "publisher", request_)
+        await publisher.push(registry, REFERENCE, "v1")
+        v1 = await registry.resolve(REFERENCE, "v1")
+
+        source = publisher.module(MemoryType.CANONICAL).block_ids[0]
+        task = publisher.define_task(source)
+        publisher.commit(publisher.validate(llm("newer")(task, b""), task))
+        await publisher.push(registry, tag="v2")
+        v2 = await registry.resolve(REFERENCE, "v2")
+        return v1, v2
+
+    async def test_a_served_strict_ancestor_is_refused_and_the_head_does_not_move(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> None:
+        v1, v2 = await self._published_versions(tmp_path, registry, request_)
+        target = Brain.open(tmp_path / "consumer", actor=SAM)
+        await target.pull(registry, REFERENCE, "v2")
+
+        with pytest.raises(RollbackError, match="ROLLBACK"):
+            await target.pull(registry, REFERENCE, "v1")
+
+        assert target.snapshot().digest == v2.config.digest
+        assert target.snapshot().digest != v1.config.digest
+
+    async def test_an_explicit_override_installs_the_older_head_and_warns(
+        self,
+        tmp_path: Path,
+        registry: LocalLayoutRegistry,
+        request_: RegistrationRequest,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        v1, _ = await self._published_versions(tmp_path, registry, request_)
+        target = Brain.open(tmp_path / "consumer", actor=SAM)
+        await target.pull(registry, REFERENCE, "v2")
+
+        with caplog.at_level("WARNING"):
+            await target.pull(registry, REFERENCE, "v1", allow_rollback=True)
+
+        assert target.snapshot().digest == v1.config.digest
+        assert any("ROLLBACK override" in message for message in caplog.messages)
+
+    async def test_an_unreadable_local_ancestor_warns_when_rollback_cannot_be_decided(
+        self,
+        tmp_path: Path,
+        registry: LocalLayoutRegistry,
+        request_: RegistrationRequest,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        publisher = seeded(tmp_path / "publisher", request_)
+        await publisher.push(registry, REFERENCE, "v1")
+
+        target = Brain.open(tmp_path / "consumer", actor=SAM)
+        await target.pull(registry, REFERENCE, "v1")
+        source = target.module(MemoryType.CANONICAL).block_ids[0]
+        task = target.define_task(source)
+        target.commit(target.validate(llm("local-1")(task, b""), task))
+        missing_parent = target.snapshot().digest
+        target.commit(target.validate(llm("local-2")(task, b""), task))
+        target.store.delete(missing_parent)
+
+        with caplog.at_level("WARNING"):
+            await target.pull(registry, REFERENCE, "v1")
+
+        assert any("ROLLBACK_UNCHECKED" in message for message in caplog.messages)
+
+
 class TestOrigin:
     """A local brain remembers where it came from, like a tracking branch."""
 
@@ -639,6 +787,57 @@ class TestSignedDistribution:
         assert pin.source is PinSource.FIRST_USE
         await consumer.pull(registry, REFERENCE, "v1")
 
+    async def test_a_strangers_contribution_is_attributable_offered_and_unauthorized_as_a_head(
+        self, tmp_path: Path, registry: LocalLayoutRegistry
+    ) -> None:
+        """The same snapshot, the same signature, and two opposite readings of it.
+
+        Offered for review it is how an open project hears from someone it has never admitted; served
+        as the brain's current state it is Case 2 of the impersonation table. An implementation that
+        could not tell them apart would have to refuse every contribution or accept every imposture.
+        """
+        from boltzmann.authenticity import AuthorshipState, SnapshotStance
+        from boltzmann.exceptions import UnauthorizedKeyError
+
+        owner = self._party(0x7A)
+        stranger = self._party(0x7B)
+
+        upstream = self._governed(tmp_path / "upstream", owner)
+        upstream.ingest(
+            b"%PDF-1.7 Lecture 07", RegistrationRequest(media_type="application/pdf", actor=CURATOR), llm("Fourier")
+        )
+        await upstream.push(registry, REFERENCE, "v1")
+
+        # The contributor starts from the published brain, so they inherit its trust root -- which
+        # does not list them. Their work is signed all the same.
+        contributor = Brain.open(tmp_path / "contrib", actor=SAM)
+        await contributor.pull(registry, REFERENCE, "v1")
+        contributor.ingest(
+            b"%PDF-1.7 Lecture 10: Hankel transforms",
+            RegistrationRequest(media_type="application/pdf", actor=SAM),
+            llm("Hankel"),
+        )
+        contributor.sign(stranger)
+        await contributor.push(registry, "registry.example/org/proposal", "proposal")
+
+        fetched = await upstream.fetch(registry, "registry.example/org/proposal", "proposal")
+
+        # Offered: named, and authorizing nothing.
+        plan = upstream.plan_reconcile(fetched.digest)
+        assert plan.authorship is not None
+        assert plan.authorship.state is AuthorshipState.ATTRIBUTABLE
+        assert plan.authorship.key == stranger.public_key.fingerprint
+
+        offered = upstream.authenticate(fetched.digest, stance=SnapshotStance.OFFERED)
+        with pytest.raises(UnauthorizedKeyError, match="attributable"):
+            offered.require_authorized()
+
+        # Presented as the current state: an unauthorized key, and reported as one.
+        as_head = upstream.authenticate(fetched.digest)
+        assert as_head.state is AuthorshipState.UNAUTHORIZED
+        with pytest.raises(UnauthorizedKeyError, match="in the trust root in force"):
+            as_head.require_authorized()
+
     async def test_a_pinned_consumer_refuses_a_swapped_authority_before_any_layer_moves(
         self, tmp_path: Path, registry: LocalLayoutRegistry
     ) -> None:
@@ -657,7 +856,9 @@ class TestSignedDistribution:
         forged = self._governed(tmp_path / "mallory", mallory)
         await forged.push(registry, REFERENCE, "v1", force=True)
 
-        with pytest.raises(TrustRootMismatchError, match="before transferring"):
+        # Mallory's brain has its own genesis, so the sharper diagnosis is available: this is not a
+        # change of authority within the pinned brain, it is a different brain on the same tag.
+        with pytest.raises(TrustRootMismatchError, match="not the brain this pin was taken for"):
             await consumer.pull(registry, REFERENCE, "v1")
 
     async def test_a_forged_trust_root_annotation_does_not_bypass_the_pin(
@@ -904,6 +1105,34 @@ class TestSignedDistribution:
         with pytest.raises(DistributionError, match="upgrade pyboltzmann"):
             await consumer.pull(registry, REFERENCE, "v1")
 
+    async def test_a_noncanonical_config_is_refused_before_install(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> None:
+        import json as json_
+
+        from boltzmann.distribution.manifest import Descriptor
+        from boltzmann.distribution.media_types import CONFIG_MEDIA_TYPE
+
+        publisher = seeded(tmp_path / "publisher", request_)
+        await publisher.push(registry, REFERENCE, "v1")
+        manifest = await registry.resolve(REFERENCE, "v1")
+        config = json_.loads(publisher.store.get_bytes(manifest.config.digest))
+        raw = json_.dumps(config, indent=2).encode()
+        doctored = manifest.model_copy(
+            update={
+                "config": Descriptor(
+                    media_type=CONFIG_MEDIA_TYPE,
+                    digest=publisher.store.put_bytes(raw),
+                    size=len(raw),
+                )
+            }
+        )
+        await registry.push(REFERENCE, "v1", doctored, publisher.store)
+
+        consumer = Brain.open(tmp_path / "consumer", actor=SAM)
+        with pytest.raises(DistributionError, match="not in canonical"):
+            await consumer.pull(registry, REFERENCE, "v1")
+
     async def test_a_rotated_then_advanced_brain_stays_authorized_for_a_fresh_consumer(
         self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
     ) -> None:
@@ -982,7 +1211,7 @@ class TestSignedDistribution:
         await consumer.pull(registry, REFERENCE, "v1", verification=VerificationPolicy(unsigned=UnsignedPolicy.REFUSE))
         assert consumer.signatures(publisher.snapshot().digest), "the source head's records travelled"
 
-    async def test_an_anchor_that_lies_is_refused(
+    async def test_a_lying_source_annotation_cannot_override_the_projection_binding(
         self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
     ) -> None:
         from boltzmann.distribution.media_types import ANNOTATION_SOURCE_SNAPSHOT
@@ -996,8 +1225,8 @@ class TestSignedDistribution:
         publisher.sign(party)
         await publisher.push(registry, REFERENCE, "v1", modules=[MemoryType.CANONICAL])
 
-        # A tampered artifact: same projection, but the annotation now names an ancestor whose
-        # canonical module is not what the projection carries.
+        # The annotation is a pre-download hint only. The projection document remains bound to
+        # the real source, so changing the hint cannot change verification authority.
         manifest = await registry.resolve(REFERENCE, "v1")
         doctored = manifest.model_copy(
             update={"annotations": {**manifest.annotations, ANNOTATION_SOURCE_SNAPSHOT: str(earlier)}}
@@ -1005,7 +1234,37 @@ class TestSignedDistribution:
         await registry.push(REFERENCE, "v1", doctored, publisher.store)
 
         consumer = Brain.open(tmp_path / "consumer", actor=SAM)
-        with pytest.raises(DistributionError, match="anchor that lies"):
+        await consumer.pull(registry, REFERENCE, "v1")
+        assert consumer.root_of(MemoryType.CANONICAL) == publisher.root_of(MemoryType.CANONICAL)
+
+    async def test_a_projection_whose_bound_source_does_not_match_is_refused(
+        self, tmp_path: Path, registry: LocalLayoutRegistry, request_: RegistrationRequest
+    ) -> None:
+        from boltzmann.distribution.manifest import Descriptor
+        from boltzmann.distribution.media_types import PROJECTION_MEDIA_TYPE
+        from boltzmann.distribution.projection import Projection
+
+        party = self._party(0x9E)
+        publisher = self._governed(tmp_path / "publisher", party)
+        publisher.ingest(b"%PDF-1.7 Lecture 07", request_, llm("Fourier"))
+        earlier = publisher.snapshot().digest
+        publisher.ingest(b"%PDF-1.7 Lecture 08", request_, llm("Laplace"))
+        publisher.sign(party)
+        await publisher.push(registry, REFERENCE, "v1", modules=[MemoryType.CANONICAL])
+
+        manifest = await registry.resolve(REFERENCE, "v1")
+        projection = Projection.from_document(publisher.store.get_bytes(manifest.config.digest))
+        forged = projection.model_copy(update={"source": earlier})
+        raw = forged.canonical_bytes()
+        config = Descriptor(
+            media_type=PROJECTION_MEDIA_TYPE,
+            digest=publisher.store.put_bytes(raw),
+            size=len(raw),
+        )
+        await registry.push(REFERENCE, "v1", manifest.model_copy(update={"config": config}), publisher.store)
+
+        consumer = Brain.open(tmp_path / "consumer", actor=SAM)
+        with pytest.raises(DistributionError, match="not a verbatim subset"):
             await consumer.pull(registry, REFERENCE, "v1")
 
     async def test_a_record_outside_the_artifacts_ancestry_is_not_kept(

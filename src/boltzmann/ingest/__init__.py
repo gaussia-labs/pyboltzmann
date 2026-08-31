@@ -22,6 +22,7 @@ from boltzmann.ingest.schema import (
 from boltzmann.ingest.task import PROPOSABLE_MEMORY_TYPES, ProcessingTask, TaskOperation
 from boltzmann.ingest.validation import (
     ValidatedCandidate,
+    ValidationAudit,
     ValidationIssue,
     ValidationReport,
     ValidationStatus,
@@ -42,6 +43,7 @@ __all__ = [
     "TaskOperation",
     "ValidatedCandidate",
     "ValidationIssue",
+    "ValidationAudit",
     "ValidationReport",
     "ValidationStatus",
     "Validator",

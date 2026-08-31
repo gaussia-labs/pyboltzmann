@@ -57,7 +57,7 @@ the derivable rules take over. *A genesis is not validated, it is anchored.*
 brain.sign(signer)                       # a detached record beside the snapshot; no identity changes
 report = brain.authenticate()
 
-report.state                             # authorized | unsigned | unauthorized
+report.state                             # authorized | unsigned | attributable | unauthorized
 report.role                              # genesis | ordinary | revision
 report.required_scopes                   # computed from the diff against the first parent
 report.outcomes()                        # one verdict per signature, by fingerprint
@@ -69,13 +69,48 @@ Three rules do most of the work:
 
 - **Scopes are computed, never believed.** What a snapshot required comes from its difference against its
   first parent — canonical gained blocks → `ingest`, canonical lost blocks → `drop:canonical`, a derived
-  module changed → `commit`, the trust root changed → `govern`, a redaction record appeared → `redact`.
+  module changed → `commit`, the trust root changed → `govern`, a module's signed `tombstones` list grew →
+  `redact`.
   The `scopes` a signature claims aid diagnosis and decide nothing.
 - **The trust root in force is the parent's.** A revision's own signatures answer to the list it is
   *replacing* — which is why a key cannot admit itself (see below).
 - **Missing evidence widens the requirement.** A truncated chain or an unreadable composition makes the
   verdict `insufficient_evidence`, never a smaller demand: a verifier that quietly computed less from a
   truncated history would be exploitable by shipping a truncated history.
+
+## A stranger's key: attributable, or an impersonation
+
+The same snapshot, signed by the same key the trust root does not list, means two opposite things
+depending on the claim made for it — so the report says which question it answered:
+
+```python
+from boltzmann import SnapshotStance
+
+brain.authenticate(digest)                                   # HEAD is the default
+brain.authenticate(digest, stance=SnapshotStance.OFFERED)    # judged as a proposal
+```
+
+- **Offered** — someone hands you a history for review. The signature verifies, the author is
+  cryptographically identified, and **no authority attaches**: the state is `attributable`, and the
+  blocks are judged one at a time through validation, where a proposer's identity earns them nothing
+  anyway. This is how an open project hears from people it has never admitted.
+- **As a head** — a registry, a mirror, or the contributor's own tag serves it as the brain's current
+  state. The same signature is now an unauthorized key, reported as one, and refused.
+
+`HEAD` is the default because it is the safe answer: a caller who does not say is asking about a
+brain's current state. `plan_reconcile` sets `OFFERED` for you and reports the result on the plan:
+
+```python
+plan = brain.plan_reconcile(fetched.digest)
+plan.authorship.state        # attributable, for a contributor you have not admitted
+plan.authorship.key          # who it is from
+```
+
+<Warning>
+  `attributable` is not a weaker `authorized`. `require_authorized()` still raises for it. It says the
+  author is named and nothing is authorized — which is precisely what a maintainer needs to know
+  before reading the contribution.
+</Warning>
 
 ## Admitting a key: the quorum rule
 
@@ -104,6 +139,17 @@ brain.rotate(plan=plan, records=[record_a, record_b])   # quorum met -> the head
 `countersign` refuses mechanically what a reviewer would refuse by reading: a parent it cannot see,
 content smuggled into a governance act, a trust root that does not advance, an admission claim the
 observable chain refutes. A failed quorum advances nothing.
+
+**Keep a margin.** A quorum equal to the number of `govern` holders is legal and permanent: lose one
+key and neither the remaining holders nor the attacker can assemble the signatures to record a
+compromise or admit a replacement, while a stolen key keeps signing within its scopes. There is no
+recovery path inside the protocol — re-anchoring would be exactly the self-assertion the quorum rule
+exists to forbid — so `init` and `rotate` warn when you enter that state, and the report names it:
+
+```python
+root.has_governance_margin               # False when the quorum equals the holders
+report.has(FindingKind.QUORUM_MARGIN)    # reported, never blocking
+```
 
 **Why a key cannot admit itself.** An attacker installs the public brain, writes their key into the
 list — possibly byte-identical to a legitimate admission — and signs with it. Integrity passes; the
@@ -147,6 +193,20 @@ revisions that each satisfied the quorum rule — an approved rotation is the me
 mismatch. On `pull`, the manifest's `trust-root` annotation is compared **before any module layer is
 transferred**; when it differs, only the small documents move until the custody walk decides.
 
+**A pin is for one brain, and a brain is its genesis.** Tags are re-assignable and the trust root
+rotates, so neither identifies a brain; the genesis digest never changes. `pin()` records it, and the
+verifier checks it first — otherwise an anchor taken for one brain would be evaluated against
+another's chain, and match or mismatch would both be answers to the wrong question.
+
+```python
+report.has(FindingKind.PIN_BRAIN_MISMATCH)   # a different brain, not a change of authority in this one
+report.has(FindingKind.TRUST_ROOT_MISMATCH)  # this brain, authority that does not descend from the pin
+```
+
+The same brain under a new repository reference still matches. A history pruned below its genesis
+cannot answer the question, and that is reported as undecidable rather than as a mismatch — refusing
+it would punish pruning, which the protocol permits.
+
 ## Publication: signatures accumulate around the artifact
 
 A signature is never a layer of the brain manifest — countersigning would change the brain's digest, and
@@ -177,7 +237,7 @@ Every query result reports both verifications, separately:
 ```python
 bundle = brain.search(query)
 bundle.all_verified          # hashes and membership: the first verification
-bundle.authorship.state      # authorized | unsigned | unauthorized: the second
+bundle.authorship.state      # authorized | unsigned | attributable | unauthorized: the second
 bundle.authorship.key        # a fingerprint that authorized it, when one did
 bundle.authorship.pinned     # whether the trust root is anchored by this consumer's pin
 ```
@@ -195,6 +255,14 @@ fact from "failed", and a missing dependency must never read as a forgery — or
   Signing through an `AgentSigner` works *without* the extra: the mathematics runs inside the agent,
   which is the point of never holding the key.
 </Note>
+
+## Verification security floor
+
+Boltzmann signatures pin SSHSIG's message hash to SHA-512. A generic SSHSIG document using SHA-256
+is valid SSH syntax, but it is not a valid Boltzmann signature. Verification also requires canonical
+Ed25519 point encodings, `S` below the group order, the strict cofactorless equation, and a public key
+outside the small-order subgroup. `ssh-dss` is always refused; RSA keys below 3072 bits are refused
+before the SDK reports whether that algorithm is implemented.
 
 ## Golden vectors
 

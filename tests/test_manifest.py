@@ -13,9 +13,11 @@ from boltzmann.distribution.media_types import (
     ANNOTATION_PROTOCOL_VERSION,
     ARTIFACT_TYPE,
     CONFIG_MEDIA_TYPE,
+    PROJECTION_MEDIA_TYPE,
     VECTOR_INDEX_MEDIA_TYPE,
     module_media_type,
 )
+from boltzmann.distribution.projection import Projection
 from boltzmann.exceptions import DistributionError
 from boltzmann.identity.digest import MerkleRoot, OciDigest
 from boltzmann.module.snapshot import ModuleRef, Snapshot
@@ -113,6 +115,54 @@ class TestBuildManifest:
         with pytest.raises(DistributionError, match="config blob must be"):
             build_manifest(snapshot, wrong, [])
 
+    def test_a_projection_config_media_type_is_accepted(self) -> None:
+        snapshot = Snapshot.of([reference(MemoryType.CANONICAL), reference(MemoryType.SEMANTIC)])
+        projected = snapshot.modules[MemoryType.CANONICAL]
+        config = Descriptor(media_type=PROJECTION_MEDIA_TYPE, digest=OciDigest.of(b"projection"), size=1)
+        layer = Descriptor.for_module(projected, OciDigest.of(b"canonical"), 1)
+        manifest = build_manifest(snapshot, config, [layer], published=[projected])
+        assert manifest.config.media_type == PROJECTION_MEDIA_TYPE
+
+
+class TestProjectionDocument:
+    """A projection is canonical, typed, and carries no snapshot-only state."""
+
+    def test_round_trips_canonically(self) -> None:
+        source = Snapshot.of([reference(MemoryType.CANONICAL), reference(MemoryType.SEMANTIC)])
+        projection = Projection(
+            source=source.digest,
+            modules={MemoryType.CANONICAL: source.modules[MemoryType.CANONICAL]},
+        )
+        assert Projection.from_document(projection.canonical_bytes()) == projection
+        assert projection.digest == OciDigest.of(projection.canonical_bytes())
+
+    def test_noncanonical_bytes_are_rejected(self) -> None:
+        source = Snapshot.of([reference(MemoryType.CANONICAL)])
+        projection = Projection(source=source.digest, modules=source.modules)
+        pretty = json.dumps(json.loads(projection.canonical_bytes()), indent=2).encode()
+        with pytest.raises(DistributionError, match="not in canonical"):
+            Projection.from_document(pretty)
+
+    def test_a_retained_reference_serializes_exactly_as_its_source_does(self) -> None:
+        """The verbatim-subset rule is checked on objects; these are the bytes that carry it.
+
+        A projection that spelled an absent option as ``null`` where the snapshot omits the key would
+        make two documents disagree about a reference they both claim is the same one -- and a consumer
+        comparing the retained entry against the resolved source byte for byte would be right to refuse.
+        """
+        source = Snapshot.of([reference(MemoryType.CANONICAL), reference(MemoryType.SEMANTIC, "bge-m3@1.5")])
+        projection = Projection(source=source.digest, modules=source.modules)
+
+        in_snapshot = json.loads(source.canonical_bytes())["modules"]
+        in_projection = json.loads(projection.canonical_bytes())["modules"]
+
+        assert in_projection == in_snapshot
+
+    def test_a_module_key_cannot_disagree_with_its_reference(self) -> None:
+        source = Snapshot.of([reference(MemoryType.CANONICAL)])
+        with pytest.raises(ValidationError, match="module key"):
+            Projection(source=source.digest, modules={MemoryType.SEMANTIC: source.modules[MemoryType.CANONICAL]})
+
     def test_a_partial_artifact_is_valid(self) -> None:
         """Selective installation requires that publishing one module be legitimate."""
         _, manifest = build(MemoryType.EPISODIC)
@@ -151,6 +201,15 @@ class TestParseManifest:
         _, manifest = build(MemoryType.SEMANTIC)
         assert manifest.digest == OciDigest.of(manifest.to_bytes())
         assert parse_manifest(manifest.to_bytes()).digest == manifest.digest
+
+    def test_duplicate_json_keys_are_refused(self) -> None:
+        _, manifest = build(MemoryType.SEMANTIC)
+        duplicated = manifest.to_bytes().replace(
+            b'"schemaVersion":2',
+            b'"schemaVersion":2,"schemaVersion":2',
+        )
+        with pytest.raises(DistributionError, match="duplicate JSON key"):
+            parse_manifest(duplicated)
 
     def test_a_foreign_artifact_is_refused(self) -> None:
         document = {"artifact_type": "application/vnd.oci.image.manifest.v1+json", "config": {}, "layers": []}

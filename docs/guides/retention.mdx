@@ -180,6 +180,25 @@ report.missing           # not held: a selective install, or damage
 report.is_intact         # every block and every datum it names is resolvable or tombstoned
 ```
 
+Redaction creates a successor snapshot. Its module composition and Merkle root stay unchanged, while the
+signed `ModuleRef.tombstones` list grows to name the destroyed identity. The SDK derives the `redact`
+authorization scope from that signed difference; the removal record remains the attributable ledger entry
+that explains who removed it and why.
+
+The member is present exactly when a module has destroyed bytes to name — a module with none omits it,
+rather than carrying an empty list, so that two implementations compute the same snapshot digest for the
+same brain state.
+
+For ordinary drops, the composition does change. A verifier compares a snapshot with its first parent and
+requires every identity that disappeared to be named by a reachable removal record for that module. An
+unexplained absence is rejected as `RemovalInvariantError`, including during `pull`. Together, tombstones
+and the removal ledger distinguish intentional destruction from an incomplete or corrupted artifact.
+
+The check depends on nothing in the snapshot being opted into, so nothing in a snapshot can turn it off.
+When the first parent is not held the difference cannot be taken at all; that is reported as
+`REMOVAL_UNDECIDABLE` and does not block — refusing would refuse every brain that pruned its history,
+which the protocol permits, and passing silently would let a truncated history disable the check.
+
 The same split is reported for the [content a block names but does not
 carry](/sdks/boltzmann/concepts/architecture#content-a-block-names-but-does-not-carry), because an
 episode whose transcript is gone is not a whole episode:

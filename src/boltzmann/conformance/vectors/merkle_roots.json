@@ -151,6 +151,51 @@
         "sha256:8fe027368ac26ee3873681dcdcf06da0c6097dbc526d78bf0d54cab848b74c23"
       ],
       "root": "sha256:06701b32a9e74436c823e8075c397d2dd1056612625b82d009c05a841f74b0a4"
+    },
+    {
+      "name": "duplicates_collapse_to_the_sorted_unique_root",
+      "layout": "rfc6962-sorted/1",
+      "block_ids": [
+        "sha256:8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8",
+        "sha256:f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753",
+        "sha256:be9d587defa1f0c09ef49eb17e206983a5f8f8289e4281860bd0ee5a19592c67",
+        "sha256:8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8",
+        "sha256:be9d587defa1f0c09ef49eb17e206983a5f8f8289e4281860bd0ee5a19592c67"
+      ],
+      "root": "sha256:4753a04eccfc569389189472fe4c410723e3a36d8839c1576af89779a19db39c",
+      "why": "The root is a function of the SET. A leaf list carrying a repeat commits to the same root as the de-duplicated list, so an implementation that hashed the input as given would compute a different root for the same knowledge."
+    },
+    {
+      "name": "permuted_leaves_produce_the_same_root",
+      "layout": "rfc6962-sorted/1",
+      "block_ids": [
+        "sha256:f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753",
+        "sha256:be9d587defa1f0c09ef49eb17e206983a5f8f8289e4281860bd0ee5a19592c67",
+        "sha256:8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+      ],
+      "root": "sha256:4753a04eccfc569389189472fe4c410723e3a36d8839c1576af89779a19db39c",
+      "why": "Order-independence is what makes two clients holding the same blocks agree. Note what this does NOT mean: a composition DOCUMENT whose block_ids are not strictly ascending MUST be rejected on decode -- see rejected_compositions. The root cannot detect a permutation, so the document check is where it is caught."
+    }
+  ],
+  "rejected_compositions": [
+    {
+      "name": "permuted_composition_document",
+      "block_ids": [
+        "sha256:f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753",
+        "sha256:be9d587defa1f0c09ef49eb17e206983a5f8f8289e4281860bd0ee5a19592c67",
+        "sha256:8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+      ],
+      "why": "Accepted by the Merkle layer, refused by the document: block_ids MUST arrive strictly ascending. Two byte-distinct documents producing one root would let a single logical version ship under two OCI digests."
+    },
+    {
+      "name": "duplicate_bearing_composition_document",
+      "block_ids": [
+        "sha256:8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8",
+        "sha256:be9d587defa1f0c09ef49eb17e206983a5f8f8289e4281860bd0ee5a19592c67",
+        "sha256:f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753",
+        "sha256:8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8"
+      ],
+      "why": "Same rule, same predicate: strictly ascending excludes a repeat as well as a permutation."
     }
   ]
 }

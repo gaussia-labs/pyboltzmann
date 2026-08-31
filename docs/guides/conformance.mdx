@@ -6,37 +6,83 @@ description: "Prove an implementation conforms — in Python by inheriting the s
 An implementation in any language must reach the same identities. Conformance is therefore something you
 run, not something you claim.
 
+<Note>
+  **The corpus is not owned here.** It is published at
+  [gaussia-labs/boltzmann-conformance](https://github.com/gaussia-labs/boltzmann-conformance) as
+  spec-level data, and vendored into this package at the version `golden.CORPUS_VERSION` names. The
+  authority is the corpus; this SDK is one of its consumers, and CI fails if the vendored copy drifts.
+
+  That split matters. While these files lived here, their location, naming and shape were governed by a
+  Python package layout, and "conforming" quietly degraded into "matches pyboltzmann, bugs included".
+  A vector this SDK cannot reproduce is now a disagreement to resolve, not a file to edit.
+</Note>
+
 ## Golden vectors, for any language
 
 The vectors ship **inside the wheel** as plain JSON, so a non-Python implementation can read them from an
-installed `pyboltzmann` without this SDK running any of its own code.
+installed `pyboltzmann` without this SDK running any of its own code — or read them straight from the
+corpus repository, which needs no install at all.
 
 ```python
 from boltzmann.conformance import golden
 
-golden.VECTOR_FILES
-# ('block_ids.json', 'merkle_roots.json', 'inclusion_proofs.json', 'serialization.json',
-#  'sshsig.json', 'signatures.json')
+golden.CORPUS_VERSION      # which published corpus this package carries
+golden.CORPUS_REPOSITORY   # where a disagreement gets resolved
 
 for vector in golden.load("block_ids.json")["vectors"]:
     assert my_implementation.block_id(vector["envelope"]) == vector["block_id"]
 
-golden.load_all()   # every file, by name
+golden.load_all()          # every file, by name
+golden.registry()          # the schema registry companion
 ```
 
 | File | Fixes |
 | --- | --- |
-| `serialization.json` | The canonical byte sequence for a given payload |
+| `serialization.json` | The canonical byte sequence for a given payload — and the documents that MUST be rejected |
 | `block_ids.json` | The identity of a given envelope |
+| `schema_selection.json` | The `schema_version` oldest-that-fits assigns a payload against the registered set |
 | `merkle_roots.json` | The root of a given set of block ids |
-| `inclusion_proofs.json` | The audit path for a given leaf and tree size |
+| `inclusion_proofs.json` | The audit path for a given leaf and tree size, at sizes 1, a power of two, and odd |
 | `sshsig.json` | The SSHSIG wire format, byte for byte — including the signed-data blob, which tells a framing bug from a signing bug |
 | `signatures.json` | Whole chains, published test key pairs, and the verdict a verifier MUST reach for each of the paper's worked cases |
+| `reconciliation.json` | The set Equation 4 must produce — and the two reconciliations that MUST be refused |
 
-The first four cover the whole chain from a payload to a version identifier. Agree on all of them and two
-clients share a brain; disagree on any and they do not, whatever else they implement. The last two cover
-the authenticity role — divergence there is not silent identity drift but a verifier accepting what
-another refuses, which is worse.
+The identity files cover the whole chain from a payload to a version identifier. Agree on all of them and
+two clients share a brain; disagree on any and they do not, whatever else they implement. The authenticity
+files cover a different failure: divergence there is not silent identity drift but a verifier accepting
+what another refuses, which is worse.
+
+<Warning>
+  A published vector never changes. A case whose expected output would change is either a bug in
+  whatever produced it, or a new serialization identifier — never a corrected vector. Editing one
+  silently would let two implementations agree with the corpus at different times and disagree with
+  each other.
+</Warning>
+
+## The schema registry
+
+`schema_version` sits inside the envelope and therefore inside `block_id`, so "registered" cannot mean
+"whatever this deployment implements". The registered set is the companion document the corpus publishes:
+
+```python
+golden.registry()["schemas"]["semantic"]   # every registered semantic schema, oldest first
+```
+
+A block is written under the **oldest** registered schema its payload satisfies, and the proposer does not
+get to choose. Writing under the newest instead would let a new schema silently re-version every block
+written afterwards, including blocks that use nothing it added.
+
+Defining a block class registers its schema with this process, which is not the same thing as the schema
+being registered with the protocol. When the two disagree, the SDK says so:
+
+```
+WARNING  MySemanticV9 defines semantic schema_version 9, which the schema registry does not carry.
+         Blocks written under it are named in a way no other implementation reproduces...
+```
+
+It warns rather than refuses. Defining a schema is how one comes to be proposed for registration, so an
+exception would make the SDK unusable for the work that precedes it — the failure being guarded against
+is doing it *silently*, and ending up with a per-deployment registry by accident.
 
 ## The behavioral suite, for Python
 

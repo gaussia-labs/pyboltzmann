@@ -64,6 +64,15 @@ Only the blobs the registry lacks are uploaded, then the manifest. The digest it
 the registry filed it under — which is what makes `org/brain@sha256:…` resolvable, the only way to point
 at a version nobody can move a tag away from.
 
+Publishing selected modules writes a `Projection` config under
+`application/vnd.gaussia.boltzmann.projection.v1+json`. It is a view, not a new snapshot: the document
+binds the source snapshot digest and copies the retained `ModuleRef` values verbatim. A consumer resolves
+that source from the history layer, verifies its signatures, and rejects any reference that is not an
+exact subset of it. The `source-snapshot` manifest annotation remains only a pre-download hint; authority
+comes from the digest inside the projection document. A consumer that installed the projection cannot
+publish it back over that tag until reconciliation restores references for the source modules it did not
+receive; it may still publish the partial view under a different repository or tag.
+
 <Warning>
   A push **refuses to overwrite a remote whose snapshot is absent from the local history.** The two brains
   advanced from a common ancestor, and publishing would drop whichever side lost.
@@ -126,6 +135,23 @@ snapshot = await consumer.pull(
 
 What you install carries the digest that was published, and the layers you already hold are reused by
 digest rather than transferred again.
+
+### Rollback protection
+
+A moving tag can be rewritten to an older snapshot. When the served head is a strict ancestor of the head
+already held, `pull` raises `RollbackError` with a `ROLLBACK` report and leaves the current head unchanged.
+Returning to that version must be explicit:
+
+```python
+snapshot = await consumer.pull(
+    registry, "ghcr.io/org/brain", "v1",
+    allow_rollback=True,
+)
+```
+
+The override always logs a `ROLLBACK` warning. If local pruning removed the ancestry needed to decide the
+relationship, the pull continues with a `ROLLBACK_UNCHECKED` warning; uncertainty is reported but is not
+treated as proof that the registry moved backwards.
 
 ### Ignore incompatible vector indices
 

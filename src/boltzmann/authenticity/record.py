@@ -27,9 +27,9 @@ from boltzmann.authenticity.keys import FINGERPRINT_PATTERN, SshPublicKey
 from boltzmann.authenticity.scopes import Scope
 from boltzmann.authenticity.sshsig import MAX_ARMORED_LENGTH, SshSignature
 from boltzmann.constants import EMPTY_CONFIG_DIGEST, PROTOCOL_VERSION, SNAPSHOT_NAMESPACE
-from boltzmann.exceptions import SignatureFormatError
+from boltzmann.exceptions import SerializationError, SignatureFormatError
 from boltzmann.identity.digest import OciDigest
-from boltzmann.identity.serialization import canonicalize
+from boltzmann.identity.serialization import canonicalize, parse_json_strict
 from boltzmann.store.base import BlockStore
 
 SIGNATURES_POINTER = "signatures"
@@ -82,6 +82,18 @@ class SignatureRecord(BaseModel):
             bytes: The canonically serialized record.
         """
         return canonicalize(self.model_dump(mode="json", exclude_none=True))
+
+    @classmethod
+    def from_document(cls, data: bytes) -> SignatureRecord:
+        """Decode the exact canonical record bytes used as its content address."""
+        try:
+            document = parse_json_strict(data)
+        except SerializationError as error:
+            raise SignatureFormatError(f"signature record {error}") from error
+        record = cls.model_validate(document)
+        if record.canonical_bytes() != data:
+            raise SignatureFormatError("signature record is not in canonical jcs/1 form")
+        return record
 
     @property
     def digest(self) -> OciDigest:
@@ -143,7 +155,7 @@ def read_index(store: BlockStore) -> SignatureIndex:
         SignatureIndex: The index.
     """
     raw = store.read_pointer(SIGNATURES_POINTER)
-    return SignatureIndex.model_validate_json(raw) if raw else SignatureIndex()
+    return SignatureIndex.model_validate(parse_json_strict(raw)) if raw else SignatureIndex()
 
 
 def write_index(store: BlockStore, index: SignatureIndex) -> None:
@@ -206,7 +218,7 @@ def for_snapshot(store: BlockStore, snapshot: OciDigest) -> list[SignatureRecord
     """
     index = read_index(store)
     return [
-        SignatureRecord.model_validate_json(store.get_bytes(digest))
+        SignatureRecord.from_document(store.get_bytes(digest))
         for digest in index.entries.get(str(snapshot), [])
         if store.is_resolvable(digest)
     ]

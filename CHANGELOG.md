@@ -1,6 +1,284 @@
 # CHANGELOG
 
 
+## v0.8.0-b.13 (2026-08-30)
+
+### Features
+
+- **blocks**: Warn when a schema the registry does not carry is defined
+  ([`59534b2`](https://github.com/gaussia-labs/pyboltzmann/commit/59534b253fd7dfdcc9e7e0cddbb366ec318aaa5e))
+
+Defining a block class registers its schema with this process, and nothing said whether the protocol
+  had registered it. Those are different claims, and schema_version sits inside the envelope and
+  therefore inside block_id -- so a schema only one deployment knows produces blocks only that
+  deployment can name. Two parties holding identical knowledge compute different identifiers for it,
+  which is the silent divergence canonical serialization exists to prevent, arriving through the
+  version field instead.
+
+Registration is now checked against the companion the corpus publishes, which is what the paper
+  means by registered.
+
+It warns rather than refuses, because defining a schema is how one comes to be proposed for
+  registration in the first place, and an exception would make the SDK unusable for the work that
+  precedes it. What must not happen is for it to pass unremarked and leave a deployment with a
+  private registry it never chose. A missing or unreadable companion is ignored rather than fatal:
+  this check exists to prevent a silent divergence, not to become one more way an import can fail.
+
+### Refactoring
+
+- **conformance**: Consume the published corpus instead of owning it
+  ([`2c38bbf`](https://github.com/gaussia-labs/pyboltzmann/commit/2c38bbfe69b602fa62f7702a5acfd83dff9e1072))
+
+The vectors lived in this package, so their location, naming and shape were governed by a Python
+  layout, and "conforming" quietly degraded into "matches pyboltzmann, bugs included". The paper
+  promises data readable without executing any implementation of the protocol, and a corpus an SDK
+  owns cannot make that promise about itself.
+
+The corpus now lives at gaussia-labs/boltzmann-conformance and is vendored here at CORPUS_VERSION.
+  Vendored rather than fetched, so a plain pip install still carries the vectors and a reader in
+  another language still needs no Python -- and a CI job diffs the copy against what is published,
+  because a vendored copy nobody checks is just the old arrangement with extra steps.
+
+Two categories the paper names had never been authored and arrive with it: schema selection, where
+  oldest-that-fits is checked against the registered set rather than against whatever this package
+  implements, and reconciliation, with Equation 4 alongside the two refusals. The existing
+  categories gain the cases the amended paper names -- a non-BMP object key, an NFC/NFD pair,
+  duplicate-key and lone-surrogate documents that MUST be rejected, duplicate-leaf collapse, and
+  proofs at sizes one and a power of two.
+
+The schema registry companion ships too. Without it, "registered" would mean "whatever this package
+  implements", which is the per-deployment registry the protocol forbids -- arrived at by accident
+  rather than by decision. Two tests now pin the set both ways.
+
+The generator moves to the corpus repository, where its output belongs.
+
+
+## v0.8.0-b.12 (2026-08-30)
+
+### Bug Fixes
+
+- **module**: Omit the tombstones member when a module has none
+  ([`bdcb06f`](https://github.com/gaussia-labs/pyboltzmann/commit/bdcb06fdf074bc53314d1885274811cae5457ecb))
+
+Every new module reference carried "tombstones":[], and the paper's snapshot carries the member only
+  for a module whose composition "still names destroyed bytes". An empty list and an absent member
+  are different documents with different digests, so an implementation following the paper and this
+  one would have computed different snapshot digests for identical brain state -- the silent
+  divergence canonical serialization exists to prevent, re-entering through a field added to prevent
+  a different one.
+
+The empty list was doing a second job, and that is the actual defect. The removal invariant used the
+  member's presence to decide whether a snapshot was "modern" and had therefore opted into the
+  check, which made a fact about destroyed bytes double as a protocol-version marker -- and let
+  anyone turn the invariant off by omitting the field. The invariant is a statement about
+  compositions and now applies unconditionally.
+
+That leaves the case the version gate was standing in for: an unresolvable first parent, where no
+  difference can be taken. It is now reported as undecidable and does not block. Refusing would
+  refuse every brain that pruned its history, which the protocol permits; passing in silence would
+  let a truncated history disable the check. Saying which of the two happened is the only honest
+  answer.
+
+
+## v0.8.0-b.11 (2026-08-30)
+
+### Bug Fixes
+
+- **authenticity**: Key the trust pin on the genesis digest
+  ([`334a148`](https://github.com/gaussia-labs/pyboltzmann/commit/334a148179e41faf0ba86efc3e34cfeeda2d742b))
+
+TrustPin.genesis was written at every pin and read nowhere. Its docstring promised that a brain
+  which moved repositories would still be recognized as the same brain, and nothing implemented that
+  -- the pin was judged entirely on the trust root, which is precisely the thing that rotates.
+
+A brain's identity is the digest of its genesis: tags are re-assignable and the trust root changes
+  by design, so two snapshots are the same brain exactly when they resolve to the same genesis. The
+  verifier now checks that first. Without it an anchor taken for one brain could be evaluated
+  against another's chain, and both possible answers would be about the wrong question.
+
+The condition gets its own finding rather than reusing the trust-root mismatch, because the
+  operator's remedy is different: one says authority moved in a way the pin does not approve, the
+  other says this is not the brain you pinned. Pull refuses it before transferring any module layer,
+  alongside the checks already there.
+
+An unresolvable genesis is undecidable rather than negative. A legitimately pruned history cannot
+  answer the question, and refusing it would punish pruning the protocol permits; the truncation is
+  already reported on its own.
+
+
+## v0.8.0-b.10 (2026-08-30)
+
+### Bug Fixes
+
+- **module**: Reject composition documents not in canonical form
+  ([`5051f09`](https://github.com/gaussia-labs/pyboltzmann/commit/5051f092a25ec1b82a5d11d82ef93725760f4925))
+
+Every other wire document this SDK decodes re-serializes itself and refuses bytes that do not match
+  -- blocks, snapshots, signature records, projections. The composition document was the exception,
+  and it is the one where the gap is easiest to exploit quietly: the Merkle root commits to the
+  *set* of leaves, so a pretty-printed document, a differently ordered one, and one carrying an
+  unknown member all produce the identical root under three different OCI digests. A snapshot names
+  the digest, so one logical version could ship under several identities, each verifying perfectly.
+
+The check goes last, after the specific ones, because it subsumes them and says nothing about which
+  the caller actually tripped.
+
+Pointer reads get the same treatment for the same reason. They were written with canonicalize and
+  read with model_validate_json, so the write path refused ambiguity the read path accepted -- and
+  the pin is the anchor every other authenticity judgement is measured against.
+
+Also corrects the golden-vector docstring, which named a regenerate() function that has never
+  existed.
+
+
+## v0.8.0-b.9 (2026-08-30)
+
+### Features
+
+- **authenticity**: Warn when the govern quorum leaves no margin
+  ([`d421559`](https://github.com/gaussia-labs/pyboltzmann/commit/d4215599ec824238aa52378de523e63795951d76))
+
+A trust root whose quorum equals its number of govern holders is legal, and it is also a one-key
+  fuse. Lose that key -- stolen, or simply lost -- and governance is over: neither the remaining
+  holders nor an attacker can assemble the signatures to record a compromise or admit a replacement,
+  while a stolen key keeps signing within its scopes. The protocol has no recovery path, because
+  re-anchoring would be exactly the self-assertion the quorum rule exists to forbid.
+
+So it is said out loud, twice and for different readers. init and rotate warn at the moment the
+  margin is chosen, which is the only moment anything can still be done about it, and the report
+  carries a non-blocking QUORUM_MARGIN finding so a consumer meeting the brain later sees the
+  condition too.
+
+A warning rather than a refusal: no rule forbids the configuration, and a deployment with exactly
+  one owner has no other option available to it.
+
+
+## v0.8.0-b.8 (2026-08-30)
+
+### Features
+
+- **authenticity**: Distinguish an attributable proposal from an unauthorized head
+  ([`1c52fae`](https://github.com/gaussia-labs/pyboltzmann/commit/1c52fae39528ddcacee918b4ffd58d041b010dd0))
+
+A signature by a key the trust root does not list had exactly one reading here, and the protocol
+  requires two. Offered for review, such a snapshot is how an open project hears from someone it has
+  never admitted: the author is identified and no authority attaches. Served as the brain's current
+  state, the identical bytes are an impersonation attempt. Collapsing them meant either refusing
+  every stranger's contribution or reporting an imposture as an ordinary proposal.
+
+The distinction is positional, so the position is now an input. authenticate() takes a stance,
+  defaulting to HEAD because a caller who does not say is asking about a brain's current state and
+  must get the safe answer. Under OFFERED an unlisted key yields ATTRIBUTABLE_KEY and the report
+  resolves to the new ATTRIBUTABLE state; the policy bar for a published head is not applied, since
+  judging a proposal against it would refuse every contribution ever made.
+
+Attributable is not a weaker authorized: require_authorized still raises. What it adds is the
+  author's fingerprint, on the report and in the Authorship an evidence bundle carries, because a
+  state whose whole content is "who wrote this" that did not say who would have gained nothing over
+  an anonymous one.
+
+plan_reconcile sets the stance for the contribution path and reports the result, which is where a
+  maintainer reads it.
+
+
+## v0.8.0-b.7 (2026-08-30)
+
+### Features
+
+- **ingest**: Record the verdict that admitted each block
+  ([`aaaede6`](https://github.com/gaussia-labs/pyboltzmann/commit/aaaede664240ce91289f1e589152afdf88134219))
+
+The provenance ledger carried six record types where the protocol names seven. The missing one is
+  validation, and its absence made "it was validated" a claim a consumer had to take from whoever
+  committed: the verdict lived only on the write path, and nothing in the signed composition could
+  confirm a gate had run at all.
+
+Every committed block now gets a validation record beside its derivation edge, naming the verdict,
+  the checks that produced it, and the task. The check set is part of the claim rather than
+  decoration -- the same VALIDATED under two different check sets says two different things -- so
+  the gate now carries the codes that ran on its report, and the record refuses to be written
+  without them.
+
+ValidationStatus moves to the provenance module, because a verdict that travels in a record is wire
+  schema rather than write-path bookkeeping. It is re-exported from the gate, so every existing
+  import keeps working.
+
+Brain.audit_validation reads the ledger back and reports what cannot show its verdict. It reports
+  rather than refuses: a brain written before the record existed did nothing wrong, and refusing it
+  would trade availability for an auditability that snapshot cannot retroactively supply. The
+  removal invariant is the one that rejects, because there a missing record is the attack itself.
+
+
+## v0.8.0-b.6 (2026-08-30)
+
+### Bug Fixes
+
+- **distribution**: Serialize a projection's references as its source does
+  ([`088cffd`](https://github.com/gaussia-labs/pyboltzmann/commit/088cffdf1c6f7f1fdd44cacb89ef694b2de1e6e2))
+
+A projection's canonical bytes came from a plain model dump while a snapshot's exclude None, so a
+  retained reference was spelled with explicit nulls where the source snapshot omitted the keys
+  entirely. The two documents then disagreed about a reference both claim is the same one, and a
+  consumer comparing the retained entry against the resolved source byte for byte would have been
+  right to refuse.
+
+Adding tombstones to ModuleRef widens that gap by one more optional field, so it is fixed here
+  rather than left to grow.
+
+### Features
+
+- **retention**: Make removals verifier-checkable
+  ([`67a67c9`](https://github.com/gaussia-labs/pyboltzmann/commit/67a67c9533b3042432a588daeaccf2d7e7337a0a))
+
+
+## v0.8.0-b.5 (2026-08-28)
+
+### Features
+
+- **distribution**: Add typed projection configs
+  ([`c0f279b`](https://github.com/gaussia-labs/pyboltzmann/commit/c0f279bbb2c7ddd68486682fd3bf6bea68ff81cc))
+
+
+## v0.8.0-b.4 (2026-08-28)
+
+### Bug Fixes
+
+- **distribution**: Refuse pull rollbacks
+  ([`4090776`](https://github.com/gaussia-labs/pyboltzmann/commit/4090776d8478b42bb3f17d4d6d96a5867a83ccc7))
+
+
+## v0.8.0-b.3 (2026-08-28)
+
+### Bug Fixes
+
+- **authenticity**: Enforce SSHSIG and key security floors
+  ([`24b3dfe`](https://github.com/gaussia-labs/pyboltzmann/commit/24b3dfe7c9a8673cecf6b40074275e4d8de09c68))
+
+
+## v0.8.0-b.2 (2026-08-28)
+
+### Bug Fixes
+
+- **identity**: Reject ambiguous wire documents
+  ([`a2aebec`](https://github.com/gaussia-labs/pyboltzmann/commit/a2aebecb0d035f6c95130c42b813d694c2c124cd))
+
+
+## v0.8.0-b.1 (2026-08-28)
+
+### Features
+
+- **distribution**: Bind travelling indexes to snapshots
+  ([`f0646a2`](https://github.com/gaussia-labs/pyboltzmann/commit/f0646a274fe16f1ea1a41bc30d524b8896ee9cb4))
+
+
+## v0.7.1-b.1 (2026-08-28)
+
+### Bug Fixes
+
+- **reconcile**: Refuse multiple best common ancestors
+  ([`29a58dd`](https://github.com/gaussia-labs/pyboltzmann/commit/29a58dd19af7e2c12c5007deb4c6171bdb17be72))
+
+
 ## v0.7.0 (2026-08-28)
 
 ### Continuous Integration

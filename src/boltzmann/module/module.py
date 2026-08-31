@@ -18,8 +18,8 @@ from collections.abc import Iterable, Iterator
 
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
-from boltzmann.exceptions import MembershipError, MemoryTypeError
-from boltzmann.identity.digest import BlockId, MerkleRoot
+from boltzmann.exceptions import BlockTombstonedError, MembershipError, MemoryTypeError
+from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
 from boltzmann.indices.base import Index
 from boltzmann.merkle.diff import CompositionDiff
 from boltzmann.merkle.proof import InclusionProof
@@ -45,6 +45,7 @@ class Module:
         store: BlockStore,
         composition: Composition | None = None,
         indices: dict[str, Index] | None = None,
+        tombstones: Iterable[BlockId] = (),
     ) -> None:
         """
         Open a module over a store.
@@ -54,6 +55,7 @@ class Module:
             store (BlockStore): Where the blocks' bytes live.
             composition (Composition | None): The version to open. Defaults to empty.
             indices (dict[str, Index] | None): Derived views, keyed by index name.
+            tombstones (Iterable[BlockId]): Destroyed members this version still commits to.
 
         Raises:
             ValueError: If ``composition`` belongs to a different module.
@@ -66,6 +68,11 @@ class Module:
         self.store = store
         self.composition = composition if composition is not None else Composition(memory_type)
         self.indices = dict(indices or {})
+        self.tombstones = frozenset(tombstones)
+        outside = self.tombstones - set(self.composition.block_ids)
+        if outside:
+            named = ", ".join(sorted(block.short for block in outside))
+            raise ValueError(f"tombstones must remain members of the composition; outside: {named}")
 
     # --- Identity -------------------------------------------------------------
 
@@ -79,7 +86,11 @@ class Module:
         """The composition in canonical leaf order."""
         return self.composition.block_ids
 
-    def persist(self, embedding_model: str | None = None) -> ModuleRef:
+    def persist(
+        self,
+        embedding_model: str | None = None,
+        index_digest: OciDigest | None = None,
+    ) -> ModuleRef:
         """
         Write this version's composition document and describe it for a snapshot.
 
@@ -90,6 +101,7 @@ class Module:
         Args:
             embedding_model (str | None): Model and version behind the vector index, when one
                 travels with the module.
+            index_digest (OciDigest | None): Content address of that index's exact serialized payload.
 
         Returns:
             ModuleRef: The snapshot entry for this module.
@@ -101,6 +113,8 @@ class Module:
             block_count=len(self.composition),
             layout=self.composition.layout,
             embedding_model=embedding_model,
+            index_digest=index_digest,
+            tombstones=sorted(self.tombstones, key=lambda value: value.raw) or None,
         )
 
     def __len__(self) -> int:
@@ -132,12 +146,17 @@ class Module:
 
         Raises:
             MembershipError: If the block is not in this module's composition.
+            BlockTombstonedError: If the signed module reference marks its bytes destroyed.
             MemoryTypeError: If the stored block's type contradicts this module.
         """
         if block_id not in self.composition:
             raise MembershipError(
                 f"block {block_id.short} is not in the {self.memory_type.value} composition committed by "
                 f"{self.root.short}"
+            )
+        if block_id in self.tombstones:
+            raise BlockTombstonedError(
+                f"block {block_id.short} is tombstoned by the {self.memory_type.value} module reference"
             )
         block = self.store.get_block(block_id)
         if block.MEMORY_TYPE is not self.memory_type:
@@ -166,14 +185,19 @@ class Module:
         answered before the download rather than after it.
 
         Returns:
-            tuple[int, ...]: The versions present, or empty for an empty composition.
+            tuple[int, ...]: The readable versions present, or empty when no readable block remains.
 
         Raises:
             BlockNotFoundError: If a block the composition names cannot be read. A version
-                map that silently skipped unreadable blocks would understate what the module
-                requires, which is the one way this could mislead a consumer.
+                map that silently skipped an unexplained absence would understate what the module
+                requires. Signed tombstones are intentionally skipped because their schemas can no
+                longer be inspected.
         """
-        return tuple(sorted({block.SCHEMA_VERSION for block in self.blocks()}))
+        return tuple(
+            sorted(
+                {self.get(block_id).SCHEMA_VERSION for block_id in self.block_ids if block_id not in self.tombstones}
+            )
+        )
 
     def inclusion_proof(self, block_id: BlockId) -> InclusionProof:
         """
@@ -198,7 +222,10 @@ class Module:
         Returns:
             dict[BlockId, bool]: Each block mapped to whether its bytes resolve.
         """
-        return {block_id: self.store.is_resolvable(block_id) for block_id in self.composition}
+        return {
+            block_id: block_id not in self.tombstones and self.store.is_resolvable(block_id)
+            for block_id in self.composition
+        }
 
     def verify(self) -> bool:
         """
@@ -211,7 +238,7 @@ class Module:
         if not self.composition.verify():
             return False
         for block_id in self.composition:
-            if not self.store.is_resolvable(block_id):
+            if block_id in self.tombstones or not self.store.is_resolvable(block_id):
                 continue
             if self.store.get_block(block_id).block_id != block_id:
                 return False
@@ -229,7 +256,13 @@ class Module:
         Returns:
             Module: The new version, sharing this module's store.
         """
-        return Module(self.memory_type, self.store, self.composition.add(block_ids), self.indices)
+        return Module(
+            self.memory_type,
+            self.store,
+            self.composition.add(block_ids),
+            self.indices,
+            tombstones=self.tombstones,
+        )
 
     def without_blocks(self, block_ids: Iterable[BlockId]) -> Module:
         """
@@ -244,7 +277,24 @@ class Module:
         Raises:
             AppendOnlyViolationError: If this module is append-only.
         """
-        return Module(self.memory_type, self.store, self.composition.drop(block_ids), self.indices)
+        composition = self.composition.drop(block_ids)
+        return Module(
+            self.memory_type,
+            self.store,
+            composition,
+            self.indices,
+            tombstones=self.tombstones & set(composition.block_ids),
+        )
+
+    def with_tombstones(self, block_ids: Iterable[BlockId]) -> Module:
+        """Derive the same composition while recording additional destroyed members."""
+        return Module(
+            self.memory_type,
+            self.store,
+            self.composition,
+            self.indices,
+            tombstones=self.tombstones | set(block_ids),
+        )
 
     def diff(self, other: Module) -> CompositionDiff:
         """

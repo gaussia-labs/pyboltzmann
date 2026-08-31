@@ -1,0 +1,1881 @@
+{
+  "boltzmann": 1,
+  "registry_version": 1,
+  "dialect": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The registered block schemas. A schema is registered exactly when this document carries it; oldest-that-fits selects by schema_version, which is consecutive per memory type.",
+  "schemas": {
+    "canonical": [
+      {
+        "schema_version": 1,
+        "title": "CanonicalBlock",
+        "schema": {
+          "$defs": {
+            "NormalizedView": {
+              "additionalProperties": false,
+              "description": "A deterministic transform of an original blob.\n\nA normalized view is plain text, Markdown, or a structured extract produced by\na named deterministic pipeline whose identity is recorded in provenance.\nNormalized views live in canonical rather than semantic memory because they are\nstill evidence for ingestion, not consolidated knowledge.\n\nAdds no field to :class:`~boltzmann.blocks.content.ContentRef`, and must not: the\nthree it inherits are exactly what a normalized view is, and any change to the\nshape would change every canonical ``block_id`` that carries one. It stays a\ndistinct name because *what* a view is -- evidence produced by a named pipeline --\nis not the same as the general fact that a block names bytes.",
+              "properties": {
+                "blob": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Blob",
+                  "type": "string"
+                },
+                "media_type": {
+                  "minLength": 1,
+                  "title": "Media Type",
+                  "type": "string"
+                },
+                "size": {
+                  "minimum": 0,
+                  "title": "Size",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "blob",
+                "media_type",
+                "size"
+              ],
+              "title": "NormalizedView",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "description": "Evidence that a source was incorporated and preserved.\n\nNote which level of identity ``blob`` carries. The observed bytes of a source\nare a transportable file, not a unit of knowledge, so they are addressed by an\n:class:`~boltzmann.identity.digest.OciDigest`; the ``block_id`` of this block is\nthe knowledge-level statement *about* those bytes. Read together with\n``media_type`` and ``size``, this block is an OCI descriptor over the evidence\nplus an optional normalized view of it -- which is why publishing a brain is a\ncopy rather than a conversion.\n\nAttributes:\n    blob (OciDigest): Content address of the original bytes as observed.\n    media_type (str): IANA media type of the original.\n    size (int): Length of the original in bytes.\n    normalized_view (NormalizedView | None): Optional deterministic transform\n        of the original, addressed by its own hash.",
+          "properties": {
+            "blob": {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "title": "Blob",
+              "type": "string"
+            },
+            "media_type": {
+              "minLength": 1,
+              "title": "Media Type",
+              "type": "string"
+            },
+            "size": {
+              "minimum": 0,
+              "title": "Size",
+              "type": "integer"
+            },
+            "normalized_view": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NormalizedView"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "blob",
+            "media_type",
+            "size"
+          ],
+          "title": "CanonicalBlock",
+          "type": "object"
+        }
+      }
+    ],
+    "episodic": [
+      {
+        "schema_version": 1,
+        "title": "EpisodicBlock",
+        "schema": {
+          "additionalProperties": false,
+          "description": "A concrete experience, situated in time.\n\nAttributes:\n    summary (str): What happened, in one statement.\n    occurred_at (Timestamp): When the episode happened, in canonical UTC form.\n    ended_at (Timestamp | None): When it finished, for episodes with duration.\n    context (str | None): The setting the episode belongs to, such as a course,\n        a project, or a conversation.\n    participants (list[str] | None): Who took part.\n    outcome (str | None): How it resolved.\n    evidence (list[BlockId] | None): Canonical blocks that attest to the episode.\n    tags (list[str] | None): Free-form labels for filtering.",
+          "properties": {
+            "summary": {
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            },
+            "occurred_at": {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+              "title": "Occurred At",
+              "type": "string"
+            },
+            "ended_at": {
+              "anyOf": [
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Ended At"
+            },
+            "context": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Context"
+            },
+            "participants": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Participants"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
+            },
+            "evidence": {
+              "anyOf": [
+                {
+                  "items": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Evidence"
+            },
+            "tags": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Tags"
+            }
+          },
+          "required": [
+            "summary",
+            "occurred_at"
+          ],
+          "title": "EpisodicBlock",
+          "type": "object"
+        }
+      },
+      {
+        "schema_version": 2,
+        "title": "EpisodicBlockV2",
+        "schema": {
+          "$defs": {
+            "ContentRef": {
+              "additionalProperties": false,
+              "description": "Bytes a block names rather than carries.\n\nThe three fields are an OCI descriptor over the content: what it is addressed\nby, what it is, and how much of it there is. ``size`` and ``media_type`` are\npart of the block rather than looked up from the store so that a consumer can\ntell what a block names -- and decide whether to fetch it -- without holding\nthe bytes at all.\n\nAttributes:\n    blob (OciDigest): Content address of the bytes.\n    media_type (str): IANA media type of the bytes.\n    size (int): Length of the bytes.",
+              "properties": {
+                "blob": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Blob",
+                  "type": "string"
+                },
+                "media_type": {
+                  "minLength": 1,
+                  "title": "Media Type",
+                  "type": "string"
+                },
+                "size": {
+                  "minimum": 0,
+                  "title": "Size",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "blob",
+                "media_type",
+                "size"
+              ],
+              "title": "ContentRef",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "description": "An episode that may name a recording rather than only describe one.\n\nThe transcript of a lecture, the audio of a call, the capture of a session: an episode's\nown datum, which nothing else cites and which is meaningless apart from the episode it\nbelongs to. That is content, not evidence -- so it lives and dies with this block, and a\nsource that other blocks will cite stays canonical.\n\n``summary`` stays required for the reason it always was: it is what the episode *says*\nhappened, and it is what a text query can reach. A recording is not a summary of itself.",
+          "properties": {
+            "summary": {
+              "minLength": 1,
+              "title": "Summary",
+              "type": "string"
+            },
+            "occurred_at": {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+              "title": "Occurred At",
+              "type": "string"
+            },
+            "ended_at": {
+              "anyOf": [
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Ended At"
+            },
+            "context": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Context"
+            },
+            "participants": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Participants"
+            },
+            "outcome": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Outcome"
+            },
+            "evidence": {
+              "anyOf": [
+                {
+                  "items": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Evidence"
+            },
+            "tags": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Tags"
+            },
+            "content": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ContentRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "summary",
+            "occurred_at"
+          ],
+          "title": "EpisodicBlockV2",
+          "type": "object"
+        }
+      }
+    ],
+    "semantic": [
+      {
+        "schema_version": 1,
+        "title": "SemanticBlock",
+        "schema": {
+          "$defs": {
+            "Relation": {
+              "additionalProperties": false,
+              "description": "An explicit, symbolic edge from this block to another.\n\nIn aggregate these edges form the knowledge graph, which is why they live on\nthe block and not only in the derived graph index: the index can be rebuilt\nfrom them, but they cannot be rebuilt from the index.\n\nAttributes:\n    predicate (str): What the edge asserts, such as ``depends_on`` or ``part_of``.\n    target (BlockId): The block the edge points at.",
+              "properties": {
+                "predicate": {
+                  "minLength": 1,
+                  "title": "Predicate",
+                  "type": "string"
+                },
+                "target": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Target",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "predicate",
+                "target"
+              ],
+              "title": "Relation",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "description": "A unit of consolidated general knowledge.\n\nAttributes:\n    kind (SemanticKind): Which kind of statement this is.\n    label (str): Short name the knowledge is known by.\n    statement (str): The knowledge itself.\n    subject (str | None): Domain the knowledge belongs to, for filtering.\n    evidence (list[BlockId] | None): Canonical blocks this interpretation cites.\n        A canonical drop cascades to every block that lists it here.\n    relations (list[Relation] | None): Explicit edges to other blocks.\n    aliases (list[str] | None): Other names for the same knowledge, used for\n        identity resolution and deduplication.",
+          "properties": {
+            "kind": {
+              "enum": [
+                "concept",
+                "fact",
+                "formula",
+                "relation",
+                "constraint"
+              ]
+            },
+            "label": {
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "statement": {
+              "minLength": 1,
+              "title": "Statement",
+              "type": "string"
+            },
+            "subject": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Subject"
+            },
+            "evidence": {
+              "anyOf": [
+                {
+                  "items": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Evidence"
+            },
+            "relations": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/Relation"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Relations"
+            },
+            "aliases": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Aliases"
+            }
+          },
+          "required": [
+            "kind",
+            "label",
+            "statement"
+          ],
+          "title": "SemanticBlock",
+          "type": "object"
+        }
+      },
+      {
+        "schema_version": 2,
+        "title": "SemanticBlockV2",
+        "schema": {
+          "$defs": {
+            "ContentRef": {
+              "additionalProperties": false,
+              "description": "Bytes a block names rather than carries.\n\nThe three fields are an OCI descriptor over the content: what it is addressed\nby, what it is, and how much of it there is. ``size`` and ``media_type`` are\npart of the block rather than looked up from the store so that a consumer can\ntell what a block names -- and decide whether to fetch it -- without holding\nthe bytes at all.\n\nAttributes:\n    blob (OciDigest): Content address of the bytes.\n    media_type (str): IANA media type of the bytes.\n    size (int): Length of the bytes.",
+              "properties": {
+                "blob": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Blob",
+                  "type": "string"
+                },
+                "media_type": {
+                  "minLength": 1,
+                  "title": "Media Type",
+                  "type": "string"
+                },
+                "size": {
+                  "minimum": 0,
+                  "title": "Size",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "blob",
+                "media_type",
+                "size"
+              ],
+              "title": "ContentRef",
+              "type": "object"
+            },
+            "Relation": {
+              "additionalProperties": false,
+              "description": "An explicit, symbolic edge from this block to another.\n\nIn aggregate these edges form the knowledge graph, which is why they live on\nthe block and not only in the derived graph index: the index can be rebuilt\nfrom them, but they cannot be rebuilt from the index.\n\nAttributes:\n    predicate (str): What the edge asserts, such as ``depends_on`` or ``part_of``.\n    target (BlockId): The block the edge points at.",
+              "properties": {
+                "predicate": {
+                  "minLength": 1,
+                  "title": "Predicate",
+                  "type": "string"
+                },
+                "target": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Target",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "predicate",
+                "target"
+              ],
+              "title": "Relation",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "description": "Consolidated knowledge whose datum may be a file rather than a sentence.\n\nAn interpretation of an image is still an interpretation: it belongs in semantic memory,\nit cites the canonical evidence it was derived from, and it is not itself evidence. What\nv1 could not express is that the *thing being asserted* is sometimes not text -- a\nrendered diagram, an extracted figure, a plotted curve -- and inlining that into a JSON\npayload that is canonically serialized and hashed on every access is not an option.\n\n**``statement`` stays required.** A block carries meaning in portable, symbolic forms\n(paper Section 6.3), and ``_text_of`` in :mod:`boltzmann.query.scan` reads exactly those\nfields to answer a natural-language query. A block whose statement were empty would be\nunreachable by every text query in the system -- present in the composition, provable\nagainst the root, and invisible. When the content is binary the statement is what the\nblock claims *about* it, which is the part consolidated knowledge is made of.\n\nDistinct from ``evidence``, which is a citation of another block: content lives and dies\nwith the block that names it and nothing else may cite it. Material that other blocks will\ncite is canonical, through ``register``, and always was -- see\n:mod:`boltzmann.blocks.content`.",
+          "properties": {
+            "kind": {
+              "enum": [
+                "concept",
+                "fact",
+                "formula",
+                "relation",
+                "constraint"
+              ]
+            },
+            "label": {
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "statement": {
+              "minLength": 1,
+              "title": "Statement",
+              "type": "string"
+            },
+            "subject": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Subject"
+            },
+            "evidence": {
+              "anyOf": [
+                {
+                  "items": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Evidence"
+            },
+            "relations": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/Relation"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Relations"
+            },
+            "aliases": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Aliases"
+            },
+            "content": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ContentRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "kind",
+            "label",
+            "statement"
+          ],
+          "title": "SemanticBlockV2",
+          "type": "object"
+        }
+      },
+      {
+        "schema_version": 3,
+        "title": "SemanticBlockV3",
+        "schema": {
+          "$defs": {
+            "Relation": {
+              "additionalProperties": false,
+              "description": "An explicit, symbolic edge from this block to another.\n\nIn aggregate these edges form the knowledge graph, which is why they live on\nthe block and not only in the derived graph index: the index can be rebuilt\nfrom them, but they cannot be rebuilt from the index.\n\nAttributes:\n    predicate (str): What the edge asserts, such as ``depends_on`` or ``part_of``.\n    target (BlockId): The block the edge points at.",
+              "properties": {
+                "predicate": {
+                  "minLength": 1,
+                  "title": "Predicate",
+                  "type": "string"
+                },
+                "target": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Target",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "predicate",
+                "target"
+              ],
+              "title": "Relation",
+              "type": "object"
+            },
+            "SemanticKind": {
+              "description": "What kind of consolidated knowledge a semantic block states.",
+              "enum": [
+                "concept",
+                "fact",
+                "formula",
+                "relation",
+                "constraint",
+                "scheme",
+                "class"
+              ],
+              "title": "SemanticKind",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "description": "Portable catalog structure stored in semantic memory (paper Section 6.7).\n\nThis is deliberately a sibling of :class:`SemanticBlock`, not a subtype. Catalog structure has\nno claim ``statement`` and only classes have a ``label``; ordinary semantic claims therefore keep\ntheir non-optional interface while the registry still decodes semantic schema version 3.",
+          "oneOf": [
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "label"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "evidence"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "relations"
+                    ]
+                  }
+                ]
+              },
+              "properties": {
+                "kind": {
+                  "const": "scheme"
+                }
+              },
+              "required": [
+                "scheme",
+                "exclusive"
+              ]
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "exclusive"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "evidence"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "relations"
+                    ]
+                  }
+                ]
+              },
+              "properties": {
+                "kind": {
+                  "const": "class"
+                }
+              },
+              "required": [
+                "scheme",
+                "label"
+              ]
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "scheme"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "label"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "exclusive"
+                    ]
+                  }
+                ]
+              },
+              "properties": {
+                "kind": {
+                  "const": "relation"
+                },
+                "relations": {
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "prefixItems": [
+                    {
+                      "properties": {
+                        "predicate": {
+                          "const": "classified_as"
+                        }
+                      },
+                      "required": [
+                        "predicate",
+                        "target"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "relations"
+              ]
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "scheme"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "label"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "exclusive"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "evidence"
+                    ]
+                  }
+                ]
+              },
+              "properties": {
+                "kind": {
+                  "const": "relation"
+                },
+                "relations": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "properties": {
+                        "predicate": {
+                          "const": "broader"
+                        }
+                      },
+                      "required": [
+                        "predicate",
+                        "target"
+                      ]
+                    },
+                    {
+                      "properties": {
+                        "predicate": {
+                          "const": "narrower"
+                        }
+                      },
+                      "required": [
+                        "predicate",
+                        "target"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "relations"
+              ]
+            }
+          ],
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/SemanticKind"
+            },
+            "scheme": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Scheme"
+            },
+            "label": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Label"
+            },
+            "exclusive": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Exclusive"
+            },
+            "evidence": {
+              "anyOf": [
+                {
+                  "items": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Evidence"
+            },
+            "relations": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/Relation"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Relations"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "title": "SemanticBlockV3",
+          "type": "object"
+        }
+      }
+    ],
+    "procedural": [
+      {
+        "schema_version": 1,
+        "title": "ProceduralBlock",
+        "schema": {
+          "$defs": {
+            "Step": {
+              "additionalProperties": false,
+              "description": "One action in a procedure.\n\nAttributes:\n    action (str): What to do.\n    condition (str | None): When this step applies, for branching procedures.\n    alternatives (list[str] | None): Other ways to accomplish the same step.\n    uses (list[BlockId] | None): Semantic blocks the step relies on, such as the\n        formula it applies.",
+              "properties": {
+                "action": {
+                  "minLength": 1,
+                  "title": "Action",
+                  "type": "string"
+                },
+                "condition": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Condition"
+                },
+                "alternatives": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Alternatives"
+                },
+                "uses": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Uses"
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "title": "Step",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "description": "A way of performing a task.\n\nAttributes:\n    label (str): Short name of the procedure.\n    goal (str): What the procedure accomplishes.\n    steps (list[Step]): The ordered actions. Order is significant, so it is part\n        of the block's identity.\n    preconditions (list[str] | None): What must hold before starting.\n    success_criteria (list[str] | None): How to tell the procedure worked.\n    subject (str | None): Domain the procedure belongs to, for filtering.\n    evidence (list[BlockId] | None): Canonical blocks this procedure cites.\n        A canonical drop cascades to every block that lists it here.",
+          "properties": {
+            "label": {
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "goal": {
+              "minLength": 1,
+              "title": "Goal",
+              "type": "string"
+            },
+            "steps": {
+              "items": {
+                "$ref": "#/$defs/Step"
+              },
+              "minItems": 1,
+              "title": "Steps",
+              "type": "array"
+            },
+            "preconditions": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Preconditions"
+            },
+            "success_criteria": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Success Criteria"
+            },
+            "subject": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Subject"
+            },
+            "evidence": {
+              "anyOf": [
+                {
+                  "items": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Evidence"
+            }
+          },
+          "required": [
+            "label",
+            "goal",
+            "steps"
+          ],
+          "title": "ProceduralBlock",
+          "type": "object"
+        }
+      },
+      {
+        "schema_version": 2,
+        "title": "ProceduralBlockV2",
+        "schema": {
+          "$defs": {
+            "ContentRef": {
+              "additionalProperties": false,
+              "description": "Bytes a block names rather than carries.\n\nThe three fields are an OCI descriptor over the content: what it is addressed\nby, what it is, and how much of it there is. ``size`` and ``media_type`` are\npart of the block rather than looked up from the store so that a consumer can\ntell what a block names -- and decide whether to fetch it -- without holding\nthe bytes at all.\n\nAttributes:\n    blob (OciDigest): Content address of the bytes.\n    media_type (str): IANA media type of the bytes.\n    size (int): Length of the bytes.",
+              "properties": {
+                "blob": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Blob",
+                  "type": "string"
+                },
+                "media_type": {
+                  "minLength": 1,
+                  "title": "Media Type",
+                  "type": "string"
+                },
+                "size": {
+                  "minimum": 0,
+                  "title": "Size",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "blob",
+                "media_type",
+                "size"
+              ],
+              "title": "ContentRef",
+              "type": "object"
+            },
+            "Step": {
+              "additionalProperties": false,
+              "description": "One action in a procedure.\n\nAttributes:\n    action (str): What to do.\n    condition (str | None): When this step applies, for branching procedures.\n    alternatives (list[str] | None): Other ways to accomplish the same step.\n    uses (list[BlockId] | None): Semantic blocks the step relies on, such as the\n        formula it applies.",
+              "properties": {
+                "action": {
+                  "minLength": 1,
+                  "title": "Action",
+                  "type": "string"
+                },
+                "condition": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Condition"
+                },
+                "alternatives": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Alternatives"
+                },
+                "uses": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Uses"
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "title": "Step",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "description": "A procedure that may name an artifact the steps produce or consume.\n\nA worked example, a reference output to diff against, a template the procedure fills in:\nthe procedure's own datum. ``steps`` stays the procedure -- content does not replace the\nordered actions, which are what makes this knowledge rather than an attachment.",
+          "properties": {
+            "label": {
+              "minLength": 1,
+              "title": "Label",
+              "type": "string"
+            },
+            "goal": {
+              "minLength": 1,
+              "title": "Goal",
+              "type": "string"
+            },
+            "steps": {
+              "items": {
+                "$ref": "#/$defs/Step"
+              },
+              "minItems": 1,
+              "title": "Steps",
+              "type": "array"
+            },
+            "preconditions": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Preconditions"
+            },
+            "success_criteria": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Success Criteria"
+            },
+            "subject": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Subject"
+            },
+            "evidence": {
+              "anyOf": [
+                {
+                  "items": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Evidence"
+            },
+            "content": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ContentRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            }
+          },
+          "required": [
+            "label",
+            "goal",
+            "steps"
+          ],
+          "title": "ProceduralBlockV2",
+          "type": "object"
+        }
+      }
+    ],
+    "provenance": [
+      {
+        "schema_version": 1,
+        "title": "ProvenanceBlock",
+        "schema": {
+          "$defs": {
+            "Actor": {
+              "additionalProperties": false,
+              "description": "Who performed an operation.\n\nAttributes:\n    id (str): Stable identifier of the actor.\n    kind (ActorKind): What sort of agent it is.\n    name (str | None): Human-readable label.",
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "title": "Id",
+                  "type": "string"
+                },
+                "kind": {
+                  "$ref": "#/$defs/ActorKind"
+                },
+                "name": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Name"
+                }
+              },
+              "required": [
+                "id",
+                "kind"
+              ],
+              "title": "Actor",
+              "type": "object"
+            },
+            "ActorKind": {
+              "description": "What sort of agent performed an operation.",
+              "enum": [
+                "human",
+                "agent",
+                "service",
+                "pipeline"
+              ],
+              "title": "ActorKind",
+              "type": "string"
+            },
+            "DemotionRecord": {
+              "additionalProperties": false,
+              "description": "A block's retrieval priority was lowered without removing it.\n\nCognitive psychology separates the availability of a trace from its accessibility, and demotion is\nthat distinction: the block stays in the composition, still proves into the root, still resolves.\nWhat changes is that it stops competing for the top of every ranking (paper Section 10.4).\n\nRecording it in the ledger rather than in a mutable field on the block is what keeps blocks\nimmutable. A block's identity cannot depend on how accessible someone later decided it should be, or\ndemoting it would change its ``block_id`` and make it a different block.\n\nThe paper leaves the decay function that governs demotion open (Section 12), so this records the\ndecision and not a score: how much a demoted block is penalized, and whether the penalty fades, is\na retrieval strategy the implementation owns.\n\nAttributes:\n    record_type (Literal[\"demotion\"]): Discriminator.\n    block (BlockId): The block demoted.\n    actor (Actor): Who demoted it.\n    at (Timestamp): When.\n    reason (str | None): Why.\n    policy (str | None): Named policy that authorized it.",
+              "properties": {
+                "record_type": {
+                  "const": "demotion",
+                  "default": "demotion",
+                  "title": "Record Type",
+                  "type": "string"
+                },
+                "block": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Block",
+                  "type": "string"
+                },
+                "actor": {
+                  "$ref": "#/$defs/Actor"
+                },
+                "at": {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+                  "title": "At",
+                  "type": "string"
+                },
+                "reason": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Reason"
+                },
+                "policy": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Policy"
+                }
+              },
+              "required": [
+                "block",
+                "actor",
+                "at"
+              ],
+              "title": "DemotionRecord",
+              "type": "object"
+            },
+            "DerivationRecord": {
+              "additionalProperties": false,
+              "description": "A derived block was produced from canonical evidence.\n\nThis is the edge a canonical drop walks to build its dependency closure.\n\nAttributes:\n    record_type (Literal[\"derivation\"]): Discriminator.\n    block (BlockId): The derived block.\n    derived_from (list[BlockId]): The evidence it cites. Never empty: a derived\n        block with no evidence has no root to be audited against.\n    producer (Producer): What produced it.\n    actor (Actor): Who ran the production.\n    at (Timestamp): When it was produced.\n    task (str | None): Identifier of the processing task that yielded it.\n    locator (str | None): Where in the source it came from, such as a page or a\n        line range.",
+              "properties": {
+                "record_type": {
+                  "const": "derivation",
+                  "default": "derivation",
+                  "title": "Record Type",
+                  "type": "string"
+                },
+                "block": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Block",
+                  "type": "string"
+                },
+                "derived_from": {
+                  "items": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "title": "Derived From",
+                  "type": "array"
+                },
+                "producer": {
+                  "$ref": "#/$defs/Producer"
+                },
+                "actor": {
+                  "$ref": "#/$defs/Actor"
+                },
+                "at": {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+                  "title": "At",
+                  "type": "string"
+                },
+                "task": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Task"
+                },
+                "locator": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Locator"
+                }
+              },
+              "required": [
+                "block",
+                "derived_from",
+                "producer",
+                "actor",
+                "at"
+              ],
+              "title": "DerivationRecord",
+              "type": "object"
+            },
+            "MemoryType": {
+              "description": "A memory module, and therefore the type of a knowledge block.",
+              "enum": [
+                "canonical",
+                "episodic",
+                "semantic",
+                "procedural",
+                "provenance"
+              ],
+              "title": "MemoryType",
+              "type": "string"
+            },
+            "NormalizationRecord": {
+              "additionalProperties": false,
+              "description": "A normalized view was produced from an original blob.\n\nAttributes:\n    record_type (Literal[\"normalization\"]): Discriminator.\n    block (BlockId): The canonical block holding the normalized view.\n    pipeline (str): Name of the deterministic pipeline that produced it.\n    pipeline_version (str): Version of that pipeline, so the transform can be\n        reproduced or compared.\n    actor (Actor): Who ran it.\n    at (Timestamp): When it ran.",
+              "properties": {
+                "record_type": {
+                  "const": "normalization",
+                  "default": "normalization",
+                  "title": "Record Type",
+                  "type": "string"
+                },
+                "block": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Block",
+                  "type": "string"
+                },
+                "pipeline": {
+                  "minLength": 1,
+                  "title": "Pipeline",
+                  "type": "string"
+                },
+                "pipeline_version": {
+                  "minLength": 1,
+                  "title": "Pipeline Version",
+                  "type": "string"
+                },
+                "actor": {
+                  "$ref": "#/$defs/Actor"
+                },
+                "at": {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+                  "title": "At",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "block",
+                "pipeline",
+                "pipeline_version",
+                "actor",
+                "at"
+              ],
+              "title": "NormalizationRecord",
+              "type": "object"
+            },
+            "Producer": {
+              "additionalProperties": false,
+              "description": "What produced a derived block, at the granularity a batch invalidation needs.\n\nAttributes:\n    kind (ProducerKind): Model, pipeline, ingestion batch, or actor.\n    id (str): Identifier, such as a model name or an ingestion id.\n    version (str | None): Version of the producer, so a drop can name one\n        version of a model without touching the others.",
+              "properties": {
+                "kind": {
+                  "$ref": "#/$defs/ProducerKind"
+                },
+                "id": {
+                  "minLength": 1,
+                  "title": "Id",
+                  "type": "string"
+                },
+                "version": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Version"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "title": "Producer",
+              "type": "object"
+            },
+            "ProducerKind": {
+              "description": "What produced a derived block.\n\nBecause provenance records the producer of each derived block, a drop may be\nstated over a whole set: everything produced by a given ingestion, or\neverything derived by a given model version (paper Section 10.3).",
+              "enum": [
+                "model",
+                "pipeline",
+                "batch",
+                "actor"
+              ],
+              "title": "ProducerKind",
+              "type": "string"
+            },
+            "RegistrationRecord": {
+              "additionalProperties": false,
+              "description": "A canonical source was incorporated.\n\nAttributes:\n    record_type (Literal[\"registration\"]): Discriminator.\n    block (BlockId): The canonical block that was registered.\n    actor (Actor): Who incorporated it.\n    at (Timestamp): When it was incorporated.\n    origin (str | None): Where it came from, such as a URL or a file path.\n    license (str | None): License the source is held under.\n    retention_policy (str | None): Named retention policy that governs it.",
+              "properties": {
+                "record_type": {
+                  "const": "registration",
+                  "default": "registration",
+                  "title": "Record Type",
+                  "type": "string"
+                },
+                "block": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Block",
+                  "type": "string"
+                },
+                "actor": {
+                  "$ref": "#/$defs/Actor"
+                },
+                "at": {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+                  "title": "At",
+                  "type": "string"
+                },
+                "origin": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Origin"
+                },
+                "license": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "License"
+                },
+                "retention_policy": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Retention Policy"
+                }
+              },
+              "required": [
+                "block",
+                "actor",
+                "at"
+              ],
+              "title": "RegistrationRecord",
+              "type": "object"
+            },
+            "RemovalMechanism": {
+              "description": "How knowledge left a brain (paper Section 10, Table 5).\n\n``DROP`` excludes a block from a module's composition and is the ordinary path.\n``SUPERSEDE`` and ``DEMOTE`` change accessibility, not membership. ``PRUNE``\nreclaims bytes no retained root needs. The remaining three are redaction: they\ndestroy bytes that a retained root still names, and are reserved for law or\nsafety policy.",
+              "enum": [
+                "drop",
+                "supersede",
+                "demote",
+                "prune",
+                "tombstone",
+                "crypto_shred",
+                "lineage_rewrite"
+              ],
+              "title": "RemovalMechanism",
+              "type": "string"
+            },
+            "RemovalRecord": {
+              "additionalProperties": false,
+              "description": "Knowledge left the brain, and by which mechanism.\n\nAttributes:\n    record_type (Literal[\"removal\"]): Discriminator.\n    blocks (list[BlockId]): What was removed.\n    mechanism (RemovalMechanism): How it was removed.\n    memory_type (MemoryType): Which module it was removed from.\n    actor (Actor): Who removed it.\n    at (Timestamp): When it was removed.\n    reason (str): Why. Required: an unexplained removal is not auditable.\n    policy (str | None): Named policy that authorized the removal.\n    cascaded_from (BlockId | None): The block whose removal forced this one,\n        when this record is part of a provenance cascade.\n    resulting_roots (dict[str, MerkleRoot] | None): New Merkle root of each\n        module the removal rewrote, keyed by memory type. A single logical\n        removal of evidence can publish several new module versions at once.",
+              "properties": {
+                "record_type": {
+                  "const": "removal",
+                  "default": "removal",
+                  "title": "Record Type",
+                  "type": "string"
+                },
+                "blocks": {
+                  "items": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "title": "Blocks",
+                  "type": "array"
+                },
+                "mechanism": {
+                  "$ref": "#/$defs/RemovalMechanism"
+                },
+                "memory_type": {
+                  "$ref": "#/$defs/MemoryType"
+                },
+                "actor": {
+                  "$ref": "#/$defs/Actor"
+                },
+                "at": {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+                  "title": "At",
+                  "type": "string"
+                },
+                "reason": {
+                  "minLength": 1,
+                  "title": "Reason",
+                  "type": "string"
+                },
+                "policy": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Policy"
+                },
+                "cascaded_from": {
+                  "anyOf": [
+                    {
+                      "pattern": "^sha256:[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Cascaded From"
+                },
+                "resulting_roots": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": {
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Resulting Roots"
+                }
+              },
+              "required": [
+                "blocks",
+                "mechanism",
+                "memory_type",
+                "actor",
+                "at",
+                "reason"
+              ],
+              "title": "RemovalRecord",
+              "type": "object"
+            },
+            "SupersessionRecord": {
+              "additionalProperties": false,
+              "description": "A block takes precedence over an earlier one.\n\n``replace`` is register plus a supersession edge, with an optional drop of the\nold evidence -- not a mutation of bytes already stored (paper Section 8.1).\n\nAttributes:\n    record_type (Literal[\"supersession\"]): Discriminator.\n    block (BlockId): The block that now takes precedence.\n    supersedes (BlockId): The block it replaces.\n    actor (Actor): Who declared the supersession.\n    at (Timestamp): When it was declared.\n    reason (str | None): Why the earlier block was superseded.",
+              "properties": {
+                "record_type": {
+                  "const": "supersession",
+                  "default": "supersession",
+                  "title": "Record Type",
+                  "type": "string"
+                },
+                "block": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Block",
+                  "type": "string"
+                },
+                "supersedes": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Supersedes",
+                  "type": "string"
+                },
+                "actor": {
+                  "$ref": "#/$defs/Actor"
+                },
+                "at": {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+                  "title": "At",
+                  "type": "string"
+                },
+                "reason": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Reason"
+                }
+              },
+              "required": [
+                "block",
+                "supersedes",
+                "actor",
+                "at"
+              ],
+              "title": "SupersessionRecord",
+              "type": "object"
+            },
+            "ValidationRecord": {
+              "additionalProperties": false,
+              "description": "A committed block received its verdict, and under which checks.\n\nWithout this, \"it was validated\" is a claim a consumer takes from whoever committed. With it, the\nclaim sits inside the signed composition and can be read back: which verdict, which checks produced\nit, and which task the proposal answered (paper Section 10.3).\n\nAttributes:\n    record_type (Literal[\"validation\"]): Discriminator.\n    block (BlockId): The block the verdict admitted.\n    verdict (ValidationStatus): What the gate decided. Only ``VALIDATED`` blocks are committed,\n        so that is what a record accompanying a member says -- but the field is the full enum\n        because recording the verdicts of candidates that were never committed is permitted.\n    checks (list[str]): Identifiers of the checks that ran, sorted. The set that ran is what makes\n        a verdict meaningful: the same ``VALIDATED`` under two different check sets is two\n        different claims.\n    actor (Actor): Who ran the gate.\n    at (Timestamp): When it ran.\n    task (str | None): The processing task the proposal answered.",
+              "properties": {
+                "record_type": {
+                  "const": "validation",
+                  "default": "validation",
+                  "title": "Record Type",
+                  "type": "string"
+                },
+                "block": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Block",
+                  "type": "string"
+                },
+                "verdict": {
+                  "$ref": "#/$defs/ValidationStatus"
+                },
+                "checks": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "title": "Checks",
+                  "type": "array"
+                },
+                "actor": {
+                  "$ref": "#/$defs/Actor"
+                },
+                "at": {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+                  "title": "At",
+                  "type": "string"
+                },
+                "task": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Task"
+                }
+              },
+              "required": [
+                "block",
+                "verdict",
+                "checks",
+                "actor",
+                "at"
+              ],
+              "title": "ValidationRecord",
+              "type": "object"
+            },
+            "ValidationStatus": {
+              "description": "The verdict on one candidate (paper Section 10.3).\n\nDefined here rather than beside the gate that produces it, because a verdict is not a write-path\nephemeral: it travels in a provenance record, so it is part of the wire schema. The gate re-exports\nit, and :mod:`boltzmann.ingest.validation` remains the place to import it from.",
+              "enum": [
+                "validated",
+                "pending_review",
+                "rejected",
+                "contradicted"
+              ],
+              "title": "ValidationStatus",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "description": "A single, immutable entry in the provenance ledger.\n\nAttributes:\n    record (ProvenanceEntry): The recorded event.",
+          "properties": {
+            "record": {
+              "discriminator": {
+                "mapping": {
+                  "demotion": "#/$defs/DemotionRecord",
+                  "derivation": "#/$defs/DerivationRecord",
+                  "normalization": "#/$defs/NormalizationRecord",
+                  "registration": "#/$defs/RegistrationRecord",
+                  "removal": "#/$defs/RemovalRecord",
+                  "supersession": "#/$defs/SupersessionRecord",
+                  "validation": "#/$defs/ValidationRecord"
+                },
+                "propertyName": "record_type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/RegistrationRecord"
+                },
+                {
+                  "$ref": "#/$defs/DerivationRecord"
+                },
+                {
+                  "$ref": "#/$defs/NormalizationRecord"
+                },
+                {
+                  "$ref": "#/$defs/SupersessionRecord"
+                },
+                {
+                  "$ref": "#/$defs/DemotionRecord"
+                },
+                {
+                  "$ref": "#/$defs/ValidationRecord"
+                },
+                {
+                  "$ref": "#/$defs/RemovalRecord"
+                }
+              ],
+              "title": "Record"
+            }
+          },
+          "required": [
+            "record"
+          ],
+          "title": "ProvenanceBlock",
+          "type": "object"
+        }
+      }
+    ]
+  }
+}

@@ -56,14 +56,15 @@ from boltzmann.distribution.media_types import (
     EMPTY_CONFIG_MEDIA_TYPE,
     HISTORY_MEDIA_TYPE,
     MANIFEST_MEDIA_TYPE,
+    PROJECTION_MEDIA_TYPE,
     REF_NAME_ANNOTATION,
     SIGNATURE_MEDIA_TYPE,
     VECTOR_INDEX_MEDIA_TYPE,
     module_media_type,
 )
-from boltzmann.exceptions import BlockNotFoundError, DistributionError, IdentityError
+from boltzmann.exceptions import BlockNotFoundError, DistributionError, IdentityError, SerializationError
 from boltzmann.identity.digest import MerkleRoot, OciDigest
-from boltzmann.identity.serialization import canonicalize
+from boltzmann.identity.serialization import canonicalize, parse_json_strict
 from boltzmann.module.snapshot import ModuleRef, Snapshot
 from boltzmann.store.base import BlockStore
 
@@ -181,7 +182,7 @@ class BrainManifest(BaseModel):
         schema_version (int): OCI's manifest schema version, which the spec fixes at 2.
         media_type (str): This document's own media type, ``application/vnd.oci.image.manifest.v1+json``.
         artifact_type (str): Identifies this as a Boltzmann brain.
-        config (Descriptor): Points at the snapshot document.
+        config (Descriptor): Points at the snapshot or projection document.
         layers (list[Descriptor]): One per installed module, plus any vector index layers.
         annotations (dict[str, str]): Manifest-level annotations.
     """
@@ -301,6 +302,8 @@ def build_manifest(
     config: Descriptor,
     layers: list[Descriptor],
     annotations: dict[str, str] | None = None,
+    *,
+    published: Iterable[ModuleRef] | None = None,
 ) -> BrainManifest:
     """
     Assemble a manifest for a snapshot.
@@ -308,21 +311,24 @@ def build_manifest(
     Args:
         snapshot (Snapshot): The state being published. Its modules must all have a layer, or the
             artifact would name a root nobody can fetch.
-        config (Descriptor): Descriptor of the snapshot document, which is the config blob.
+        config (Descriptor): Descriptor of the snapshot or projection config document.
         layers (list[Descriptor]): The module layers, already pushed.
         annotations (dict[str, str] | None): Extra manifest-level annotations.
+        published (Iterable[ModuleRef] | None): Module references the config exposes. Defaults
+            to all modules of ``snapshot``; a projection passes its retained references.
 
     Returns:
         BrainManifest: The manifest to push.
 
     Raises:
-        DistributionError: If the config media type is wrong, or a module named by the snapshot has
-            no layer.
+        DistributionError: If the config media type is wrong, or a published module has no layer.
     """
-    if config.media_type != CONFIG_MEDIA_TYPE:
+    config_media_types = {CONFIG_MEDIA_TYPE, PROJECTION_MEDIA_TYPE}
+    if config.media_type not in config_media_types:
+        allowed = ", ".join(sorted(config_media_types))
         raise DistributionError(
-            f"config blob must be {CONFIG_MEDIA_TYPE!r}, got {config.media_type!r}: the config of a "
-            f"brain artifact is its snapshot document"
+            f"config blob must be one of {allowed}, got {config.media_type!r}: the config of a "
+            f"brain artifact is a snapshot or projection document"
         )
 
     manifest = BrainManifest(
@@ -346,10 +352,13 @@ def build_manifest(
         },
     )
 
-    missing = [kind.value for kind in snapshot.installed if manifest.layer_for(kind) is None]
+    references = list(published) if published is not None else list(snapshot.modules.values())
+    missing = [
+        reference.memory_type.value for reference in references if manifest.layer_for(reference.memory_type) is None
+    ]
     if missing:
         raise DistributionError(
-            f"the snapshot names roots for {', '.join(missing)} but the artifact carries no layer for "
+            f"the config names roots for {', '.join(missing)} but the artifact carries no layer for "
             f"them, so a consumer could not fetch what the manifest claims"
         )
     return manifest
@@ -652,9 +661,9 @@ def parse_signature_manifest(data: bytes) -> SignatureManifest:
         DistributionError: If the document is not a Boltzmann signature manifest.
     """
     try:
-        document: Any = json.loads(data)
-    except json.JSONDecodeError as error:
-        raise DistributionError(f"signature manifest is not valid JSON: {error}") from error
+        document: Any = parse_json_strict(data)
+    except SerializationError as error:
+        raise DistributionError(f"signature manifest {error}") from error
     if not isinstance(document, dict):
         raise DistributionError(f"signature manifest must be an object, got {type(document).__name__}")
     declared = document.get("artifactType")
@@ -683,9 +692,9 @@ def parse_manifest(data: bytes) -> BrainManifest:
             version, or declares a protocol version this client does not implement.
     """
     try:
-        document: Any = json.loads(data)
-    except json.JSONDecodeError as error:
-        raise DistributionError(f"manifest is not valid JSON: {error}") from error
+        document: Any = parse_json_strict(data)
+    except SerializationError as error:
+        raise DistributionError(f"manifest {error}") from error
 
     if not isinstance(document, dict):
         raise DistributionError(f"manifest must be an object, got {type(document).__name__}")

@@ -8,6 +8,7 @@ from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.semantic import SemanticBlock, SemanticKind
 from boltzmann.exceptions import (
     AppendOnlyViolationError,
+    BlockTombstonedError,
     MembershipError,
     MemoryTypeError,
     ModuleError,
@@ -122,6 +123,22 @@ class TestModule:
         assert module.resolvable()[blocks[0].block_id] is False
         assert module.inclusion_proof(blocks[0].block_id).verify(module.root)
 
+    def test_a_signed_tombstone_hides_bytes_even_when_the_store_still_has_them(
+        self, store: MemoryBlockStore, blocks: list[SemanticBlock]
+    ) -> None:
+        target = blocks[0].block_id
+        module = Module(
+            MemoryType.SEMANTIC,
+            store,
+            Composition(MemoryType.SEMANTIC, [target]),
+            tombstones=[target],
+        )
+
+        assert store.is_resolvable(target)
+        assert module.resolvable()[target] is False
+        with pytest.raises(BlockTombstonedError):
+            module.get(target)
+
     def test_deriving_shares_the_store(self, store: MemoryBlockStore, blocks: list[SemanticBlock]) -> None:
         module = Module(MemoryType.SEMANTIC, store, Composition(MemoryType.SEMANTIC, [b.block_id for b in blocks]))
         reduced = module.without_blocks([blocks[0].block_id])
@@ -151,6 +168,49 @@ class TestModule:
     def test_an_empty_composition_document_round_trips(self) -> None:
         composition = Composition(MemoryType.PROCEDURAL)
         assert Composition.from_document(composition.document()) == composition
+
+    @pytest.mark.parametrize("mutation", [lambda values: list(reversed(values)), lambda values: [*values, values[0]]])
+    def test_a_received_composition_requires_strict_canonical_leaf_order(self, mutation) -> None:
+        import json
+
+        composition = Composition(MemoryType.SEMANTIC, [BlockId.of(b"a"), BlockId.of(b"b")])
+        document = json.loads(composition.document())
+        document["block_ids"] = mutation(document["block_ids"])
+
+        with pytest.raises(ModuleError, match="strictly ascending"):
+            Composition.from_document(json.dumps(document, separators=(",", ":")).encode())
+
+    def test_a_composition_must_arrive_in_canonical_form(self) -> None:
+        """A composition is addressed by the digest of these bytes, and the root cannot tell them apart.
+
+        The root commits to the *set*, so a pretty-printed document and a compact one produce the
+        same root under two different OCI digests -- and a snapshot names the digest. Accepting both
+        spellings would let one logical version be shipped under two identities.
+        """
+        import json
+
+        composition = Composition(MemoryType.SEMANTIC, [BlockId.of(b"a"), BlockId.of(b"b")])
+        pretty = json.dumps(json.loads(composition.document()), indent=2).encode()
+
+        assert Composition.from_document(composition.document()) == composition
+        with pytest.raises(ModuleError, match="not in canonical"):
+            Composition.from_document(pretty)
+
+    def test_a_composition_rejects_an_unknown_member(self) -> None:
+        """Extra keys survive a reserialize as a different byte string, so they are refused there."""
+        import json
+
+        document = json.loads(Composition(MemoryType.SEMANTIC).document())
+        document["annotations"] = {"whatever": "1"}
+
+        with pytest.raises(ModuleError, match="not in canonical"):
+            Composition.from_document(json.dumps(document, separators=(",", ":")).encode())
+
+    def test_a_composition_rejects_duplicate_json_keys(self) -> None:
+        document = Composition(MemoryType.SEMANTIC).document()
+        duplicated = document.replace(b'"boltzmann":1', b'"boltzmann":1,"boltzmann":1')
+        with pytest.raises(ModuleError, match="duplicate JSON key"):
+            Composition.from_document(duplicated)
 
     @pytest.mark.parametrize(
         ("mutation", "match"),
@@ -247,6 +307,66 @@ class TestSnapshot:
                 composition=OciDigest.of(b"leaves"),
                 block_count=1,
             )
+
+    def test_a_bound_index_names_the_model_that_produced_it(self) -> None:
+        with pytest.raises(ValidationError, match="must also name its embedding_model"):
+            ModuleRef(
+                memory_type=MemoryType.SEMANTIC,
+                root=MerkleRoot.of(b"semantic"),
+                composition=OciDigest.of(b"semantic leaves"),
+                block_count=1,
+                index_digest=OciDigest.of(b"vectors"),
+            )
+
+    def test_a_legacy_unbound_embedding_model_remains_readable(self) -> None:
+        reference = ModuleRef(
+            memory_type=MemoryType.SEMANTIC,
+            root=MerkleRoot.of(b"semantic"),
+            composition=OciDigest.of(b"semantic leaves"),
+            block_count=1,
+            embedding_model="qwen3-embedding@1.0",
+        )
+        assert reference.index_digest is None
+
+    def test_tombstones_are_canonical_block_identities(self) -> None:
+        later = BlockId.of(b"later")
+        earlier = BlockId.of(b"earlier")
+        reference = ModuleRef(
+            memory_type=MemoryType.SEMANTIC,
+            root=MerkleRoot.of(b"semantic"),
+            composition=OciDigest.of(b"semantic leaves"),
+            block_count=2,
+            tombstones=[later, earlier, later],
+        )
+        assert reference.tombstones == sorted({later, earlier}, key=lambda value: value.raw)
+
+    def test_an_empty_tombstone_set_keeps_legacy_snapshot_bytes(self) -> None:
+        snapshot = self.build(MemoryType.SEMANTIC)
+        assert b"tombstones" not in snapshot.canonical_bytes()
+
+    def test_a_module_with_nothing_destroyed_omits_the_member(self) -> None:
+        """An empty list and an absent member are different documents with different digests.
+
+        The paper's snapshot lists tombstones for a module whose composition "still names destroyed
+        bytes", so a module with none omits the member. An implementation that emitted an empty list
+        would compute a different snapshot digest from one that did not, for identical brain state --
+        which is exactly the silent divergence canonical serialization exists to prevent.
+        """
+        store = MemoryBlockStore()
+        reference = Module(MemoryType.SEMANTIC, store).persist()
+        snapshot = Snapshot.of([reference])
+
+        assert reference.tombstones is None
+        assert b"tombstones" not in snapshot.canonical_bytes()
+
+    def test_a_module_with_a_tombstone_carries_it(self) -> None:
+        store = MemoryBlockStore()
+        destroyed = BlockId.of(b"destroyed")
+        module = Module(MemoryType.SEMANTIC, store, Composition(MemoryType.SEMANTIC, [destroyed]))
+        reference = module.with_tombstones([destroyed]).persist()
+
+        assert reference.tombstones == [destroyed]
+        assert b'"tombstones":' in Snapshot.of([reference]).canonical_bytes()
 
 
 class TestSnapshotTrustRoot:

@@ -15,15 +15,15 @@ what a module layer carries when the brain is published.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Iterator
+from itertools import pairwise
 from typing import Any
 
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.constants import PROTOCOL_VERSION
-from boltzmann.exceptions import AppendOnlyViolationError, ModuleError
+from boltzmann.exceptions import AppendOnlyViolationError, IdentityError, ModuleError, SerializationError
 from boltzmann.identity.digest import BlockId, MerkleRoot
-from boltzmann.identity.serialization import canonicalize
+from boltzmann.identity.serialization import canonicalize, parse_json_strict
 from boltzmann.merkle.diff import CompositionDiff, diff
 from boltzmann.merkle.proof import InclusionProof
 from boltzmann.merkle.tree import MerkleTree, sorted_leaves
@@ -218,13 +218,14 @@ class Composition:
             Composition: The composition it describes.
 
         Raises:
-            ModuleError: If the document is malformed, names an unknown memory type, or was
-                produced by a Merkle layout this client does not implement.
+            ModuleError: If the document is malformed, names an unknown memory type, is not the
+                canonical representation of the composition it decodes to, or was produced by a
+                Merkle layout this client does not implement.
         """
         try:
-            document: Any = json.loads(data)
-        except json.JSONDecodeError as error:
-            raise ModuleError(f"composition document is not valid JSON: {error}") from error
+            document: Any = parse_json_strict(data)
+        except SerializationError as error:
+            raise ModuleError(f"composition document {error}") from error
 
         if not isinstance(document, dict):
             raise ModuleError(f"composition document must be an object, got {type(document).__name__}")
@@ -240,7 +241,17 @@ class Composition:
         except (KeyError, ValueError) as error:
             raise ModuleError(f"composition document names an unknown memory type: {error}") from error
 
-        composition = cls(memory_type, (BlockId.parse(value) for value in document.get("block_ids", [])))
+        values = document.get("block_ids", [])
+        if not isinstance(values, list):
+            raise ModuleError(f"composition block_ids must be a list, got {type(values).__name__}")
+        try:
+            block_ids = [BlockId.parse(value) for value in values]
+        except IdentityError as error:
+            raise ModuleError(f"composition carries a malformed block id: {error}") from error
+        if any(left.raw >= right.raw for left, right in pairwise(block_ids)):
+            raise ModuleError("composition block_ids must be strictly ascending without duplicates")
+
+        composition = cls(memory_type, block_ids)
 
         layout = document.get("layout")
         if layout != composition.layout:
@@ -248,4 +259,11 @@ class Composition:
                 f"composition was built with Merkle layout {layout!r}, this client implements "
                 f"{composition.layout!r}: the roots would not be comparable"
             )
+        # Last, because it subsumes every check above and says nothing useful about which one a
+        # caller tripped. The root commits to the *set*, so two documents differing in whitespace,
+        # key order, or an unknown member produce the same root under different OCI digests -- and a
+        # composition is addressed by that digest in the snapshot that names it. Accepting a
+        # non-canonical spelling would let one logical version be shipped under two identities.
+        if composition.document() != data:
+            raise ModuleError("composition document is not in canonical jcs/1 form")
         return composition

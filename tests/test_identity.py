@@ -8,7 +8,7 @@ from hypothesis import strategies as st
 
 from boltzmann.exceptions import DigestFormatError, DigestKindError, NonDeterministicValueError, SerializationError
 from boltzmann.identity.digest import BlockId, Digest, MerkleRoot, OciDigest
-from boltzmann.identity.serialization import MAX_SAFE_INTEGER, canonicalize, get_serializer
+from boltzmann.identity.serialization import MAX_SAFE_INTEGER, canonicalize, get_serializer, parse_json_strict
 from boltzmann.identity.time import parse_timestamp, utc_timestamp
 
 # JSON-shaped values that the protocol accepts inside a payload: no floats, no unsafe integers.
@@ -66,6 +66,13 @@ class TestSerialization:
     def test_unknown_serialization_is_refused(self) -> None:
         with pytest.raises(SerializationError, match="unknown serialization"):
             get_serializer("dag-cbor/1")
+
+    def test_a_valid_utf16_surrogate_pair_decodes_to_its_non_bmp_character(self) -> None:
+        assert parse_json_strict(r'{"value":"\ud83d\ude00"}') == {"value": "😀"}
+
+    def test_keys_that_collide_after_unicode_decoding_are_duplicates(self) -> None:
+        with pytest.raises(SerializationError, match="duplicate JSON key"):
+            parse_json_strict(r'{"😀":1,"\ud83d\ude00":2}')
 
 
 class TestDigestLevels:
