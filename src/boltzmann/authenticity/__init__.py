@@ -13,6 +13,7 @@ computes every fingerprint, and rejects a record whose fingerprint and embedded 
 """
 
 from boltzmann.authenticity.agent import SshAgentClient
+from boltzmann.authenticity.attribution import AttributionReport, check_attribution
 from boltzmann.authenticity.backend import signature_backend_available
 from boltzmann.authenticity.governance import RotationPlan, RotationResult
 from boltzmann.authenticity.keys import (
@@ -101,6 +102,7 @@ __all__ = [
     "ARMOR_WRAP",
     "AgentSigner",
     "AuthenticationReport",
+    "AttributionReport",
     "Authenticator",
     "AuthorshipState",
     "DEFAULT_HASH_ALGORITHM",
@@ -159,6 +161,7 @@ __all__ = [
     "required_scopes",
     "rfc4253_signature",
     "sign",
+    "check_attribution",
     "signature_backend_available",
     "signed_data",
     "store_record",

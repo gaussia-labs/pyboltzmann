@@ -19,6 +19,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from boltzmann.authenticity.attribution import AttributionReport, check_attribution
 from boltzmann.authenticity.backend import signature_backend_available
 from boltzmann.authenticity.chain import (
     Position,
@@ -150,6 +151,10 @@ class FindingKind(StrEnum):
     GENESIS_BELOW_QUORUM = "genesis_below_quorum"
     QUORUM_MARGIN = "quorum_margin"
     EVIDENCE_INCOMPLETE = "evidence_incomplete"
+    ATTRIBUTION_UNVERIFIED = "attribution_unverified"
+    """Actors a snapshot introduces that no signing key vouches for. Never blocking: every merge
+    carries records whose authors did not sign the snapshot that brings them in."""
+
     REMOVAL_INVARIANT = "removal_invariant"
     REMOVAL_UNDECIDABLE = "removal_undecidable"
     UNVERIFIABLE = "unverifiable"
@@ -263,6 +268,10 @@ class AuthenticationReport(BaseModel):
         stance (SnapshotStance): How the snapshot was presented. Recorded because it is what decides
             whether an unlisted key reads as attributable or as unauthorized, and a report that did
             not say which question it answered would be unreadable a second time.
+        attribution (AttributionReport | None): Which of the actors this snapshot introduces its
+            signatures stand behind. Reported and never enforced: a merge legitimately carries
+            records whose authors never signed the snapshot bringing them in, so refusing would
+            refuse reconciliation itself.
         integrity (bool | None): The *other* verification, carried alongside and never combined.
     """
 
@@ -283,6 +292,7 @@ class AuthenticationReport(BaseModel):
     findings: tuple[Finding, ...] = ()
     signatures_required: int = Field(default=1, ge=1)
     stance: SnapshotStance = SnapshotStance.HEAD
+    attribution: AttributionReport | None = None
     integrity: bool | None = None
 
     @property
@@ -1202,6 +1212,32 @@ class Authenticator:
         stance: SnapshotStance = SnapshotStance.HEAD,
     ) -> AuthenticationReport:
         in_force: TrustRoot | None = position.in_force
+        findings = list(findings)
+        attribution = check_attribution(
+            self.store,
+            snapshot,
+            # Only a signature that actually verified may vouch for a name. A retired, compromised
+            # or under-scoped key still identifies its holder, but letting one stand behind an
+            # actor would make attribution the one place a rejected signature still counted.
+            [
+                verdict.subject
+                for verdict in verdicts
+                if verdict.subject is not None
+                and verdict.outcome in {SignatureOutcome.VALID, SignatureOutcome.VALID_AS_PROPOSAL}
+            ],
+            position.parent,
+        )
+        if not attribution.is_fully_vouched:
+            findings.append(
+                Finding(
+                    kind=FindingKind.ATTRIBUTION_UNVERIFIED,
+                    detail=(
+                        f"snapshot {position.digest.short} names actors its signatures do not stand "
+                        f"behind: {attribution.detail}"
+                    ),
+                    blocking=False,
+                )
+            )
         return AuthenticationReport(
             snapshot=position.digest,
             role=position.role,
@@ -1218,4 +1254,5 @@ class Authenticator:
             findings=tuple(findings),
             signatures_required=self.policy.required_signatures,
             stance=stance,
+            attribution=attribution,
         )
