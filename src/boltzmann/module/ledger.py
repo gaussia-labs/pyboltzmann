@@ -19,10 +19,16 @@ from dataclasses import dataclass, field
 
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import (
+    ActorKind,
+    Attributed,
+    Collaborator,
     DemotionRecord,
     DerivationRecord,
+    DerivationRecordV2,
     Producer,
+    ProducerKind,
     ProvenanceBlock,
+    ProvenanceBlockV2,
     RemovalRecord,
     SupersessionRecord,
     ValidationRecord,
@@ -53,6 +59,9 @@ class Ledger:
             over everything one model version made.
         derivation_records (dict[BlockId, BlockId]): The provenance block that records each derivation,
             so a cascade can report which edges it touches.
+        assistance (dict[BlockId, list[Collaborator]]): Who took part in producing each block, at
+            schema version 2. The reverse of ``producers`` for records that carry no producer, and
+            richer: it names the harness beside the model, and a second person beside both.
         removed (set[BlockId]): Blocks a recorded removal already excluded.
         validations (dict[BlockId, ValidationRecord]): The verdict that admitted each block, so
             "it was validated" is answerable from the signed composition rather than from whoever
@@ -69,6 +78,7 @@ class Ledger:
     dependents: dict[BlockId, set[BlockId]] = field(default_factory=dict)
     producers: dict[BlockId, Producer] = field(default_factory=dict)
     derivation_records: dict[BlockId, BlockId] = field(default_factory=dict)
+    assistance: dict[BlockId, list[Collaborator]] = field(default_factory=dict)
     removed: set[BlockId] = field(default_factory=set)
     validations: dict[BlockId, ValidationRecord] = field(default_factory=dict)
 
@@ -94,18 +104,22 @@ class Ledger:
             if not provenance.store.is_resolvable(block_id):
                 continue
             entry = provenance.get(block_id)
-            if isinstance(entry, ProvenanceBlock):
+            if isinstance(entry, ProvenanceBlock | ProvenanceBlockV2):
                 ledger._absorb(entry, block_id)
         return ledger
 
-    def _absorb(self, entry: ProvenanceBlock, entry_id: BlockId) -> None:
+    def _absorb(self, entry: ProvenanceBlock | ProvenanceBlockV2, entry_id: BlockId) -> None:
         record = entry.record
 
-        if isinstance(record, DerivationRecord):
+        if isinstance(record, Attributed) and record.assisted_by:
+            self.assistance[getattr(record, "block", entry_id)] = list(record.assisted_by)
+
+        if isinstance(record, DerivationRecord | DerivationRecordV2):
             if record.locator is not None:
                 self.locators[record.block] = record.locator
             self.evidence[record.block] = list(record.derived_from)
-            self.producers[record.block] = record.producer
+            if isinstance(record, DerivationRecord):
+                self.producers[record.block] = record.producer
             self.derivation_records[record.block] = entry_id
             for cited in record.derived_from:
                 self.dependents.setdefault(cited, set()).add(record.block)
@@ -198,10 +212,21 @@ class Ledger:
 
     def made_by(self, producer: Producer) -> set[BlockId]:
         """
-        Every derived block a producer made.
+        Every block a producer made, across both record shapes.
 
-        A producer with no version matches any version of the same identity, so "everything that model
-        ever derived" and "everything version 2026-07 derived" are both expressible.
+        One query, two places to look, because a brain holds records from both schema versions at
+        once and a batch invalidation that read only one of them would silently miss blocks --
+        which is a worse failure than reaching further than strictly necessary.
+
+        At version 1 the match is what it always was: kind, identity, and version, where a producer
+        naming no version matches every version of the same identity. At version 2 there is no
+        producer and no version to match on, so the comparison is by identity alone against the
+        assisting parties -- their ``model`` for a model, their own identifier otherwise. A version
+        given in the query therefore narrows version-1 records and cannot narrow version-2 ones,
+        which is the granularity the protocol trades away for an identifier nobody has to invent.
+
+        A person is never matched as a model. A human collaborator carries no ``model`` at all, so
+        asking for one cannot reach their work.
 
         Args:
             producer (Producer): Whose output to find.
@@ -209,13 +234,26 @@ class Ledger:
         Returns:
             set[BlockId]: The blocks it produced.
         """
-        return {
+        found = {
             block_id
             for block_id, recorded in self.producers.items()
             if recorded.kind is producer.kind
             and recorded.id == producer.id
             and (producer.version is None or recorded.version == producer.version)
         }
+        for block_id, parties in self.assistance.items():
+            if any(self._answers_to(party, producer) for party in parties):
+                found.add(block_id)
+        return found
+
+    @staticmethod
+    def _answers_to(party: Collaborator, producer: Producer) -> bool:
+        """Whether an assisting party is what a producer query is asking for."""
+        if producer.kind is ProducerKind.MODEL:
+            return party.model == producer.id
+        if producer.kind is ProducerKind.ACTOR:
+            return party.kind is ActorKind.HUMAN and party.id == producer.id
+        return party.kind is not ActorKind.HUMAN and party.id == producer.id
 
     def is_accessible(self, block_id: BlockId) -> bool:
         """

@@ -22,6 +22,7 @@ SDK_ROOT = Path(__file__).resolve().parent.parent.parent
 
 VECTORS = (
     "block_ids.json",
+    "actor_ids.json",
     "schema_selection.json",
     "inclusion_proofs.json",
     "merkle_roots.json",

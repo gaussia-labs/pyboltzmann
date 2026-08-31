@@ -1,0 +1,188 @@
+{
+  "boltzmann": 1,
+  "serialization": "jcs/1",
+  "hash": "sha256",
+  "description": "Actor identifiers, and the ones that MUST be refused. An identifier takes one of exactly two forms -- an address 'local@domain', or a namespaced name 'namespace/name' -- is lowercase ASCII, and is rejected rather than normalized when it is not. Provenance records are blocks, so an identifier that two implementations spell differently is two block_ids for one fact: the silent divergence canonical serialization exists to prevent, re-entering through a field nobody canonicalized. Every rejection names its reason, because a refusal a caller cannot act on is a refusal they will work around.",
+  "grammar": {
+    "address": "local '@' domain. local is 1..64 of [a-z0-9._%+-], does not begin or end with '.', and carries no consecutive dots. domain is 1..255, two or more labels separated by '.', each label 1..63 of [a-z0-9-] beginning and ending with [a-z0-9].",
+    "namespaced": "namespace '/' name. Exactly one '/'. Each segment is 1..128 of [a-z0-9._-] and begins and ends with [a-z0-9].",
+    "common": "Lowercase ASCII only, no whitespace, no control characters, at most 320 characters in total. A value carrying both '@' and '/' is ambiguous and MUST be refused."
+  },
+  "vectors": [
+    {
+      "name": "address_form",
+      "id": "alex@alquimia.ai",
+      "form": "address",
+      "accepted": true,
+      "note": "A person by an address they already hold. The form most identifiers take, and the reason no scheme prefix is stored: this is what people already write, correctly, without being asked twice."
+    },
+    {
+      "name": "address_form_minimal",
+      "id": "a@b.co",
+      "form": "address",
+      "accepted": true,
+      "note": "The shortest thing the address form accepts. Present so that an implementation tightening a length bound has something to fail against."
+    },
+    {
+      "name": "namespaced_person",
+      "id": "github.com/alexfiorenza",
+      "form": "namespaced",
+      "accepted": true,
+      "note": "A person known only by a handle. The protocol must not require an address here: a contributor who has one to give is not the only kind of contributor an open brain hears from."
+    },
+    {
+      "name": "namespaced_runtime",
+      "id": "anthropic/claude-code",
+      "form": "namespaced",
+      "accepted": true,
+      "note": "A runtime. The namespace carries the party that made it, which is why no separate organization member exists anywhere in a record."
+    },
+    {
+      "name": "namespaced_model",
+      "id": "anthropic/fable-5",
+      "form": "namespaced",
+      "accepted": true,
+      "note": "A model. Indistinguishable in form from a runtime on purpose: what a party is, is recorded beside the identifier, never encoded into it."
+    },
+    {
+      "name": "namespaced_with_dots_in_the_name",
+      "id": "openai/gpt-5.6-sol",
+      "form": "namespaced",
+      "accepted": true,
+      "note": "A dot inside a name segment is ordinary. Model names carry them, and a grammar that refused would push implementations into inventing a spelling."
+    },
+    {
+      "name": "namespaced_pipeline",
+      "id": "gaussia/nightly-ingest",
+      "form": "namespaced",
+      "accepted": true,
+      "note": "A deterministic pipeline. Nothing about the form says it is software rather than a person; the kind beside it does."
+    },
+    {
+      "name": "bare_word",
+      "id": "curator",
+      "accepted": false,
+      "reason": "neither an address nor a namespaced name",
+      "note": "The value this rule exists to refuse. A role noun means nothing off the machine that wrote it, so two brains cannot agree that two records name the same party, and provenance records are blocks: the disagreement is silent and permanent."
+    },
+    {
+      "name": "bare_name",
+      "id": "sam",
+      "accepted": false,
+      "reason": "neither an address nor a namespaced name",
+      "note": "A first name is a bare word with a friendlier face. It resolves to nobody."
+    },
+    {
+      "name": "uppercase_local_part",
+      "id": "Alex@alquimia.ai",
+      "accepted": false,
+      "reason": "not lowercase",
+      "note": "Refused rather than lowered. Normalizing would mint a block_id the caller did not ask for, and an identifier the caller cannot predict is one they cannot search for either."
+    },
+    {
+      "name": "uppercase_domain",
+      "id": "alex@Alquimia.ai",
+      "accepted": false,
+      "reason": "not lowercase",
+      "note": "A domain is case-insensitive in the world and byte-sensitive here. Two spellings of one address are two block_ids for one fact."
+    },
+    {
+      "name": "uppercase_namespace",
+      "id": "Anthropic/claude-code",
+      "accepted": false,
+      "reason": "not lowercase",
+      "note": "The same rule, on the other form. One rule, applied to the whole value, is what keeps it checkable in five lines."
+    },
+    {
+      "name": "scheme_prefix",
+      "id": "mailto:alex@alquimia.ai",
+      "accepted": false,
+      "reason": "the local part carries a character the address form does not admit",
+      "note": "The URI wrapper is not stored. It is ceremony around a value already written correctly, and an implementation exporting to a format that wants URIs derives one at that boundary."
+    },
+    {
+      "name": "url",
+      "id": "https://github.com/alexfiorenza",
+      "accepted": false,
+      "reason": "more than one slash",
+      "note": "The reason a URL is not the stored form: a trailing slash, a default port and a percent-encoded octet are three normalization questions, and a canonical form must not leave any of them open."
+    },
+    {
+      "name": "empty_namespace",
+      "id": "/claude-code",
+      "accepted": false,
+      "reason": "an empty segment",
+      "note": "A namespace that names nobody namespaces nothing."
+    },
+    {
+      "name": "empty_name",
+      "id": "anthropic/",
+      "accepted": false,
+      "reason": "an empty segment",
+      "note": "The mirror case, which a naive split on the separator accepts."
+    },
+    {
+      "name": "nested_namespace",
+      "id": "anthropic/models/fable-5",
+      "accepted": false,
+      "reason": "more than one slash",
+      "note": "Exactly one separator, so that splitting is unambiguous without a longest-match rule that two implementations could read differently."
+    },
+    {
+      "name": "empty_domain",
+      "id": "alex@",
+      "accepted": false,
+      "reason": "an empty domain",
+      "note": "An address form with nothing to resolve against."
+    },
+    {
+      "name": "empty_local_part",
+      "id": "@alquimia.ai",
+      "accepted": false,
+      "reason": "an empty local part",
+      "note": "A domain is not a person."
+    },
+    {
+      "name": "single_label_domain",
+      "id": "alex@localhost",
+      "accepted": false,
+      "reason": "the domain has one label",
+      "note": "A domain with no dot is machine-local, which is the same failure as a bare word wearing an at-sign."
+    },
+    {
+      "name": "embedded_space",
+      "id": "alex f@alquimia.ai",
+      "accepted": false,
+      "reason": "whitespace",
+      "note": "Whitespace has no canonical treatment here, and a value that must be trimmed before comparison is a value two implementations will trim differently."
+    },
+    {
+      "name": "both_forms",
+      "id": "alex@alquimia.ai/notes",
+      "accepted": false,
+      "reason": "carries both separators",
+      "note": "Ambiguous by construction: an implementation that decided which form wins would be deciding for every other implementation too."
+    },
+    {
+      "name": "consecutive_dots",
+      "id": "alex..f@alquimia.ai",
+      "accepted": false,
+      "reason": "consecutive dots in the local part",
+      "note": "Admitted by a permissive dot-atom reading and refused here, because the spelling has no single canonical form in the wild."
+    },
+    {
+      "name": "leading_hyphen_segment",
+      "id": "anthropic/-claude-code",
+      "accepted": false,
+      "reason": "a segment does not begin with a letter or a digit",
+      "note": "A leading hyphen is how an option prefix sneaks into a name, and it reads as a flag to half the tools that will ever print it."
+    },
+    {
+      "name": "empty",
+      "id": "",
+      "accepted": false,
+      "reason": "empty",
+      "note": "Named so that an implementation checking min-length has a vector rather than an assumption."
+    }
+  ]
+}

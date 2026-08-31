@@ -1875,6 +1875,580 @@
           "title": "ProvenanceBlock",
           "type": "object"
         }
+      },
+      {
+        "schema_version": 2,
+        "title": "ProvenanceBlockV2",
+        "schema": {
+          "$defs": {
+            "Actor": {
+              "additionalProperties": false,
+              "description": "Who performed an operation.\n\nAttributes:\n    id (str): Stable identifier of the actor.\n    kind (ActorKind): What sort of agent it is.\n    name (str | None): Human-readable label.",
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "title": "Id",
+                  "type": "string"
+                },
+                "kind": {
+                  "$ref": "#/$defs/ActorKind"
+                },
+                "name": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Name"
+                }
+              },
+              "required": [
+                "id",
+                "kind"
+              ],
+              "title": "Actor",
+              "type": "object"
+            },
+            "ActorKind": {
+              "description": "What sort of agent performed an operation.",
+              "enum": [
+                "human",
+                "agent",
+                "service",
+                "pipeline"
+              ],
+              "title": "ActorKind",
+              "type": "string"
+            },
+            "Collaborator": {
+              "additionalProperties": false,
+              "description": "One party that took part in an operation without being the one who performed it.\n\nPeople and agents share one shape, so reading \"who took part\" never branches: the head is an\nactor's, and an agent adds the one thing a person does not have. A model, a runtime, a\npipeline and a second person are all collaborators; what each *is* travels in ``kind``, never\nencoded into the identifier, because a reclassification must not be a rename.\n\nAttributes:\n    model (str | None): The model this party ran, as an actor identifier. Named beside the\n        party rather than as a separate list entry because the pair is the fact: the same\n        model under a different harness is a different collaborator, since the harness decides\n        what the model sees, how many turns it takes, and which tools it can reach. Keeping\n        them together is what stays unambiguous when several agents write into one snapshot.\n\nNo version string appears here, on purpose. A version is the field most likely to be invented\nby whoever fills the record in, it ages faster than everything beside it, and it buys less\nthan the identity it would sit next to.",
+              "properties": {
+                "id": {
+                  "minLength": 1,
+                  "title": "Id",
+                  "type": "string"
+                },
+                "kind": {
+                  "$ref": "#/$defs/ActorKind"
+                },
+                "name": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Name"
+                },
+                "model": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Model"
+                }
+              },
+              "required": [
+                "id",
+                "kind"
+              ],
+              "title": "Collaborator",
+              "type": "object"
+            },
+            "DemotionRecordV2": {
+              "additionalProperties": false,
+              "description": "A block's priority was lowered, and this is who took part.",
+              "properties": {
+                "record_type": {
+                  "const": "demotion",
+                  "default": "demotion",
+                  "title": "Record Type",
+                  "type": "string"
+                },
+                "block": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Block",
+                  "type": "string"
+                },
+                "actor": {
+                  "$ref": "#/$defs/Actor"
+                },
+                "at": {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+                  "title": "At",
+                  "type": "string"
+                },
+                "reason": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Reason"
+                },
+                "policy": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Policy"
+                },
+                "assisted_by": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "$ref": "#/$defs/Collaborator"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Assisted By"
+                }
+              },
+              "required": [
+                "block",
+                "actor",
+                "at"
+              ],
+              "title": "DemotionRecordV2",
+              "type": "object"
+            },
+            "DerivationRecordV2": {
+              "additionalProperties": false,
+              "description": "A derived block was produced, and this is who took part.\n\n**A sibling of :class:`DerivationRecord`, not a subtype**, for the same reason\n:class:`~boltzmann.blocks.semantic.SemanticBlockV3` is a sibling: version 2 does not widen\nversion 1, it *replaces* a member. ``producer`` named one thing where the answer is often\nseveral -- a person, an agent, a second person in the same session -- and it existed on this\nrecord alone, so a model that helped decide a supersession had nowhere to be recorded. The\nassisting parties answer the same question more completely and for every record kind.\n\nThe two versions are therefore disjoint rather than nested, which is what makes selection\nunambiguous without consulting anything outside the payload. A payload carrying ``producer``\nsatisfies version 1 and not version 2; one carrying ``assisted_by`` satisfies version 2 and\nnot version 1; one carrying both, or neither, satisfies no registered schema and is refused.\n\n``assisted_by`` is required here and optional everywhere else, deliberately. Version 1 obliged\na writer to say what produced a derived block, and dropping ``producer`` must not quietly\nrelax that into \"derived, and I decline to say by what\".\n\nAttributes:\n    record_type (Literal[\"derivation\"]): Discriminator.\n    block (BlockId): The derived block.\n    derived_from (list[BlockId]): The evidence it cites. Never empty: a derived block with no\n        evidence has no root to be audited against.\n    actor (Actor): Who ran the production.\n    at (Timestamp): When it was produced.\n    assisted_by (list[Collaborator]): Everything and everyone that took part. Required.\n    task (str | None): Identifier of the processing task that yielded it.\n    locator (str | None): Where in the source it came from, such as a page or a line range.",
+              "properties": {
+                "assisted_by": {
+                  "items": {
+                    "$ref": "#/$defs/Collaborator"
+                  },
+                  "minItems": 1,
+                  "title": "Assisted By",
+                  "type": "array"
+                },
+                "record_type": {
+                  "const": "derivation",
+                  "default": "derivation",
+                  "title": "Record Type",
+                  "type": "string"
+                },
+                "block": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Block",
+                  "type": "string"
+                },
+                "derived_from": {
+                  "items": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "title": "Derived From",
+                  "type": "array"
+                },
+                "actor": {
+                  "$ref": "#/$defs/Actor"
+                },
+                "at": {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+                  "title": "At",
+                  "type": "string"
+                },
+                "task": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Task"
+                },
+                "locator": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Locator"
+                }
+              },
+              "required": [
+                "assisted_by",
+                "block",
+                "derived_from",
+                "actor",
+                "at"
+              ],
+              "title": "DerivationRecordV2",
+              "type": "object"
+            },
+            "NormalizationRecordV2": {
+              "additionalProperties": false,
+              "description": "A normalized view was produced, and this is who took part.",
+              "properties": {
+                "record_type": {
+                  "const": "normalization",
+                  "default": "normalization",
+                  "title": "Record Type",
+                  "type": "string"
+                },
+                "block": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Block",
+                  "type": "string"
+                },
+                "pipeline": {
+                  "minLength": 1,
+                  "title": "Pipeline",
+                  "type": "string"
+                },
+                "pipeline_version": {
+                  "minLength": 1,
+                  "title": "Pipeline Version",
+                  "type": "string"
+                },
+                "actor": {
+                  "$ref": "#/$defs/Actor"
+                },
+                "at": {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+                  "title": "At",
+                  "type": "string"
+                },
+                "assisted_by": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "$ref": "#/$defs/Collaborator"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Assisted By"
+                }
+              },
+              "required": [
+                "block",
+                "pipeline",
+                "pipeline_version",
+                "actor",
+                "at"
+              ],
+              "title": "NormalizationRecordV2",
+              "type": "object"
+            },
+            "RegistrationRecordV2": {
+              "additionalProperties": false,
+              "description": "A source was incorporated, and this is who took part.",
+              "properties": {
+                "record_type": {
+                  "const": "registration",
+                  "default": "registration",
+                  "title": "Record Type",
+                  "type": "string"
+                },
+                "block": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Block",
+                  "type": "string"
+                },
+                "actor": {
+                  "$ref": "#/$defs/Actor"
+                },
+                "at": {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+                  "title": "At",
+                  "type": "string"
+                },
+                "origin": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Origin"
+                },
+                "license": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "License"
+                },
+                "retention_policy": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Retention Policy"
+                },
+                "assisted_by": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "$ref": "#/$defs/Collaborator"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Assisted By"
+                }
+              },
+              "required": [
+                "block",
+                "actor",
+                "at"
+              ],
+              "title": "RegistrationRecordV2",
+              "type": "object"
+            },
+            "SupersessionRecordV2": {
+              "additionalProperties": false,
+              "description": "A block took precedence over an earlier one, and this is who took part.",
+              "properties": {
+                "record_type": {
+                  "const": "supersession",
+                  "default": "supersession",
+                  "title": "Record Type",
+                  "type": "string"
+                },
+                "block": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Block",
+                  "type": "string"
+                },
+                "supersedes": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Supersedes",
+                  "type": "string"
+                },
+                "actor": {
+                  "$ref": "#/$defs/Actor"
+                },
+                "at": {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+                  "title": "At",
+                  "type": "string"
+                },
+                "reason": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Reason"
+                },
+                "assisted_by": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "$ref": "#/$defs/Collaborator"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Assisted By"
+                }
+              },
+              "required": [
+                "block",
+                "supersedes",
+                "actor",
+                "at"
+              ],
+              "title": "SupersessionRecordV2",
+              "type": "object"
+            },
+            "ValidationRecordV2": {
+              "additionalProperties": false,
+              "description": "A block received its verdict, and this is who took part.",
+              "properties": {
+                "record_type": {
+                  "const": "validation",
+                  "default": "validation",
+                  "title": "Record Type",
+                  "type": "string"
+                },
+                "block": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "title": "Block",
+                  "type": "string"
+                },
+                "verdict": {
+                  "$ref": "#/$defs/ValidationStatus"
+                },
+                "checks": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "title": "Checks",
+                  "type": "array"
+                },
+                "actor": {
+                  "$ref": "#/$defs/Actor"
+                },
+                "at": {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+                  "title": "At",
+                  "type": "string"
+                },
+                "task": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Task"
+                },
+                "assisted_by": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "$ref": "#/$defs/Collaborator"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "title": "Assisted By"
+                }
+              },
+              "required": [
+                "block",
+                "verdict",
+                "checks",
+                "actor",
+                "at"
+              ],
+              "title": "ValidationRecordV2",
+              "type": "object"
+            },
+            "ValidationStatus": {
+              "description": "The verdict on one candidate (paper Section 10.3).\n\nDefined here rather than beside the gate that produces it, because a verdict is not a write-path\nephemeral: it travels in a provenance record, so it is part of the wire schema. The gate re-exports\nit, and :mod:`boltzmann.ingest.validation` remains the place to import it from.",
+              "enum": [
+                "validated",
+                "pending_review",
+                "rejected",
+                "contradicted"
+              ],
+              "title": "ValidationStatus",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "description": "A provenance entry that names who assisted.\n\nSelected by oldest-that-fits, never chosen: a record that names nobody validates as version 1\nand keeps the bytes -- and therefore the ``block_id`` -- it would have had before this version\nexisted. Only a record that actually uses what version 2 added pays for version 2, which is\nthe property that keeps a brain readable by clients that have not upgraded.\n\nAttributes:\n    record (ProvenanceEntryV2): The recorded event.",
+          "properties": {
+            "record": {
+              "discriminator": {
+                "mapping": {
+                  "demotion": "#/$defs/DemotionRecordV2",
+                  "derivation": "#/$defs/DerivationRecordV2",
+                  "normalization": "#/$defs/NormalizationRecordV2",
+                  "registration": "#/$defs/RegistrationRecordV2",
+                  "supersession": "#/$defs/SupersessionRecordV2",
+                  "validation": "#/$defs/ValidationRecordV2"
+                },
+                "propertyName": "record_type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/RegistrationRecordV2"
+                },
+                {
+                  "$ref": "#/$defs/DerivationRecordV2"
+                },
+                {
+                  "$ref": "#/$defs/NormalizationRecordV2"
+                },
+                {
+                  "$ref": "#/$defs/SupersessionRecordV2"
+                },
+                {
+                  "$ref": "#/$defs/DemotionRecordV2"
+                },
+                {
+                  "$ref": "#/$defs/ValidationRecordV2"
+                }
+              ],
+              "title": "Record"
+            }
+          },
+          "required": [
+            "record"
+          ],
+          "title": "ProvenanceBlockV2",
+          "type": "object"
+        }
       }
     ]
   }

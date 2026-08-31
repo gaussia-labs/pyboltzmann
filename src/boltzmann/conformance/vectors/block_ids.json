@@ -270,6 +270,251 @@
       },
       "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"semantic\",\"payload\":{\"exclusive\":true,\"kind\":\"scheme\",\"scheme\":\"year\"},\"schema_version\":3,\"serialization\":\"jcs/1\"}",
       "block_id": "sha256:fe60efbc17bb29a6304ccb1c7cdc07915bad93b78977699ea16c7df5c49c1765"
+    },
+    {
+      "name": "provenance_derivation_unassisted",
+      "memory_type": "provenance",
+      "schema_version": 1,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "provenance",
+        "payload": {
+          "record": {
+            "record_type": "derivation",
+            "block": "sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8",
+            "derived_from": [
+              "sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d"
+            ],
+            "producer": {
+              "kind": "actor",
+              "id": "alex@example.org"
+            },
+            "actor": {
+              "id": "alex@example.org",
+              "kind": "human"
+            },
+            "at": "2026-08-31T00:00:00Z"
+          }
+        },
+        "schema_version": 1,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"provenance\",\"payload\":{\"record\":{\"actor\":{\"id\":\"alex@example.org\",\"kind\":\"human\"},\"at\":\"2026-08-31T00:00:00Z\",\"block\":\"sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8\",\"derived_from\":[\"sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d\"],\"producer\":{\"id\":\"alex@example.org\",\"kind\":\"actor\"},\"record_type\":\"derivation\"}},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:da496e9f7a12365b16b945040f3153f35e913fa691d90ca2084f15bff893b4e7",
+      "note": "A person working alone. It names nobody, so it stays at schema version 1 with the bytes it would have had before version 2 existed -- which is the property that keeps a brain readable by clients that have not upgraded. Reproduce this one before any other."
+    },
+    {
+      "name": "provenance_derivation_with_an_agent",
+      "memory_type": "provenance",
+      "schema_version": 2,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "provenance",
+        "payload": {
+          "record": {
+            "assisted_by": [
+              {
+                "id": "anthropic/claude-code",
+                "kind": "agent",
+                "model": "anthropic/fable-5"
+              }
+            ],
+            "record_type": "derivation",
+            "block": "sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8",
+            "derived_from": [
+              "sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d"
+            ],
+            "actor": {
+              "id": "alex@example.org",
+              "kind": "human"
+            },
+            "at": "2026-08-31T00:00:00Z"
+          }
+        },
+        "schema_version": 2,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"provenance\",\"payload\":{\"record\":{\"actor\":{\"id\":\"alex@example.org\",\"kind\":\"human\"},\"assisted_by\":[{\"id\":\"anthropic/claude-code\",\"kind\":\"agent\",\"model\":\"anthropic/fable-5\"}],\"at\":\"2026-08-31T00:00:00Z\",\"block\":\"sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8\",\"derived_from\":[\"sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d\"],\"record_type\":\"derivation\"}},\"schema_version\":2,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:d8f213a04f531908830cccd85c6df8c9de08091c33c0ec821ad7516203b98900",
+      "note": "The ordinary case once a brain is hydrated through an agent: a runtime, and the model it ran. The pair is one entry because the same model under a different harness is a different collaborator -- the harness decides what the model sees and which tools it can reach."
+    },
+    {
+      "name": "provenance_derivation_agent_without_a_model",
+      "memory_type": "provenance",
+      "schema_version": 2,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "provenance",
+        "payload": {
+          "record": {
+            "assisted_by": [
+              {
+                "id": "nousresearch/hermes",
+                "kind": "agent"
+              }
+            ],
+            "record_type": "derivation",
+            "block": "sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8",
+            "derived_from": [
+              "sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d"
+            ],
+            "actor": {
+              "id": "alex@example.org",
+              "kind": "human"
+            },
+            "at": "2026-08-31T00:00:00Z"
+          }
+        },
+        "schema_version": 2,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"provenance\",\"payload\":{\"record\":{\"actor\":{\"id\":\"alex@example.org\",\"kind\":\"human\"},\"assisted_by\":[{\"id\":\"nousresearch/hermes\",\"kind\":\"agent\"}],\"at\":\"2026-08-31T00:00:00Z\",\"block\":\"sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8\",\"derived_from\":[\"sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d\"],\"record_type\":\"derivation\"}},\"schema_version\":2,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:e139f54017915084b8c9b87580b9d88eca3fc6e62593d22345810fe09bf6d34b",
+      "note": "A participant whose model is not disclosed. Naming the harness alone is a smaller claim than naming a model that was guessed, and a batch invalidation over a model will not reach it, which is correct: nothing said it was there."
+    },
+    {
+      "name": "provenance_derivation_model_called_directly",
+      "memory_type": "provenance",
+      "schema_version": 2,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "provenance",
+        "payload": {
+          "record": {
+            "assisted_by": [
+              {
+                "id": "anthropic/fable-5",
+                "kind": "agent",
+                "model": "anthropic/fable-5"
+              }
+            ],
+            "record_type": "derivation",
+            "block": "sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8",
+            "derived_from": [
+              "sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d"
+            ],
+            "actor": {
+              "id": "alex@example.org",
+              "kind": "human"
+            },
+            "at": "2026-08-31T00:00:00Z"
+          }
+        },
+        "schema_version": 2,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"provenance\",\"payload\":{\"record\":{\"actor\":{\"id\":\"alex@example.org\",\"kind\":\"human\"},\"assisted_by\":[{\"id\":\"anthropic/fable-5\",\"kind\":\"agent\",\"model\":\"anthropic/fable-5\"}],\"at\":\"2026-08-31T00:00:00Z\",\"block\":\"sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8\",\"derived_from\":[\"sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d\"],\"record_type\":\"derivation\"}},\"schema_version\":2,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:94938edf4cce0ca8a20daa45daaa8a6651e10801a12da4140607d6a58fff7864",
+      "note": "A model called with no harness around it. The participant is the model, so the identifier and the model agree. The repetition is what lets a batch invalidation look in exactly one place instead of guessing whether an entry names a runtime or a model."
+    },
+    {
+      "name": "provenance_joint_session",
+      "memory_type": "provenance",
+      "schema_version": 2,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "provenance",
+        "payload": {
+          "record": {
+            "assisted_by": [
+              {
+                "id": "openai/codex",
+                "kind": "agent",
+                "model": "openai/gpt-5.6-sol"
+              },
+              {
+                "id": "juan@example.org",
+                "kind": "human"
+              }
+            ],
+            "record_type": "derivation",
+            "block": "sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8",
+            "derived_from": [
+              "sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d"
+            ],
+            "actor": {
+              "id": "alex@example.org",
+              "kind": "human"
+            },
+            "at": "2026-08-31T00:00:00Z"
+          }
+        },
+        "schema_version": 2,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"provenance\",\"payload\":{\"record\":{\"actor\":{\"id\":\"alex@example.org\",\"kind\":\"human\"},\"assisted_by\":[{\"id\":\"openai/codex\",\"kind\":\"agent\",\"model\":\"openai/gpt-5.6-sol\"},{\"id\":\"juan@example.org\",\"kind\":\"human\"}],\"at\":\"2026-08-31T00:00:00Z\",\"block\":\"sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8\",\"derived_from\":[\"sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d\"],\"record_type\":\"derivation\"}},\"schema_version\":2,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:346837a9dd05ed5b80bb767399dcbabc138233debdac38133f504f9153d834f9",
+      "note": "Two people and an agent in one session. People and agents share one shape, so reading who took part never branches; the person carries no model, because a person does not run one as part of their identity."
+    },
+    {
+      "name": "provenance_two_agents_keep_their_pairs",
+      "memory_type": "provenance",
+      "schema_version": 2,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "provenance",
+        "payload": {
+          "record": {
+            "assisted_by": [
+              {
+                "id": "anthropic/claude-code",
+                "kind": "agent",
+                "model": "anthropic/fable-5"
+              },
+              {
+                "id": "openai/codex",
+                "kind": "agent",
+                "model": "openai/gpt-5.6-sol"
+              }
+            ],
+            "record_type": "derivation",
+            "block": "sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8",
+            "derived_from": [
+              "sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d"
+            ],
+            "actor": {
+              "id": "alex@example.org",
+              "kind": "human"
+            },
+            "at": "2026-08-31T00:00:00Z"
+          }
+        },
+        "schema_version": 2,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"provenance\",\"payload\":{\"record\":{\"actor\":{\"id\":\"alex@example.org\",\"kind\":\"human\"},\"assisted_by\":[{\"id\":\"anthropic/claude-code\",\"kind\":\"agent\",\"model\":\"anthropic/fable-5\"},{\"id\":\"openai/codex\",\"kind\":\"agent\",\"model\":\"openai/gpt-5.6-sol\"}],\"at\":\"2026-08-31T00:00:00Z\",\"block\":\"sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8\",\"derived_from\":[\"sha256:c02df3390b66a233ea95afe7d586a7848c00ae3acb07d1d2fbcda0e38a940a7d\"],\"record_type\":\"derivation\"}},\"schema_version\":2,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:1346f511eae5a0d1922e874128642d5036dec3f069db765a7e35d0f622efafe0",
+      "note": "Two agents writing into one snapshot. Each runtime carries its own model, so which model ran where is unambiguous -- the thing a flat list of participants would lose."
+    },
+    {
+      "name": "provenance_removal_stays_at_version_one",
+      "memory_type": "provenance",
+      "schema_version": 1,
+      "envelope": {
+        "boltzmann": 1,
+        "memory_type": "provenance",
+        "payload": {
+          "record": {
+            "record_type": "removal",
+            "blocks": [
+              "sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8"
+            ],
+            "mechanism": "drop",
+            "memory_type": "semantic",
+            "actor": {
+              "id": "alex@example.org",
+              "kind": "human"
+            },
+            "at": "2026-08-31T00:00:00Z",
+            "reason": "ingested in error"
+          }
+        },
+        "schema_version": 1,
+        "serialization": "jcs/1"
+      },
+      "canonical_bytes": "{\"boltzmann\":1,\"memory_type\":\"provenance\",\"payload\":{\"record\":{\"actor\":{\"id\":\"alex@example.org\",\"kind\":\"human\"},\"at\":\"2026-08-31T00:00:00Z\",\"blocks\":[\"sha256:7cec49b49a5764d1e069433ab0f53695ca342787211006c8a3aad745803913f8\"],\"mechanism\":\"drop\",\"memory_type\":\"semantic\",\"reason\":\"ingested in error\",\"record_type\":\"removal\"}},\"schema_version\":1,\"serialization\":\"jcs/1\"}",
+      "block_id": "sha256:4cb7f8a3252fea2fe6c5f92408900bbf17ec7c8b22d1538f38ec93f059fe2fbc",
+      "note": "A removal, written by a session that names assisting parties -- and still at version 1, carrying none of them. A removal record is the one record a verifier must decode to decide a blocking question, so a version an older client lacks would turn 'I cannot read this' into 'you violated the removal invariant': a specific, confident, wrong accusation with no way to withdraw it. Not being able to read something must never be reported as that thing being wrong."
     }
   ]
 }

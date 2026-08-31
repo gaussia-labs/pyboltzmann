@@ -21,7 +21,7 @@ import json
 from importlib import resources
 from typing import Any
 
-CORPUS_VERSION = "1.0"
+CORPUS_VERSION = "1.1"
 """Which published corpus this package carries.
 
 ``<protocol>.<revision>``, matching ``CORPUS_VERSION`` in the corpus repository. A CI job compares
@@ -34,6 +34,7 @@ CORPUS_REPOSITORY = "https://github.com/gaussia-labs/boltzmann-conformance"
 
 VECTOR_FILES = (
     "block_ids.json",
+    "actor_ids.json",
     "schema_selection.json",
     "merkle_roots.json",
     "inclusion_proofs.json",
