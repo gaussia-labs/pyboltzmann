@@ -39,8 +39,8 @@ from boltzmann.module.module import Module
 from boltzmann.retention.policy import RetentionPolicy
 from boltzmann.store.memory import MemoryBlockStore
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
-SAM = Actor(id="sam", kind=ActorKind.AGENT)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
+SAM = Actor(id="example.com/sam", kind=ActorKind.AGENT)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
 REFERENCE = "registry.example/org/brain"
 

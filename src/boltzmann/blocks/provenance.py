@@ -16,11 +16,12 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.identity.digest import BlockId, MerkleRoot
+from boltzmann.identity.principal import parse_actor_id
 from boltzmann.identity.time import Timestamp
 
 
@@ -111,6 +112,27 @@ class Actor(BaseModel):
     id: str = Field(min_length=1)
     kind: ActorKind
     name: str | None = None
+
+
+def _writing_actor(actor: Actor) -> Actor:
+    """Refuse an actor a conforming writer would not record."""
+    parse_actor_id(actor.id, field="actor id")
+    return actor
+
+
+WritingActor = Annotated[Actor, AfterValidator(_writing_actor)]
+"""An :class:`Actor` on the way *in*, whose identifier must take one of the two accepted forms.
+
+The asymmetry is the point, and it is the only arrangement that works. :class:`Actor` itself stays
+permissive, because every provenance record ever written decodes through it and a validator on the
+type would make every brain that predates this rule unreadable -- punishing readers for a writer's
+old habit. Enforcement therefore attaches to the request models and to the brain handle, where a
+new identifier is being *chosen* and a caller can still be told what to choose instead.
+
+This is the producer/verifier split the protocol uses everywhere, pointed in the only direction
+that works for a field nothing can verify: strict where the value is minted, tolerant where it is
+read, and reported by :meth:`~boltzmann.brain.Brain.audit_attribution` in between.
+"""
 
 
 class Producer(BaseModel):

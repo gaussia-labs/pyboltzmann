@@ -79,7 +79,7 @@ def _supersedes(block: BlockId, superseded: BlockId) -> ProvenanceBlock:
         record=SupersessionRecord(
             block=block,
             supersedes=superseded,
-            actor=Actor(id="curator", kind=ActorKind.HUMAN),
+            actor=Actor(id="curator@example.org", kind=ActorKind.HUMAN),
             at=utc_timestamp(),
         )
     )
@@ -376,7 +376,7 @@ class ReconciliationConformance:
                     block=derived,
                     derived_from=[source],
                     producer=Producer(kind=ProducerKind.MODEL, id="some-model", version="1"),
-                    actor=Actor(id="curator", kind=ActorKind.HUMAN),
+                    actor=Actor(id="curator@example.org", kind=ActorKind.HUMAN),
                     at=utc_timestamp(),
                 )
             )

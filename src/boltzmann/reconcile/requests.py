@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from boltzmann.authenticity.authenticator import Authorship
 from boltzmann.blocks.memory_type import MemoryType
-from boltzmann.blocks.provenance import Actor
+from boltzmann.blocks.provenance import WritingActor
 from boltzmann.identity.digest import BlockId, MerkleRoot, OciDigest
 from boltzmann.module.snapshot import ModuleRef, Snapshot
 from boltzmann.reconcile.gate import IncomingReport
@@ -111,7 +111,7 @@ class ReconcileRequest(BaseModel):
 
     theirs: OciDigest
     strategy: ReconcileStrategy
-    actor: Actor
+    actor: WritingActor
     reason: str = Field(min_length=1)
     ancestor: OciDigest | None = None
 

@@ -54,7 +54,7 @@ from boltzmann import Actor, Brain, MemoryType, Producer, Query
 from boltzmann.blocks import ActorKind, ProducerKind
 from boltzmann.ingest import Candidate, CandidateSet, RegistrationRequest
 
-curator = Actor(id="curator", kind=ActorKind.HUMAN)
+curator = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 brain = Brain.open("./my-brain", actor=curator)
 
 # You supply the model. The SDK embeds none: what knowledge a source yields is its

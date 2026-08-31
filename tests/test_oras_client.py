@@ -40,7 +40,7 @@ from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.store.memory import MemoryBlockStore
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
 REFERENCE = "registry.example/org/brain"
 

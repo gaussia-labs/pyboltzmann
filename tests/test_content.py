@@ -41,7 +41,7 @@ from boltzmann.retention.policy import RetentionPolicy
 from boltzmann.retention.reachability import reachable_from
 from boltzmann.store.memory import MemoryBlockStore
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 DETECTOR = Producer(kind=ProducerKind.MODEL, id="detector", version="1")
 TRANSCRIPT = b"the transcript of that episode, too large to inline in a payload" * 40
 

@@ -24,7 +24,7 @@ from boltzmann.ingest.validation import ValidationStatus, validate
 from boltzmann.ingest.validators import DEFAULT_VALIDATORS, UndecidedValidator
 from boltzmann.retention.policy import PERMISSIVE_POLICY, RetentionPolicy
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
 REQUEST = RegistrationRequest(media_type="application/pdf", actor=CURATOR)
 REFERENCE = "registry.example/org/brain"

@@ -29,7 +29,7 @@ from boltzmann_sandbox.indices import (
     tokenize,
 )
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="test", version="1")
 
 FACTS = [

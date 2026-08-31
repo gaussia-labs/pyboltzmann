@@ -34,7 +34,7 @@ from boltzmann.reconcile.gate import judge_incoming
 from boltzmann.retention.policy import PERMISSIVE_POLICY
 from boltzmann.retention.requests import DropRequest
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 REQUEST = RegistrationRequest(media_type="text/plain", actor=CURATOR)
 
 

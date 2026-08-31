@@ -19,7 +19,7 @@ from boltzmann.module.module import Module
 from boltzmann.module.snapshot import Snapshot
 from boltzmann.store.memory import MemoryBlockStore
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 
 
 def persisted(store: MemoryBlockStore, composition: Composition):

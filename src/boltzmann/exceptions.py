@@ -30,6 +30,15 @@ class DigestKindError(IdentityError):
     """
 
 
+class ActorIdError(IdentityError):
+    """Exception raised when an actor identifier takes neither accepted form.
+
+    An identity error rather than a validation one, and deliberately: a provenance record is a
+    block, so the identifier is hashed into ``block_id``. Two spellings of one person are two
+    names for one fact, which is the same failure a malformed digest is, one level up.
+    """
+
+
 class SerializationError(IdentityError):
     """Exception raised when a block cannot be canonically serialized."""
 

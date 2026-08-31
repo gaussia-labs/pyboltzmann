@@ -41,8 +41,8 @@ from boltzmann.reconcile.resolution import ResolutionKind
 from boltzmann.retention.policy import PERMISSIVE_POLICY
 from boltzmann.retention.requests import DropRequest
 
-MAINTAINER = Actor(id="maintainer", kind=ActorKind.HUMAN)
-CONTRIBUTOR = Actor(id="contributor", kind=ActorKind.HUMAN)
+MAINTAINER = Actor(id="maintainer@example.org", kind=ActorKind.HUMAN)
+CONTRIBUTOR = Actor(id="contributor@example.org", kind=ActorKind.HUMAN)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
 UPSTREAM = "registry.example/org/brain"
 PROPOSAL = "registry.example/sam/brain"

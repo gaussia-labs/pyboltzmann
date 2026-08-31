@@ -34,7 +34,7 @@ from boltzmann.store.memory import MemoryBlockStore
 ed25519 = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.ed25519")
 serialization = pytest.importorskip("cryptography.hazmat.primitives.serialization")
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
 
 
 class Party:

@@ -26,7 +26,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field
 
 from boltzmann.blocks.memory_type import MemoryType
-from boltzmann.blocks.provenance import Actor
+from boltzmann.blocks.provenance import WritingActor
 from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.identity.digest import BlockId, OciDigest
 from boltzmann.identity.time import Timestamp, utc_timestamp
@@ -82,7 +82,7 @@ class Resolution(BaseModel):
 
     kind: ResolutionKind
     prefer: BlockId | None = None
-    actor: Actor
+    actor: WritingActor
     reason: str | None = None
     at: Timestamp = Field(default_factory=utc_timestamp)
 
@@ -109,7 +109,7 @@ class RemovalAcceptance(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     blocks: dict[MemoryType, list[BlockId]] = Field(default_factory=dict)
-    actor: Actor
+    actor: WritingActor
     reason: str | None = None
     at: Timestamp = Field(default_factory=utc_timestamp)
 
@@ -143,7 +143,7 @@ class ReconcileState(BaseModel):
     theirs: OciDigest
     ancestor: OciDigest
     strategy: ReconcileStrategy
-    actor: Actor
+    actor: WritingActor
     reason: str = Field(min_length=1)
     head: OciDigest
     resolutions: dict[BlockId, Resolution] = Field(default_factory=dict)

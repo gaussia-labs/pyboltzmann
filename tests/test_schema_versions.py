@@ -55,8 +55,8 @@ from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.ingest.register import RegistrationRequest
 from boltzmann.query.scan import searchable_text
 
-CURATOR = Actor(id="curator", kind=ActorKind.HUMAN)
-SAM = Actor(id="sam", kind=ActorKind.AGENT)
+CURATOR = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
+SAM = Actor(id="example.com/sam", kind=ActorKind.AGENT)
 MODEL = Producer(kind=ProducerKind.MODEL, id="some-model", version="1")
 REFERENCE = "registry.example/org/brain"
 

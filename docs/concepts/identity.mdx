@@ -110,3 +110,54 @@ utc_timestamp()
 
 One function, always UTC, so two clients recording the same event do not disagree about when it happened
 because of a local timezone.
+
+## Actor identifiers
+
+A provenance record names who performed an operation, and a provenance record is a block: the identifier
+enters the payload, the payload enters the envelope, and the envelope is what `block_id` is computed over.
+So an identifier two parties spell differently is two names for one fact — the same silent divergence
+canonical serialization exists to prevent, arriving through a field nobody had canonicalized.
+
+Two forms, and no third:
+
+```python
+from boltzmann.identity import actor_id_form, is_actor_id, parse_actor_id
+
+actor_id_form("alex@alquimia.ai")         # ActorIdForm.ADDRESS
+actor_id_form("anthropic/claude-code")    # ActorIdForm.NAMESPACED
+actor_id_form("curator")                  # None
+```
+
+| Form | Names |
+| --- | --- |
+| `alex@alquimia.ai` | A person, by an address they already hold |
+| `github.com/alexfiorenza` | A person known only by a handle, or an organization |
+| `anthropic/claude-code` | A runtime |
+| `anthropic/fable-5` | A model |
+| `gaussia/nightly-ingest` | A pipeline or a service |
+
+The namespace carries whoever made or vouches for the name, so nothing repeats it as a separate field. No
+scheme prefix is stored: `mailto:` is ceremony around a value people already write correctly, and a URL
+invites exactly the questions a canonical form must leave closed — a trailing slash, a default port, a
+percent-encoded octet. An implementation exporting to a format that requires URIs derives one at that
+boundary.
+
+<Warning>
+  **Refused, never normalized.** `Alex@Example.org` raises `ActorIdError` rather than being lowered.
+  Rewriting it would mint a `block_id` the caller neither asked for nor can predict — and therefore one
+  they cannot search for either.
+</Warning>
+
+The check is asymmetric on purpose, and the second half is the easy one to lose:
+
+```python
+brain = Brain.open("./my-brain", actor=Actor(id="curator", kind=ActorKind.HUMAN))
+# ActorIdError: ... it names nothing off this machine
+
+Actor(id="curator", kind=ActorKind.HUMAN)   # fine: this is how old records decode
+```
+
+Every provenance record ever written decodes through `Actor`, so a validator on the type would make every
+brain that predates this rule unreadable — punishing readers for a writer's old habit. Enforcement
+attaches where an identifier is being *chosen*: opening a brain, and the request models. What is already
+published still reads.
