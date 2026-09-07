@@ -9,6 +9,16 @@ from hypothesis import given
 from hypothesis import strategies as st
 from pydantic import ValidationError
 
+from boltzmann import (
+    Actor,
+    ActorKind,
+    Brain,
+    ClassDeclaration,
+    HierarchyDeclaration,
+    PlacementDeclaration,
+    RegistrationRequest,
+    SchemeDeclaration,
+)
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.provenance import RemovalMechanism, RemovalRecord
@@ -261,6 +271,36 @@ class TestInvariant8ForgettingIsAudited:
         assert not policy.requires_review(5)
         assert policy.requires_review(6)
         assert not RetentionPolicy().requires_review(10_000)
+
+
+class TestEveryCommittedBlockIsAttributed:
+    """No block enters a composition without a record of who created it and the verdict that admitted it."""
+
+    def test_catalog_blocks_carry_creation_and_validation_records(self) -> None:
+        """Catalog structure cites no evidence, which is exactly why it must be attributed some other way."""
+        actor = Actor(id="curator@example.org", kind=ActorKind.HUMAN)
+        brain = Brain(MemoryBlockStore(), actor=actor, policy=PERMISSIVE_POLICY)
+        source = brain.register(b"exam", RegistrationRequest(media_type="text/plain", actor=actor)).block_id
+        parent = ClassDeclaration(scheme="topic", label="math")
+        child = ClassDeclaration(scheme="topic", label="fourier")
+        result = brain.classify(
+            [
+                SchemeDeclaration(scheme="topic"),
+                parent,
+                child,
+                HierarchyDeclaration(broader=parent.block_id, narrower=child.block_id),
+                PlacementDeclaration(source=source, class_id=child.block_id),
+            ]
+        )
+        assert result.is_clean
+
+        provenance = brain.module(MemoryType.PROVENANCE)
+        records = [provenance.get(identity).record for identity in result.commit.provenance]
+        created = {record.block for record in records if record.record_type in {"registration", "derivation"}}
+        validated = {record.block for record in records if record.record_type == "validation"}
+        assert created == set(result.commit.committed)
+        assert validated == set(result.commit.committed)
+        assert brain.audit_validation().unaccounted == {}
 
 
 class TestProtocolSurface:
