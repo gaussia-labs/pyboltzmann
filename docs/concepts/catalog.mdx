@@ -76,6 +76,16 @@ result = brain.classify([
 Each placement cites the canonical source as evidence and receives a derivation record. Dropping that
 canonical source therefore cascades to its placements, while the reusable taxonomy remains.
 
+Every catalog block is attributed. A scheme, a class or a hierarchy edge cites no evidence, so nothing can
+derive it; it receives a registration record instead, whose `origin` names the declaration
+(`catalog:scheme/topic`, `catalog:class/topic/math`, `catalog:hierarchy/<broader>/<narrower>`). Every catalog
+block, placements included, also receives a validation record naming `boltzmann:catalog/declaration` as the
+check that admitted it, so `audit_validation()` accounts for catalog structure like any other member.
+
+Brains written before 0.9.1 hold catalog blocks with no records. Declaring the same structure again repairs
+them: each duplicate whose block lacks a validation record receives the records it is missing in the same
+commit, and `ClassificationResult.repaired` lists the blocks that did. A second application changes nothing.
+
 An exclusive scheme allows at most one direct class per source. A second year or type is well-formed but
 conflicts with the held placement, so its verdict is `contradicted` rather than `rejected`.
 

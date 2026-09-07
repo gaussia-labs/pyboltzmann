@@ -197,14 +197,19 @@ class Producer(BaseModel):
 
 class RegistrationRecord(BaseModel):
     """
-    A canonical source was incorporated.
+    A block was incorporated from outside the brain's own derivations.
+
+    Usually a canonical source. Also catalog structure -- a scheme, a class, a hierarchy edge -- which an
+    actor declares rather than derives: it cites no evidence, so no derivation can attribute it, and a
+    block that nobody is recorded as having created would be the one gap in an otherwise complete ledger.
 
     Attributes:
         record_type (Literal["registration"]): Discriminator.
-        block (BlockId): The canonical block that was registered.
+        block (BlockId): The block that was registered.
         actor (Actor): Who incorporated it.
         at (Timestamp): When it was incorporated.
-        origin (str | None): Where it came from, such as a URL or a file path.
+        origin (str | None): Where it came from, such as a URL or a file path -- or a ``catalog:`` locator
+            naming the declaration, for structure.
         license (str | None): License the source is held under.
         retention_policy (str | None): Named retention policy that governs it.
     """
