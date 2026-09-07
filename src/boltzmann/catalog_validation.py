@@ -13,6 +13,9 @@ from boltzmann.ingest.commit import CommitResult
 from boltzmann.ingest.validation import ValidationIssue, ValidationStatus
 from boltzmann.module.module import Module
 
+CATALOG_CHECK = "boltzmann:catalog/declaration"
+"""The check every catalog block's validation record names: the sequential declaration rules below."""
+
 
 class CatalogVerdict(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -25,9 +28,21 @@ class CatalogVerdict(BaseModel):
 
 
 class ClassificationResult(BaseModel):
+    """
+    What one classification did.
+
+    Attributes:
+        verdicts (list[CatalogVerdict]): One per declaration, in request order.
+        commit (CommitResult): The snapshot the accepted declarations produced.
+        repaired (list[BlockId]): Existing catalog blocks that were declared again and lacked the provenance
+            a catalog block carries; they received it in this commit. Empty when every duplicate was already
+            attributed, which is the steady state.
+    """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
     verdicts: list[CatalogVerdict]
     commit: CommitResult
+    repaired: list[BlockId] = Field(default_factory=list)
 
     @property
     def is_clean(self) -> bool:

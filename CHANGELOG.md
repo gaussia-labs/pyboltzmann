@@ -1,6 +1,42 @@
 # CHANGELOG
 
 
+## v0.9.1-b.1 (2026-09-07)
+
+### Bug Fixes
+
+- **catalog**: Attribute every catalog block and repair older ones
+  ([`f2da1df`](https://github.com/gaussia-labs/pyboltzmann/commit/f2da1dfa1cf8d815131dd7fcc7734488d78dd1ad))
+
+classify() wrote a derivation record for each placement and nothing for a scheme, a class or a
+  hierarchy edge, and no validation record for any catalog block. A brain's taxonomy therefore had
+  no creator on record, and audit_validation() could not account for it.
+
+Every accepted block now carries a validation record naming boltzmann:catalog/declaration as the
+  check that admitted it. Structure, which cites no evidence and so cannot be derived, carries a
+  registration record whose origin names the declaration (catalog:scheme/..., catalog:class/...,
+  catalog:hierarchy/...); placements keep their derivation. Everything lands in the one write
+  classify() already made, under the oldest provenance schema that fits, so 0.9.0 readers still
+  decode the module.
+
+Declaring structure that already exists repairs it: a duplicate whose block has no validation record
+  receives the records it lacks in the same commit, and ClassificationResult.repaired lists them.
+  Re-applying a catalog brings a brain written before this change under the invariant; applying it
+  again writes nothing.
+
+- **docs**: Declare the attribution guide in the sync manifest
+  ([`68cc076`](https://github.com/gaussia-labs/pyboltzmann/commit/68cc0768541c3bacf9b53271964b2471081d8673))
+
+The guide shipped without an entry in docs-sync.json, so the first push to master after it landed
+  failed the sync: the manifest describes the whole tab and the workflow refuses when the pages it
+  declares and the pages it copied disagree in either direction. That is the guard doing its job --
+  without it the page would have been copied into the central repo and left unreachable on the site,
+  which is exactly how the reconciliation guide shipped invisible.
+
+It sits after authenticity because the two answer adjacent questions: who signed the brain, and who
+  did the work.
+
+
 ## v0.9.0 (2026-08-31)
 
 ### Bug Fixes

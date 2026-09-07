@@ -95,7 +95,9 @@ from boltzmann.catalog import (
     CatalogDeclaration,
     CatalogPathView,
     ClassificationRequest,
+    PlacementDeclaration,
 )
+from boltzmann.catalog_core import CATALOG_DUPLICATE
 from boltzmann.constants import PROTOCOL_VERSION
 from boltzmann.distribution.layers import pack_history, pack_module, unpack_history, unpack_layer
 from boltzmann.distribution.manifest import (
@@ -167,7 +169,12 @@ from boltzmann.ingest.validation import (
     Validator,
     validate,
 )
-from boltzmann.catalog_validation import ClassificationResult, validate_declarations
+from boltzmann.catalog_validation import (
+    CATALOG_CHECK,
+    CatalogVerdict,
+    ClassificationResult,
+    validate_declarations,
+)
 from boltzmann.merkle.proof import InclusionProof
 from boltzmann.merkle.tree import sorted_leaves
 from boltzmann.module.composition import Composition
@@ -1549,39 +1556,141 @@ class Brain:
 
         Declarations are checked sequentially, so one atomic request may declare a scheme, its
         classes, their hierarchy, and placements that refer to those new classes. Invalid declarations
-        receive verdicts and are omitted; every validated declaration is committed in one snapshot.
+        receive verdicts and are omitted; every validated declaration is committed in one snapshot,
+        together with the provenance that attributes it: a placement receives a derivation record citing
+        its source, a scheme, class or hierarchy edge receives a registration record, and every catalog
+        block receives a validation record naming the check that admitted it. No catalog block enters a
+        composition without a record of who created it.
+
+        A declaration that already exists is reported as a duplicate and not written again. If the
+        existing block predates this attribution -- a brain written before records accompanied catalog
+        structure -- the records it lacks are written in the same snapshot and its identity is listed
+        under ``repaired``. Re-applying a catalog is therefore how an older brain is brought under the
+        invariant, and applying it a second time changes nothing.
 
         Args:
             request (ClassificationRequest | Sequence[CatalogDeclaration]): Catalog declarations.
 
         Returns:
-            ClassificationResult: One verdict per declaration and the commit they produced.
+            ClassificationResult: One verdict per declaration, the commit they produced, and the existing
+                blocks that received the attribution they were missing.
         """
         typed = (
             request if isinstance(request, ClassificationRequest) else ClassificationRequest(declarations=list(request))
         )
-        verdicts, blocks, placements = validate_declarations(typed, self.modules())
-        if not blocks:
-            return ClassificationResult(verdicts=verdicts, commit=CommitResult(snapshot=self._snapshot))
+        verdicts, blocks, _placements = validate_declarations(typed, self.modules())
+        accepted = [
+            typed.declarations[verdict.index] for verdict in verdicts if verdict.status is ValidationStatus.VALIDATED
+        ]
 
         now = utc_timestamp()
-        producer = Producer(kind=ProducerKind.ACTOR, id=self.actor.id)
-        provenance = [
-            provenance_block(
-                DerivationRecord(
-                    block=placement.block_id,
-                    derived_from=[placement.source],
-                    producer=producer,
-                    actor=self.actor,
-                    at=now,
-                    task="catalog-placement",
-                ),
-                self.assisted_by,
-            )
-            for placement in placements
-        ]
+        provenance: list[ProvenanceBlock | ProvenanceBlockV2] = []
+        for declaration, block in zip(accepted, blocks, strict=True):
+            provenance.extend(self._catalog_records(declaration, block.block_id, now))
+        repaired = self._catalog_repairs(typed, verdicts, now, provenance)
+        if not blocks and not repaired:
+            return ClassificationResult(verdicts=verdicts, commit=CommitResult(snapshot=self._snapshot))
+
         commit = self._write(blocks={MemoryType.SEMANTIC: list(blocks)}, provenance=provenance)
-        return ClassificationResult(verdicts=verdicts, commit=commit)
+        return ClassificationResult(verdicts=verdicts, commit=commit, repaired=repaired)
+
+    def _catalog_records(
+        self,
+        declaration: CatalogDeclaration,
+        block_id: BlockId,
+        now: str,
+        *,
+        creation: bool = True,
+    ) -> list[ProvenanceBlock | ProvenanceBlockV2]:
+        """
+        The provenance one catalog block carries.
+
+        A placement is derived from the source it cites, so its creation record is a derivation and a
+        canonical drop cascades to it. Structure cites nothing -- a scheme, a class, a hierarchy edge is
+        declared, not derived -- so its creation record is a registration whose origin names the
+        declaration. Both are followed by the validation record every committed member carries, naming
+        the catalog rules as the check that admitted the block.
+
+        Args:
+            declaration (CatalogDeclaration): What was declared.
+            block_id (BlockId): The block it produced, or the existing block it turned out to duplicate.
+            now (str): The timestamp every record in this commit shares.
+            creation (bool): Whether to write the creation record as well as the validation. Off when an
+                older block already has its derivation and only the validation is missing.
+
+        Returns:
+            list[ProvenanceBlock | ProvenanceBlockV2]: The records, each under the oldest schema that fits.
+        """
+        records: list[RegistrationRecord | DerivationRecord | ValidationRecord] = []
+        if creation:
+            if isinstance(declaration, PlacementDeclaration):
+                records.append(
+                    DerivationRecord(
+                        block=block_id,
+                        derived_from=[declaration.source],
+                        producer=Producer(kind=ProducerKind.ACTOR, id=self.actor.id),
+                        actor=self.actor,
+                        at=now,
+                        task="catalog-placement",
+                    )
+                )
+            else:
+                records.append(
+                    RegistrationRecord(block=block_id, actor=self.actor, at=now, origin=declaration.provenance_origin)
+                )
+        records.append(
+            ValidationRecord(
+                block=block_id,
+                verdict=ValidationStatus.VALIDATED,
+                checks=[CATALOG_CHECK],
+                actor=self.actor,
+                at=now,
+                task="catalog-declaration",
+            )
+        )
+        return [provenance_block(record, self.assisted_by) for record in records]
+
+    def _catalog_repairs(
+        self,
+        request: ClassificationRequest,
+        verdicts: Sequence[CatalogVerdict],
+        now: str,
+        provenance: list[ProvenanceBlock | ProvenanceBlockV2],
+    ) -> list[BlockId]:
+        """
+        Attribute the existing catalog blocks a request duplicates, when they were committed without records.
+
+        A validation record accompanies every catalog block this version writes, so an existing block that
+        has none was written before attribution existed. It gets the same records a new block gets --
+        minus a derivation it already has -- appended to ``provenance`` for the caller's single write. The
+        ledger is read only when the request contains a duplicate, so the common path pays nothing.
+
+        Args:
+            request (ClassificationRequest): The declarations, for the kind of each duplicate.
+            verdicts (Sequence[CatalogVerdict]): Their verdicts; duplicates carry the existing block id.
+            now (str): The commit's timestamp.
+            provenance (list[ProvenanceBlock | ProvenanceBlockV2]): Extended in place.
+
+        Returns:
+            list[BlockId]: The existing blocks that received records.
+        """
+        duplicates = [
+            verdict for verdict in verdicts if any(issue.code == CATALOG_DUPLICATE for issue in verdict.issues)
+        ]
+        if not duplicates:
+            return []
+        semantic = self._module_or_empty(MemoryType.SEMANTIC)
+        ledger = Ledger.of(self.modules())
+        repaired: list[BlockId] = []
+        for verdict in duplicates:
+            existing = next((held for held in verdict.conflicts_with if held in semantic), None)
+            if existing is None or existing in ledger.validations or existing in repaired:
+                continue
+            declaration = request.declarations[verdict.index]
+            derived = isinstance(declaration, PlacementDeclaration) and existing in ledger.derivation_records
+            provenance.extend(self._catalog_records(declaration, existing, now, creation=not derived))
+            repaired.append(existing)
+        return repaired
 
     def browse(self, classes: BlockId | Sequence[BlockId]) -> CatalogBrowseResult:
         """Browse canonical sources classified in one class or a faceted intersection."""

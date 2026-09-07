@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from boltzmann import (
@@ -26,6 +28,7 @@ from boltzmann import (
     SemanticBlockV3,
     ValidationStatus,
 )
+from boltzmann.blocks.provenance import Collaborator, DerivationRecord, Producer, ProducerKind, provenance_block
 from boltzmann.blocks.semantic import Relation, SemanticBlockV2, SemanticKind
 from boltzmann.ingest.proposer import Candidate, CandidateSet
 from boltzmann.module.composition import Composition
@@ -48,6 +51,12 @@ CatalogMember = SchemeDeclaration | ClassDeclaration
 
 def register(brain: Brain, text: str) -> BlockId:
     return brain.register(text.encode(), REQUEST).block_id
+
+
+def records(brain: Brain, identities: list[BlockId]) -> list[Any]:
+    """The decoded provenance records a commit wrote, in commit order."""
+    provenance = brain.module(MemoryType.PROVENANCE)
+    return [provenance.get(identity).record for identity in identities]
 
 
 def taxonomy(brain: Brain) -> dict[str, CatalogMember]:
@@ -108,10 +117,96 @@ class TestPortableRepresentation:
         assert first.block_id != second.block_id
         assert child.to_block().payload() == {"kind": "class", "label": "fourier", "scheme": "topic"}
 
-    def test_catalog_structure_has_no_derivation_record(self, brain: Brain) -> None:
-        result = brain.classify([SchemeDeclaration(scheme="topic"), ClassDeclaration(scheme="topic", label="math")])
+    def test_catalog_structure_is_attributed(self, brain: Brain) -> None:
+        """A scheme or class cites no evidence, so nothing derives it; a registration says who declared it."""
+        scheme = SchemeDeclaration(scheme="topic")
+        math = ClassDeclaration(scheme="topic", label="math")
+        result = brain.classify([scheme, math])
         assert len(result.commit.committed) == 2
-        assert result.commit.provenance == []
+        assert result.repaired == []
+        by_type: dict[str, list[Any]] = {}
+        for record in records(brain, result.commit.provenance):
+            by_type.setdefault(record.record_type, []).append(record)
+        assert set(by_type) == {"registration", "validation"}
+        assert {record.block for record in by_type["registration"]} == {scheme.block_id, math.block_id}
+        assert {record.origin for record in by_type["registration"]} == {
+            "catalog:scheme/topic",
+            "catalog:class/topic/math",
+        }
+        assert {record.block for record in by_type["validation"]} == {scheme.block_id, math.block_id}
+        assert all(record.checks == ["boltzmann:catalog/declaration"] for record in by_type["validation"])
+
+    def test_a_placement_is_derived_from_its_source_and_validated(self, brain: Brain) -> None:
+        source = register(brain, "exam")
+        math = ClassDeclaration(scheme="topic", label="math")
+        brain.classify([SchemeDeclaration(scheme="topic"), math])
+        result = brain.classify([PlacementDeclaration(source=source, class_id=math.block_id)])
+        written = records(brain, result.commit.provenance)
+        assert sorted(record.record_type for record in written) == ["derivation", "validation"]
+        derivation = next(record for record in written if record.record_type == "derivation")
+        assert derivation.derived_from == [source]
+
+    def test_a_hierarchy_edge_is_attributed(self, brain: Brain) -> None:
+        parent = ClassDeclaration(scheme="topic", label="math")
+        child = ClassDeclaration(scheme="topic", label="fourier")
+        edge = HierarchyDeclaration(broader=parent.block_id, narrower=child.block_id)
+        result = brain.classify([SchemeDeclaration(scheme="topic"), parent, child, edge])
+        origins = {
+            record.block: record.origin
+            for record in records(brain, result.commit.provenance)
+            if record.record_type == "registration"
+        }
+        assert origins[edge.block_id] == f"catalog:hierarchy/{parent.block_id}/{child.block_id}"
+
+    def test_reapplying_a_catalog_repairs_blocks_committed_without_attribution(self, brain: Brain) -> None:
+        """The shape a brain written before this version holds: structure in the module, nothing in the ledger."""
+        scheme = SchemeDeclaration(scheme="topic")
+        math = ClassDeclaration(scheme="topic", label="math")
+        brain._write(blocks={MemoryType.SEMANTIC: [scheme.to_block(), math.to_block()]}, provenance=[])
+        assert set(brain.audit_validation().unaccounted[MemoryType.SEMANTIC]) == {scheme.block_id, math.block_id}
+
+        result = brain.classify([scheme, math])
+        assert all(verdict.status is ValidationStatus.REJECTED for verdict in result.verdicts)
+        assert result.commit.committed == []
+        assert set(result.repaired) == {scheme.block_id, math.block_id}
+        kinds = sorted(record.record_type for record in records(brain, result.commit.provenance))
+        assert kinds == ["registration", "registration", "validation", "validation"]
+        assert brain.audit_validation().unaccounted == {}
+
+        again = brain.classify([scheme, math])
+        assert again.repaired == []
+        assert again.commit.provenance == []
+        assert again.commit.snapshot.digest == result.commit.snapshot.digest
+
+    def test_a_repaired_placement_keeps_its_derivation_and_gains_its_validation(self, brain: Brain) -> None:
+        source = register(brain, "exam")
+        math = ClassDeclaration(scheme="topic", label="math")
+        brain.classify([SchemeDeclaration(scheme="topic"), math])
+        placement = PlacementDeclaration(source=source, class_id=math.block_id)
+        derivation = DerivationRecord(
+            block=placement.block_id,
+            derived_from=[source],
+            producer=Producer(kind=ProducerKind.ACTOR, id=CURATOR.id),
+            actor=CURATOR,
+            at="2026-07-24T09:30:00Z",
+            task="catalog-placement",
+        )
+        brain._write(blocks={MemoryType.SEMANTIC: [placement.to_block()]}, provenance=[provenance_block(derivation)])
+
+        result = brain.classify([placement])
+        assert result.repaired == [placement.block_id]
+        assert [record.record_type for record in records(brain, result.commit.provenance)] == ["validation"]
+
+    def test_assisted_catalog_records_are_written_under_schema_two(self) -> None:
+        assisted = Brain(
+            MemoryBlockStore(),
+            actor=CURATOR,
+            policy=PERMISSIVE_POLICY,
+            assisted_by=[Collaborator(id="openai/codex", kind=ActorKind.AGENT)],
+        )
+        result = assisted.classify([SchemeDeclaration(scheme="topic")])
+        provenance = assisted.module(MemoryType.PROVENANCE)
+        assert [provenance.get(identity).SCHEMA_VERSION for identity in result.commit.provenance] == [2, 2]
 
 
 class TestValidation:

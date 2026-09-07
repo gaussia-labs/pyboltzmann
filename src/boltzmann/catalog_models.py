@@ -61,6 +61,11 @@ class SchemeDeclaration(BaseModel):
         return SemanticBlockV3(kind=SemanticKind.SCHEME, scheme=self.scheme, exclusive=self.exclusive)
 
     @property
+    def provenance_origin(self) -> str:
+        """What the registration record names as the origin: the declaration itself, since it cites nothing."""
+        return f"catalog:scheme/{self.scheme}"
+
+    @property
     def block_id(self) -> BlockId:
         return self.to_block().block_id
 
@@ -103,6 +108,11 @@ class ClassDeclaration(BaseModel):
         return SemanticBlockV3(kind=SemanticKind.CLASS, scheme=self.scheme, label=self.label)
 
     @property
+    def provenance_origin(self) -> str:
+        """What the registration record names as the origin: the declaration itself, since it cites nothing."""
+        return f"catalog:class/{self.scheme}/{self.label}"
+
+    @property
     def block_id(self) -> BlockId:
         return self.to_block().block_id
 
@@ -138,6 +148,11 @@ class HierarchyDeclaration(BaseModel):
                 Relation(predicate="narrower", target=self.narrower),
             ],
         )
+
+    @property
+    def provenance_origin(self) -> str:
+        """What the registration record names as the origin: the declaration itself, since it cites nothing."""
+        return f"catalog:hierarchy/{self.broader}/{self.narrower}"
 
     @property
     def block_id(self) -> BlockId:
