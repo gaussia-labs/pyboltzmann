@@ -25,7 +25,7 @@ from boltzmann.distribution.media_types import (
 )
 from boltzmann.distribution.oras_client import OrasRegistryClient
 from boltzmann.distribution.projection import Projection
-from boltzmann.distribution.registry import FetchResult, InstallPlan, RegistryClient
+from boltzmann.distribution.registry import FetchResult, InstallPlan, RegistryClient, RegistryTags
 
 __all__ = [
     "ANNOTATION_SCHEMA_VERSIONS",
@@ -44,6 +44,7 @@ __all__ = [
     "OrasRegistryClient",
     "Projection",
     "RegistryClient",
+    "RegistryTags",
     "build_manifest",
     "declare_schema_versions",
     "memory_type_of",

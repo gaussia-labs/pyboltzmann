@@ -51,6 +51,13 @@ OK_STATUSES = (200, 201, 202)
 WRITE_AUTH_TIMEOUT = 30
 """Seconds to wait for the challenge that precedes a write."""
 
+TAG_PAGE_SIZE = 1000
+"""How many tags to ask for per page of a tag listing."""
+
+MAX_TAG_PAGES = 100
+"""Ceiling on pages followed in one tag listing. The ``Link`` header is remote input, and a registry
+that always names a next page must not keep a client listing forever."""
+
 
 def _registry(insecure: bool) -> Any:
     """Import ORAS lazily, so the core stays installable without the extra."""
@@ -134,6 +141,56 @@ class OrasRegistryClient:
             )
 
         return parse_manifest(response.content)
+
+    async def list_tags(self, reference: str) -> list[str]:
+        """
+        List the tags a repository publishes, following the registry's pagination.
+
+        Args:
+            reference (str): Repository reference, ``<host>/<namespace>/<repo>``.
+
+        Returns:
+            list[str]: Every tag, in the order the registry reported them.
+
+        Raises:
+            ReferenceNotFoundError: If the registry reports no such repository.
+            DistributionError: If the listing fails for any other reason, or is not a tag list.
+        """
+        host, _, repository = reference.partition("/")
+        url: str | None = f"{self.registry.prefix}://{host}/v2/{repository}/tags/list?n={TAG_PAGE_SIZE}"
+        tags: list[str] = []
+        for _ in range(MAX_TAG_PAGES):
+            if url is None:
+                return tags
+            try:
+                response = self.registry.do_request(url, "GET")
+            except Exception as error:
+                raise DistributionError(f"cannot list the tags of {reference}: {error}") from error
+            if response.status_code == HTTP_NOT_FOUND:
+                raise ReferenceNotFoundError(f"{reference} is not published")
+            if response.status_code not in OK_STATUSES:
+                raise DistributionError(
+                    f"listing the tags of {reference} failed with {response.status_code} {response.reason}"
+                )
+            try:
+                listing = response.json()
+            except ValueError as error:
+                raise DistributionError(f"the tag listing of {reference} is not JSON: {error}") from error
+            page = listing.get("tags") if isinstance(listing, dict) else None
+            if page is not None and not (isinstance(page, list) and all(isinstance(tag, str) for tag in page)):
+                raise DistributionError(f"the tag listing of {reference} does not carry a list of tags")
+            tags.extend(page or [])
+            url = self._next_page(response.headers.get("Link"), host)
+        raise DistributionError(f"the tag listing of {reference} did not end after {MAX_TAG_PAGES} pages")
+
+    def _next_page(self, link: str | None, host: str) -> str | None:
+        """The ``rel="next"`` target of a pagination ``Link`` header, made absolute."""
+        if not link or 'rel="next"' not in link:
+            return None
+        target = link.split(";", 1)[0].strip().removeprefix("<").removesuffix(">")
+        if target.startswith("/"):
+            return f"{self.registry.prefix}://{host}{target}"
+        return target
 
     def _authorize_write(self, reference: str) -> None:
         """Obtain a token that can actually write, rather than trusting the registry's challenge.
