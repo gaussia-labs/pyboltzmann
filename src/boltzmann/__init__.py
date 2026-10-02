@@ -79,7 +79,8 @@ from boltzmann.blocks import (
     Step,
     require_media_type,
 )
-from boltzmann.brain import Brain, BrainState
+from boltzmann.brain import Brain, BrainState, BranchInfo, JoinResult
+from boltzmann.branches import DEFAULT_BRANCH, branch_for_tag, tag_for, validate_branch_name
 from boltzmann.catalog import (
     Catalog,
     CatalogBrowseResult,
@@ -180,6 +181,12 @@ __all__ = [
     "BrainReconciliation",
     "BrainRetention",
     "BrainState",
+    "BranchInfo",
+    "DEFAULT_BRANCH",
+    "JoinResult",
+    "branch_for_tag",
+    "tag_for",
+    "validate_branch_name",
     "BrainWriter",
     "Candidate",
     "CandidateProposer",
