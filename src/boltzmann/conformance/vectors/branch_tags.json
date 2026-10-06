@@ -1,0 +1,237 @@
+{
+  "boltzmann": 1,
+  "serialization": "jcs/1",
+  "hash": "sha256",
+  "description": "Branch names, and the OCI tags they publish to (paper Section 7.5). A branch is a named pointer; on a registry it is a tag, and the mapping is fixed by the protocol so that a branch one client publishes is a branch to every other client that lists the repository. Two kinds of case: a name, with the tag it maps to or the reason it is refused, and a tag, with the branch it names or null when it names none. Both directions are published because each is a separate place to disagree: an implementation that maps names correctly and reads tags back loosely would list another runtime's release tags, or its signature fallback tags, as branches.",
+  "grammar": {
+    "name": "One or more segments separated by '/'. Each segment is [A-Za-z0-9][A-Za-z0-9_-]*. No '.', so the mapping is reversible.",
+    "tag": "The default branch, named 'main', publishes to the deployment's default tag. Every other branch publishes to 'br.' followed by the name with each '/' replaced by '.'. The tag is at most 128 characters, as OCI requires.",
+    "reading": "A tag names the default branch when it equals the deployment's default tag. Otherwise it names a branch when it begins with 'br.' and the remainder, with each '.' replaced by '/', is a valid name other than 'main'. Every other tag names no branch."
+  },
+  "vectors": [
+    {
+      "kind": "name",
+      "name": "default_branch",
+      "branch": "main",
+      "tag": "latest",
+      "default_tag": "latest",
+      "accepted": true,
+      "note": "The branch every brain has, publishing where it always did. A brain with no ref table is on it."
+    },
+    {
+      "kind": "name",
+      "name": "default_branch_follows_the_deployment",
+      "branch": "main",
+      "tag": "stable",
+      "default_tag": "stable",
+      "accepted": true,
+      "note": "The default branch publishes to whatever tag the deployment treats as current, not to a fixed word. Only the br. prefix is fixed by the protocol."
+    },
+    {
+      "kind": "name",
+      "name": "one_segment",
+      "branch": "feature_1",
+      "tag": "br.feature_1",
+      "default_tag": "latest",
+      "accepted": true,
+      "note": "The prefix, then the name. Underscores and hyphens are carried as they are."
+    },
+    {
+      "kind": "name",
+      "name": "two_segments",
+      "branch": "ana/fix-typo",
+      "tag": "br.ana.fix-typo",
+      "default_tag": "latest",
+      "accepted": true,
+      "note": "The slash an OCI tag cannot carry becomes a dot. Names carry no dots, so the dot is never ambiguous on the way back."
+    },
+    {
+      "kind": "name",
+      "name": "three_segments",
+      "branch": "a/b/c",
+      "tag": "br.a.b.c",
+      "default_tag": "latest",
+      "accepted": true,
+      "note": "Every slash is replaced, not only the first."
+    },
+    {
+      "kind": "name",
+      "name": "mixed_case",
+      "branch": "Ana/Release-2",
+      "tag": "br.Ana.Release-2",
+      "default_tag": "latest",
+      "accepted": true,
+      "note": "Case is preserved, because OCI tags are case-sensitive and a mapping that folded case would make two branches publish to one tag."
+    },
+    {
+      "kind": "name",
+      "name": "longest_name",
+      "branch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tag": "br.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "default_tag": "latest",
+      "accepted": true,
+      "note": "A 125-character name maps to a 128-character tag, the longest OCI allows. Present so that an implementation with an off-by-one bound has something to fail against."
+    },
+    {
+      "kind": "name",
+      "name": "name_one_too_long",
+      "branch": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "default_tag": "latest",
+      "accepted": false,
+      "reason": "its tag would exceed the 128 characters OCI allows",
+      "note": "One character past the boundary. Refused at creation, because a branch that cannot be published is a branch nobody else will ever see."
+    },
+    {
+      "kind": "name",
+      "name": "empty",
+      "branch": "",
+      "default_tag": "latest",
+      "accepted": false,
+      "reason": "a name has at least one segment",
+      "note": "Nothing to publish under."
+    },
+    {
+      "kind": "name",
+      "name": "dot_in_a_segment",
+      "branch": "a.b",
+      "default_tag": "latest",
+      "accepted": false,
+      "reason": "segments carry no '.'",
+      "note": "The rule that keeps the mapping reversible. a.b would publish to br.a.b, the tag a/b already owns."
+    },
+    {
+      "kind": "name",
+      "name": "leading_hyphen",
+      "branch": "-x",
+      "default_tag": "latest",
+      "accepted": false,
+      "reason": "a segment begins with a letter or digit",
+      "note": "Would read as a flag on every command line that takes a branch."
+    },
+    {
+      "kind": "name",
+      "name": "empty_segment",
+      "branch": "a//b",
+      "default_tag": "latest",
+      "accepted": false,
+      "reason": "a segment is not empty",
+      "note": "Two slashes would become two dots, which no valid name produces, so the tag could not be read back."
+    },
+    {
+      "kind": "name",
+      "name": "trailing_slash",
+      "branch": "a/",
+      "default_tag": "latest",
+      "accepted": false,
+      "reason": "a segment is not empty",
+      "note": "The empty segment at the end."
+    },
+    {
+      "kind": "name",
+      "name": "leading_slash",
+      "branch": "/a",
+      "default_tag": "latest",
+      "accepted": false,
+      "reason": "a segment is not empty",
+      "note": "The empty segment at the start."
+    },
+    {
+      "kind": "name",
+      "name": "non_ascii",
+      "branch": "ñandú",
+      "default_tag": "latest",
+      "accepted": false,
+      "reason": "segments are ASCII letters, digits, '_' and '-'",
+      "note": "OCI tags are ASCII. A name that cannot become a tag cannot be published."
+    },
+    {
+      "kind": "name",
+      "name": "whitespace",
+      "branch": "a b",
+      "default_tag": "latest",
+      "accepted": false,
+      "reason": "segments are ASCII letters, digits, '_' and '-'",
+      "note": "Neither a tag nor something a shell passes intact."
+    },
+    {
+      "kind": "tag",
+      "name": "the_default_tag",
+      "branch": "main",
+      "tag": "latest",
+      "default_tag": "latest",
+      "note": "The deployment's current tag names the default branch."
+    },
+    {
+      "kind": "tag",
+      "name": "the_default_tag_elsewhere",
+      "branch": "main",
+      "tag": "stable",
+      "default_tag": "stable",
+      "note": "Under another deployment default, that tag is main's instead."
+    },
+    {
+      "kind": "tag",
+      "name": "latest_under_another_default",
+      "branch": null,
+      "tag": "latest",
+      "default_tag": "stable",
+      "note": "latest is not special. Where the deployment publishes main to stable, latest is a release tag like any other."
+    },
+    {
+      "kind": "tag",
+      "name": "a_branch_tag",
+      "branch": "ana/fix-typo",
+      "tag": "br.ana.fix-typo",
+      "default_tag": "latest",
+      "note": "The mapping read back: drop the prefix, dots become slashes."
+    },
+    {
+      "kind": "tag",
+      "name": "a_release_tag",
+      "branch": null,
+      "tag": "v1.0",
+      "default_tag": "latest",
+      "note": "A tag without the prefix names no branch. Releases and branches share a repository without colliding."
+    },
+    {
+      "kind": "tag",
+      "name": "prefix_main",
+      "branch": null,
+      "tag": "br.main",
+      "default_tag": "latest",
+      "note": "Decodes to main, which is the default branch's name and never a br. tag. Read as a branch it would let anyone publish a second, competing main."
+    },
+    {
+      "kind": "tag",
+      "name": "prefix_alone",
+      "branch": null,
+      "tag": "br.",
+      "default_tag": "latest",
+      "note": "Decodes to the empty name, which is not a name."
+    },
+    {
+      "kind": "tag",
+      "name": "double_dot",
+      "branch": null,
+      "tag": "br.a..b",
+      "default_tag": "latest",
+      "note": "Decodes to a//b, which no valid name produces."
+    },
+    {
+      "kind": "tag",
+      "name": "hyphen_first",
+      "branch": null,
+      "tag": "br.-x",
+      "default_tag": "latest",
+      "note": "Decodes to -x, which is refused as a name, so the tag is not a branch."
+    },
+    {
+      "kind": "tag",
+      "name": "referrers_fallback_tag",
+      "branch": null,
+      "tag": "sha256-0123456789abcdef",
+      "default_tag": "latest",
+      "note": "The tag a registry without the Referrers API uses for signatures. It shares the repository with branches and must never be listed as one."
+    }
+  ]
+}
