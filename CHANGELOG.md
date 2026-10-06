@@ -1,6 +1,9 @@
 # CHANGELOG
 
 
+## v0.10.1 (2026-10-06)
+
+
 ## v0.10.1-b.1 (2026-10-06)
 
 ### Performance Improvements
