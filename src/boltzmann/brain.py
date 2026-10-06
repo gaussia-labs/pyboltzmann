@@ -24,7 +24,6 @@ still current. There is no state in which a root names a block the store does no
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from collections.abc import Iterable, Mapping, Sequence
@@ -5580,6 +5579,10 @@ class Brain:
         is retried rather than reported; one that keeps answering so is logged as unconfirmed, because
         an ancestor is not evidence that anyone else wrote.
         """
+        # Imported here rather than at module scope: importing asyncio costs ~17ms, and a client that opens a
+        # brain only to read it should not pay for the one sleep a publish needs.
+        import asyncio
+
         published = self._snapshot.digest
         for attempt in range(PUBLISH_CONFIRM_ATTEMPTS):
             try:

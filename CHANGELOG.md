@@ -1,6 +1,18 @@
 # CHANGELOG
 
 
+## v0.10.1-b.1 (2026-10-06)
+
+### Performance Improvements
+
+- **brain**: Import asyncio only where a publish waits
+  ([`588a30c`](https://github.com/gaussia-labs/pyboltzmann/commit/588a30ce6c428dbe878bace5a5f1ad79c304de7c))
+
+The post-publish check made asyncio a module-scope import of boltzmann.brain, so every client that
+  opens a brain to read it paid ~17ms at start. vitruvio guards its CLI start-up against exactly
+  this.
+
+
 ## v0.10.0 (2026-10-06)
 
 
