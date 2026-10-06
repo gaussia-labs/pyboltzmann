@@ -183,6 +183,49 @@ class RollbackError(DistributionError):
     """
 
 
+class LostPublishError(DistributionError):
+    """Exception raised when a tag re-read after publishing names someone else's snapshot.
+
+    OCI has no conditional write on a tag, so the fast-forward check and the write are two requests and a
+    second publisher can land between them. This is how the publisher that lost finds out (paper Section
+    7.4). Distinct from :class:`DivergenceError` because nothing was refused: the publish happened and was
+    then replaced. The remedy is the same -- fetch, reconcile, publish again -- and nothing was lost
+    locally.
+
+    Attributes:
+        published (str): The snapshot this client published.
+        observed (str): The snapshot the tag names now.
+    """
+
+    def __init__(self, message: str, *, published: str, observed: str) -> None:
+        super().__init__(message)
+        self.published = published
+        self.observed = observed
+
+
+class BranchError(ProtocolError):
+    """Exception raised when a branch operation cannot proceed (paper Section 7.5)."""
+
+
+class BranchNotFoundError(BranchError):
+    """Exception raised when no ref of the given name is held, locally or as a published tag."""
+
+
+class BranchExistsError(BranchError):
+    """Exception raised when creating a branch whose name is already held."""
+
+
+class InvalidBranchNameError(BranchError):
+    """Exception raised when a branch name violates the grammar, is reserved, or maps to an illegal tag."""
+
+
+class UnmergedBranchError(BranchError):
+    """Exception raised when deleting a branch whose head no other branch contains and nobody published.
+
+    The ref is then the only name for that work, and a prune after the delete would reclaim it.
+    """
+
+
 class ReconciliationError(ProtocolError):
     """Base exception for reconciling two histories (paper Section 12)."""
 

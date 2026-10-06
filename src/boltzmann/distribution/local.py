@@ -264,6 +264,24 @@ class LocalLayoutRegistry:
         """
         return parse_signature_manifest(self.layout(reference).get_bytes(digest))
 
+    async def list_tags(self, reference: str) -> list[str]:
+        """
+        List the tags a repository publishes, as :class:`~boltzmann.distribution.registry.RegistryTags`.
+
+        Args:
+            reference (str): Repository reference.
+
+        Returns:
+            list[str]: The published tags.
+
+        Raises:
+            ReferenceNotFoundError: If the repository is not published at all.
+        """
+        try:
+            return self.tags(reference)
+        except DistributionError as error:
+            raise ReferenceNotFoundError(f"{reference} is not published") from error
+
     def tags(self, reference: str) -> list[str]:
         """
         Which tags a repository publishes.

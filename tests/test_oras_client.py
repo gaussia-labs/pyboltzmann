@@ -666,3 +666,55 @@ class TestReferrers:
         assert any(entry.get("artifactType") == SIGNATURE_MEDIA_TYPE for entry in written["manifests"]), (
             "the new signature entry must be appended beside it"
         )
+
+
+class Paged(FakeRegistry):
+    """Serves a tag listing in pages linked by ``Link`` headers, the way the distribution spec does."""
+
+    def __init__(self, pages: list[list[str]], *, loop: bool = False) -> None:
+        super().__init__()
+        self.pages = pages
+        self.loop = loop
+
+    def do_request(self, url: str, method: str = "GET", **kwargs: Any) -> FakeResponse:
+        if "/tags/list" not in url:
+            return super().do_request(url, method, **kwargs)
+        self.requests.append(f"{method} {url}")
+        if not self.pages:
+            return FakeResponse(b'{"errors":[{"code":"NAME_UNKNOWN"}]}', status_code=404, reason="Not Found")
+        index = int(url.rsplit("page=", 1)[1]) if "page=" in url else 0
+        response = FakeResponse(
+            json.dumps({"name": "org/brain", "tags": self.pages[index]}).encode(), status_code=200, reason="OK"
+        )
+        if self.loop or index + 1 < len(self.pages):
+            following = index if self.loop else index + 1
+            response.headers["Link"] = f'</v2/org/brain/tags/list?n=1000&page={following}>; rel="next"'
+        return response
+
+
+class TestTagListing:
+    """A published branch is discoverable only if a client can list the repository's tags."""
+
+    async def test_every_page_is_followed(self) -> None:
+        fake = Paged([["latest", "br.ana.x"], ["v1"], ["br.beto.y"]])
+        client = OrasRegistryClient(registry=fake)
+        assert await client.list_tags(REFERENCE) == ["latest", "br.ana.x", "v1", "br.beto.y"]
+        assert fake.requests[1] == "GET https://registry.example/v2/org/brain/tags/list?n=1000&page=1"
+
+    async def test_an_unknown_repository_is_reported_as_absent(self) -> None:
+        with pytest.raises(ReferenceNotFoundError):
+            await OrasRegistryClient(registry=Paged([])).list_tags(REFERENCE)
+
+    async def test_a_listing_that_never_ends_is_refused(self) -> None:
+        with pytest.raises(DistributionError, match="did not end"):
+            await OrasRegistryClient(registry=Paged([["latest"]], loop=True)).list_tags(REFERENCE)
+
+    async def test_a_listing_without_tags_is_empty(self) -> None:
+        fake = Paged([[]])
+        fake.pages = [[]]
+        assert await OrasRegistryClient(registry=fake).list_tags(REFERENCE) == []
+
+    def test_the_client_satisfies_the_tag_surface(self) -> None:
+        from boltzmann.distribution.registry import RegistryTags
+
+        assert isinstance(OrasRegistryClient(registry=FakeRegistry()), RegistryTags)

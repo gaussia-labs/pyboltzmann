@@ -17,7 +17,7 @@ The surface is split because *read* and *extend* are separable, and most consume
 Catalog browsing belongs to :class:`BrainReader`; catalog classification belongs to
 :class:`BrainWriter`, matching the operation table in paper Section 6.7.
 * :class:`BrainRetention` -- drop, supersede, prune, redact.
-* :class:`BrainDistribution` -- pack, push, pull, fetch.
+* :class:`BrainDistribution` -- pack, push, pull, fetch, and branches.
 * :class:`BrainReconciliation` -- merge, rebase, squash, and resolving what did not apply.
 * :class:`BrainAuthenticity` -- sign, authenticate, pin, rotate, revoke.
 * :class:`BoltzmannProtocol` -- all six contracts, for an implementation that offers everything.
@@ -33,7 +33,7 @@ through :class:`~boltzmann.ingest.proposer.CandidateProposer`.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 from boltzmann.authenticity.authenticator import AuthenticationReport
 from boltzmann.authenticity.governance import RotationPlan, RotationResult
@@ -67,7 +67,7 @@ from boltzmann.module.module import Module
 from boltzmann.module.snapshot import Snapshot
 from boltzmann.query.evidence import EvidenceBundle
 from boltzmann.query.request import Query
-from boltzmann.reconcile.requests import ReconcilePlan, ReconcileRequest, ReconcileResult
+from boltzmann.reconcile.requests import ReconcilePlan, ReconcileRequest, ReconcileResult, ReconcileStrategy
 from boltzmann.reconcile.resolution import ReconcileStatus, ResolutionKind
 from boltzmann.retention.requests import (
     DropRequest,
@@ -78,6 +78,9 @@ from boltzmann.retention.requests import (
     ResolvabilityReport,
     SupersessionResult,
 )
+
+if TYPE_CHECKING:
+    from boltzmann.brain import BranchInfo, JoinResult
 
 
 @runtime_checkable
@@ -525,6 +528,94 @@ class BrainDistribution(Protocol):
 
         Returns:
             FetchResult: The remote head, its digest, and what it holds that the local brain does not.
+        """
+        ...
+
+    def current_branch(self) -> str:
+        """The branch whose head is the current snapshot; ``main`` for a brain with no ref table."""
+        ...
+
+    def branches(self) -> list[BranchInfo]:
+        """
+        Every branch this brain holds (paper Section 7.5).
+
+        Returns:
+            list[BranchInfo]: One entry per branch, the current one first.
+        """
+        ...
+
+    def create_branch(self, name: str, at: OciDigest | str | None = None, *, checkout: bool = False) -> BranchInfo:
+        """
+        Name a snapshot as the head of a new branch, which publishes to ``br.`` and its name.
+
+        Args:
+            name (str): The new branch.
+            at (OciDigest | str | None): Another branch, a held snapshot, or the current one.
+            checkout (bool): Make it current straight away.
+
+        Returns:
+            BranchInfo: The new branch.
+        """
+        ...
+
+    def checkout(self, name: str) -> Snapshot:
+        """
+        Make another branch current, recording the current head under its own branch first.
+
+        A conforming implementation must write the ref before moving the head pointer, and must refuse
+        while a reconciliation is open.
+
+        Args:
+            name (str): The branch to make current.
+
+        Returns:
+            Snapshot: The now-current snapshot.
+        """
+        ...
+
+    def delete_branch(self, name: str, *, force: bool = False) -> None:
+        """
+        Remove a branch's ref, refusing the current branch and, unless forced, the only name for work.
+
+        Args:
+            name (str): The branch to delete.
+            force (bool): Delete a head no other branch contains and nobody published.
+        """
+        ...
+
+    def join(
+        self,
+        name: str,
+        strategy: ReconcileStrategy | None = None,
+        reason: str | None = None,
+        *,
+        fast_forward: Literal["auto", "only", "never"] = "auto",
+    ) -> JoinResult:
+        """
+        Bring another branch into the current one: nothing, a fast-forward, or a reconciliation.
+
+        Args:
+            name (str): The branch to join in.
+            strategy (ReconcileStrategy | None): How to record a reconciliation, if one is needed.
+            reason (str | None): Why, recorded with a reconciliation.
+            fast_forward (Literal["auto", "only", "never"]): Whether a fast-forward is allowed, required,
+                or refused.
+
+        Returns:
+            JoinResult: What happened.
+        """
+        ...
+
+    async def remote_branches(self, client: RegistryClient, reference: str | None = None) -> dict[str, str]:
+        """
+        The branches a repository publishes, read off its tags.
+
+        Args:
+            client (RegistryClient): A transport that can also list tags.
+            reference (str | None): Repository reference.
+
+        Returns:
+            dict[str, str]: Branch name to tag.
         """
         ...
 
