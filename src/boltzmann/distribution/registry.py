@@ -211,3 +211,30 @@ class RegistryReferrers(Protocol):
             SignatureManifest: The parsed manifest.
         """
         ...
+
+
+@runtime_checkable
+class RegistryTags(Protocol):
+    """
+    The optional tag-listing surface: which tags a repository publishes.
+
+    What makes a published branch discoverable (paper Section 7.5): a client lists the repository and
+    reads every ``br.`` tag as a branch. Separate from :class:`RegistryClient` for the reason
+    :class:`RegistryReferrers` is: a transport written before branches stays conforming, and simply
+    cannot list them.
+    """
+
+    async def list_tags(self, reference: str) -> list[str]:
+        """
+        List the tags a repository publishes.
+
+        Args:
+            reference (str): Repository reference.
+
+        Returns:
+            list[str]: Every tag, in the order the registry reported them.
+
+        Raises:
+            ReferenceNotFoundError: If the repository is not published at all.
+        """
+        ...

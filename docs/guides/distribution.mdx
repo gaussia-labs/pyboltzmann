@@ -88,6 +88,64 @@ receive; it may still publish the partial view under a different repository or t
   Pass `force=True` only when you mean to replace the remote.
 </Warning>
 
+### A push checks its tag again after it lands
+
+The divergence check and the write are two requests, and OCI has no conditional write on a tag, so a second
+publisher can land in between. After writing, `push` re-reads the tag:
+
+| The tag now names | Outcome |
+| --- | --- |
+| The snapshot just published | Success |
+| An ancestor of it | The registry has not served the write yet. Retried, then logged as `PUBLISH_UNCONFIRMED` |
+| Anything else | `LostPublishError`: another publish replaced this one |
+
+`LostPublishError` carries `published` and `observed`. Nothing was lost locally, and the remedy is the one
+for divergence: fetch, reconcile, push again. This detects the race; it cannot prevent it, and only the
+publisher that lost can see it.
+
+## Branches: a tag per line of work
+
+Several writers on one tag serialize on the divergence check: every push after the first is refused until
+its writer reconciles. A branch gives each line of work its own tag, and moves reconciliation to the moment
+you choose to join one line into another (paper Section 7.5).
+
+```python
+brain.create_branch("ana/nyquist", checkout=True)
+# ... ingest, commit ...
+await brain.push(registry)              # -> ghcr.io/org/brain:br.ana.nyquist
+
+brain.checkout("main")
+result = brain.join("ana/nyquist")       # fast-forward when main has not moved
+await brain.push(registry)              # -> ghcr.io/org/brain:latest
+```
+
+| Branch | Publishes to |
+| --- | --- |
+| `main` (the default) | `latest` |
+| `ana/nyquist` | `br.ana.nyquist` |
+
+- **Names** are segments of letters, digits, `_` and `-`, separated by `/`. There are no dots, so the mapping
+  is reversible and any client listing the repository reads a `br.` tag as a branch. The prefix is fixed by
+  the protocol.
+- **`push` and `pull` default to the current branch's tag.** An explicit tag, such as a release `v1.0`,
+  overrides the default without renaming the branch.
+- **Pulling another branch's tag installs into that branch** and makes it current. The current head is
+  recorded under its own branch first, so unpublished work is never overwritten.
+- **`checkout`** records the current head and origin, then moves to the other branch's head. It is refused
+  while a reconciliation is open.
+- **`join`** does nothing when the branch is already contained, and fast-forwards when the current head is
+  an ancestor of it. Otherwise it is a reconciliation, so it needs a `strategy`.
+  `fast_forward="only"` refuses that case, and `fast_forward="never"` always records one.
+- **`delete_branch`** refuses the current branch. Without `force=True`, it also refuses a head that no
+  other branch contains and that was never published.
+- **`remote_branches(registry)`** lists the branches a repository publishes. It needs a transport that also
+  satisfies `RegistryTags`, as `OrasRegistryClient` and `LocalLayoutRegistry` do.
+
+Branch heads are retained roots. A prune never reclaims them, however many commits land elsewhere. They
+are kept in the head pointer's `retained` list beyond the `retained_roots` bound, so a client that predates
+branches does not reclaim them either. Deleting a published branch from the registry is out of scope: OCI
+deletes manifests by digest, and a branch can share its manifest with another tag.
+
 ### Tags move; digests do not
 
 A tag is a pointer, like a git branch. Pushing to `v1` repeatedly moves it. Your local history keeps every

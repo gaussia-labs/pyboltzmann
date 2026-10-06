@@ -1,6 +1,38 @@
 # CHANGELOG
 
 
+## v0.10.0-b.1 (2026-10-06)
+
+### Features
+
+- **brain**: Add branches that each publish to a tag of their own
+  ([`4d205c6`](https://github.com/gaussia-labs/pyboltzmann/commit/4d205c62209da9379c0299aa0cc3ac297d850389))
+
+Writers sharing one tag serialize on the divergence check: every push after the first is refused
+  until its writer reconciles. A branch is a named pointer kept in a new refs pointer beside head,
+  publishing to br.<name> (main to latest), so writers on different branches never refuse each other
+  (paper Section 7.5).
+
+The refs live beside head rather than in BrainState, so an older SDK still reads the head pointer.
+  Branch heads are pinned in retained outside the retained_roots bound, so an older client that
+  prunes from retained alone keeps them too. checkout writes the ref before moving the head and
+  repairs an interrupted switch on the next read. join fast-forwards or delegates to reconcile with
+  no default strategy.
+
+push now re-reads its tag and raises LostPublishError when another publish replaced it (paper
+  Section 7.4): OCI has no conditional write, so the race can be detected but not prevented. pull
+  now refuses while a reconciliation is open, since it would move the head the open reconciliation
+  is stated against.
+
+- **distribution**: List the tags a repository publishes
+  ([`648e65f`](https://github.com/gaussia-labs/pyboltzmann/commit/648e65f7813588ccfaabbcf6efd33cbf46cea420))
+
+A published branch is discoverable only if a client can list the repository. RegistryTags is a
+  separate optional protocol, like RegistryReferrers, so a transport written before branches stays
+  conforming. The ORAS client follows Link pagination with a page cap, since the header is remote
+  input.
+
+
 ## v0.9.1 (2026-09-07)
 
 

@@ -79,7 +79,8 @@ from boltzmann.blocks import (
     Step,
     require_media_type,
 )
-from boltzmann.brain import Brain, BrainState
+from boltzmann.brain import Brain, BrainState, BranchInfo, JoinResult
+from boltzmann.branches import DEFAULT_BRANCH, branch_for_tag, tag_for, validate_branch_name
 from boltzmann.catalog import (
     Catalog,
     CatalogBrowseResult,
@@ -155,7 +156,7 @@ from boltzmann.retention import (
 )
 from boltzmann.store import BlockStore, MemoryBlockStore, OciLayoutStore
 
-__version__ = "0.9.1"
+__version__ = "0.10.0-b.1"
 
 __all__ = [
     "Actor",
@@ -180,6 +181,12 @@ __all__ = [
     "BrainReconciliation",
     "BrainRetention",
     "BrainState",
+    "BranchInfo",
+    "DEFAULT_BRANCH",
+    "JoinResult",
+    "branch_for_tag",
+    "tag_for",
+    "validate_branch_name",
     "BrainWriter",
     "Candidate",
     "CandidateProposer",

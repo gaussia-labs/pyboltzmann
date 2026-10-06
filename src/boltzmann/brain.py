@@ -24,13 +24,14 @@ still current. There is no state in which a root names a block the store does no
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -126,15 +127,20 @@ from boltzmann.distribution.media_types import (
 )
 from boltzmann.distribution.registry import FetchResult, InstallPlan, RegistryClient, RegistryReferrers
 from boltzmann.distribution.projection import Projection
+from boltzmann.branches import DEFAULT_BRANCH, DEFAULT_TAG, branch_for_tag, tag_for, validate_branch_name
 from boltzmann.exceptions import (
     AuthenticityError,
     BlockError,
     BlockNotFoundError,
+    BranchError,
+    BranchExistsError,
+    BranchNotFoundError,
     DistributionError,
     DivergenceError,
     GovernanceConflictError,
     IdentityError,
     InsufficientScopeError,
+    LostPublishError,
     NoCommonAncestorError,
     ProtocolError,
     QueryError,
@@ -149,6 +155,7 @@ from boltzmann.exceptions import (
     SnapshotError,
     TrustRootMismatchError,
     UnauthorizedKeyError,
+    UnmergedBranchError,
     UnsignedBrainError,
 )
 from boltzmann.identity.digest import BlockId, Digest, MerkleRoot, OciDigest
@@ -234,6 +241,12 @@ A validation record must name at least one check, because a verdict under an uns
 not something a consumer can act on. A report assembled by hand, or by an older SDK, has no set to
 name -- so the record says so in the one way that cannot be mistaken for a check that ran.
 """
+
+PUBLISH_CONFIRM_ATTEMPTS = 3
+"""How many times a publish re-reads its tag before calling an ancestor answer unconfirmed."""
+
+PUBLISH_CONFIRM_DELAY = 0.2
+"""Seconds before the first re-read of a tag that still serves an ancestor; later reads wait longer."""
 
 MAX_MERGED_PER_CALL = 4096
 """Ceiling on signature records merged from one referrers listing.
@@ -370,6 +383,102 @@ class BrainState(BaseModel):
     snapshot: OciDigest
     retained: list[OciDigest] = Field(default_factory=list)
     origin: Origin | None = None
+
+
+REFS_POINTER = "refs"
+"""Name of the pointer holding the brain's named branches (paper Section 7.5).
+
+Kept beside ``head`` rather than inside it, so that a client which knows nothing of branches still reads
+the head pointer it always read. What protects such a client's prune from reclaiming branch heads is that
+every head is also kept in ``retained``.
+"""
+
+
+class BranchRef(BaseModel):
+    """
+    One named branch: where its head is, and where it publishes.
+
+    For the current branch, the head pointer is the truth and ``snapshot`` and ``origin`` here are only
+    what they were when the branch was last left. A commit moves the head pointer and touches no ref.
+
+    Attributes:
+        snapshot (OciDigest): The branch head, as of the last time it was not current.
+        tag (str): The tag the branch publishes to.
+        reference (str | None): The repository it publishes to, when one is known.
+        origin (Origin | None): The branch's own origin, recorded when it stopped being current.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    snapshot: OciDigest
+    tag: str = Field(min_length=1)
+    reference: str | None = None
+    origin: Origin | None = None
+
+
+class RefTable(BaseModel):
+    """
+    The brain's branches, and which one is current.
+
+    Attributes:
+        boltzmann (int): Protocol version that wrote this pointer.
+        current (str): The branch whose head is the head pointer.
+        branches (dict[str, BranchRef]): Every branch, the current one included.
+        switching (str | None): The branch a checkout was moving to when it was interrupted. A checkout
+            writes this before it moves the head pointer, so reopening can tell a finished switch from
+            one that never moved anything.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    boltzmann: int = PROTOCOL_VERSION
+    current: str = DEFAULT_BRANCH
+    branches: dict[str, BranchRef] = Field(default_factory=dict)
+    switching: str | None = None
+
+
+class BranchInfo(BaseModel):
+    """
+    One branch, as :meth:`Brain.branches` reports it.
+
+    Attributes:
+        name (str): The branch.
+        tag (str): The tag it publishes to.
+        snapshot (OciDigest): Its head.
+        current (bool): Whether it is the current branch.
+        reference (str | None): The repository it publishes to, when one is known.
+        published (OciDigest | None): The snapshot its tag was at when this brain last pushed or pulled
+            it, or ``None`` if it never has been.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    tag: str
+    snapshot: OciDigest
+    current: bool
+    reference: str | None = None
+    published: OciDigest | None = None
+
+
+class JoinResult(BaseModel):
+    """
+    What joining one branch into the current one did.
+
+    Attributes:
+        branch (str): The branch that was joined.
+        outcome (str): ``up-to-date`` when its head was already contained, ``fast-forward`` when the current
+            head moved to it without writing a snapshot, ``reconciled`` when the histories had diverged.
+        snapshot (OciDigest): The current head afterwards.
+        reconciliation (ReconcileResult | None): The reconciliation, when one ran.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+
+    branch: str
+    outcome: Literal["up-to-date", "fast-forward", "reconciled"]
+    snapshot: OciDigest
+    reconciliation: ReconcileResult | None = None
 
 
 class Brain:
@@ -629,21 +738,414 @@ class Brain:
         can resolve -- which is the guarantee that only merge keeps the other side's snapshots.
         """
         digest = self.store.put_bytes(snapshot.canonical_bytes())
-        retained = [digest, *retain, *(self._state.retained if self._state else [])]
-        deduplicated: list[OciDigest] = []
-        for candidate in retained:
-            if candidate not in deduplicated:
-                deduplicated.append(candidate)
-        state = BrainState(
-            snapshot=digest,
-            retained=deduplicated[: self.policy.retained_roots],
+        self._write_head(
+            digest,
             origin=origin if origin is not None else (self._state.origin if self._state else None),
+            retain=retain,
         )
-        self.store.write_pointer(HEAD_POINTER, canonicalize(state.model_dump(mode="json", exclude_none=True)))
-        self._state = state
         self._snapshot = snapshot
         self._modules.clear()
         return snapshot
+
+    def _write_head(self, digest: OciDigest, origin: Origin | None, retain: Iterable[OciDigest] = ()) -> None:
+        """Move the head pointer, keeping the retained set and every branch head in it.
+
+        Branch heads sit outside the retained bound (paper Section 7.5): a branch left alone while ten
+        commits land elsewhere would otherwise fall out of the set and be reclaimed while its name still
+        pointed at it. They are kept *in* the set, not only beside it, so that a client which reads no refs
+        and prunes from ``retained`` alone keeps them too.
+        """
+        pinned = self._branch_heads()
+        candidates = [digest, *retain, *(self._state.retained if self._state else [])]
+        bounded: list[OciDigest] = []
+        for candidate in candidates:
+            if candidate in bounded or (candidate in pinned and candidate != digest):
+                continue
+            bounded.append(candidate)
+        bounded = bounded[: self.policy.retained_roots]
+        retained = [*bounded, *(head for head in dict.fromkeys(pinned) if head not in bounded)]
+        state = BrainState(snapshot=digest, retained=retained, origin=origin)
+        self.store.write_pointer(HEAD_POINTER, canonicalize(state.model_dump(mode="json", exclude_none=True)))
+        self._state = state
+
+    # --- Branches -------------------------------------------------------------
+
+    def _read_refs(self, *, repair: bool = True) -> RefTable | None:
+        """The ref table as stored, finishing or undoing a checkout that was interrupted."""
+        raw = self.store.read_pointer(REFS_POINTER)
+        if not raw:
+            return None
+        table = RefTable.model_validate(parse_json_strict(raw))
+        if table.switching is None or not repair:
+            return table
+        # A checkout writes ``switching`` before it moves the head pointer and clears it after. If the head
+        # already names the target's snapshot the move happened and only the bookkeeping is missing;
+        # otherwise nothing moved, and the switch is abandoned. Both heads were recorded first, so neither
+        # outcome loses one.
+        target = table.branches.get(table.switching)
+        head = self._state.snapshot if self._state else None
+        if target is not None and head == target.snapshot:
+            repaired = table.model_copy(update={"current": table.switching, "switching": None})
+        else:
+            repaired = table.model_copy(update={"switching": None})
+        self._write_refs(repaired)
+        return repaired
+
+    def _write_refs(self, table: RefTable) -> None:
+        self.store.write_pointer(REFS_POINTER, canonicalize(table.model_dump(mode="json", exclude_none=True)))
+
+    def _refs(self) -> RefTable:
+        """The ref table, or the one-branch table a brain without refs implicitly has."""
+        stored = self._read_refs()
+        if stored is not None:
+            return stored
+        if self._state is None:
+            raise BranchError("this brain has no snapshot yet, so it has no branch to work from")
+        origin = self._state.origin
+        main = BranchRef(
+            snapshot=self._state.snapshot,
+            tag=origin.tag if origin is not None else DEFAULT_TAG,
+            reference=origin.reference if origin is not None else None,
+        )
+        return RefTable(current=DEFAULT_BRANCH, branches={DEFAULT_BRANCH: main})
+
+    def _branch_heads(self) -> list[OciDigest]:
+        """Every snapshot a ref names.
+
+        The current branch's entry is included even though the head pointer supersedes it: during a
+        checkout it is the only record of the head being left, and pinning one snapshot too many costs
+        nothing a prune would miss.
+        """
+        raw = self.store.read_pointer(REFS_POINTER)
+        if not raw:
+            return []
+        table = RefTable.model_validate(parse_json_strict(raw))
+        return [ref.snapshot for ref in table.branches.values()]
+
+    def _recorded(self, table: RefTable) -> RefTable:
+        """The table with the current branch's ref brought up to the head pointer."""
+        if self._state is None:
+            return table
+        current = table.branches.get(table.current)
+        origin = self._state.origin
+        if current is None:
+            current = BranchRef(snapshot=self._state.snapshot, tag=tag_for(table.current))
+        updated = current.model_copy(
+            update={
+                "snapshot": self._state.snapshot,
+                "origin": origin,
+                "reference": origin.reference if origin is not None else current.reference,
+            }
+        )
+        return table.model_copy(update={"branches": {**table.branches, table.current: updated}})
+
+    def _reachable_from(self, digest: OciDigest) -> set[OciDigest]:
+        """Every snapshot reachable from one, through any parent, as far as the store resolves."""
+        seen = {digest}
+        frontier = [digest]
+        while frontier:
+            current = frontier.pop()
+            if not self.store.is_resolvable(current):
+                continue
+            for parent in Snapshot.from_document(self.store.get_bytes(current)).parents:
+                if parent not in seen:
+                    seen.add(parent)
+                    frontier.append(parent)
+        return seen
+
+    def current_branch(self) -> str:
+        """
+        The branch whose head is the current snapshot.
+
+        Returns:
+            str: Its name. ``main`` for a brain that never created a branch.
+        """
+        stored = self._read_refs()
+        return stored.current if stored is not None else DEFAULT_BRANCH
+
+    def branches(self) -> list[BranchInfo]:
+        """
+        Every branch this brain holds, the current one first.
+
+        Returns:
+            list[BranchInfo]: One entry per branch. A brain that never created a branch reports ``main``
+            alone, or nothing if it has no snapshot yet.
+        """
+        if self._state is None:
+            return []
+        table = self._recorded(self._refs())
+        reported = []
+        for name, ref in table.branches.items():
+            reported.append(
+                BranchInfo(
+                    name=name,
+                    tag=ref.tag,
+                    snapshot=ref.snapshot,
+                    current=name == table.current,
+                    reference=ref.reference,
+                    published=ref.origin.snapshot if ref.origin is not None else None,
+                )
+            )
+        reported.sort(key=lambda info: (not info.current, info.name))
+        return reported
+
+    async def remote_branches(self, client: RegistryClient, reference: str | None = None) -> dict[str, str]:
+        """
+        The branches a repository publishes, read off its tags.
+
+        Args:
+            client (RegistryClient): The transport. It must also list tags
+                (:class:`~boltzmann.distribution.registry.RegistryTags`).
+            reference (str | None): Repository reference. Defaults to where the current branch publishes.
+
+        Returns:
+            dict[str, str]: Branch name to tag, for every tag that names a branch. Release tags are left out.
+
+        Raises:
+            DistributionError: If the transport cannot list tags, or no repository is known.
+            ReferenceNotFoundError: If the repository is not published at all.
+        """
+        from boltzmann.distribution.registry import RegistryTags
+
+        if not isinstance(client, RegistryTags):
+            raise DistributionError(f"{type(client).__name__} cannot list tags, so it cannot discover branches")
+        target = reference
+        if target is None:
+            with suppress(DistributionError):
+                target = self._push_target(None, DEFAULT_TAG)[0]
+        if target is None:
+            raise DistributionError("no repository to list: pass a reference")
+        table = self._read_refs()
+        default_tag = table.branches[DEFAULT_BRANCH].tag if table and DEFAULT_BRANCH in table.branches else DEFAULT_TAG
+        found: dict[str, str] = {}
+        for tag in await client.list_tags(target):
+            name = branch_for_tag(tag, default_tag)
+            if name is not None:
+                found[name] = tag
+        return dict(sorted(found.items()))
+
+    def create_branch(
+        self,
+        name: str,
+        at: OciDigest | str | None = None,
+        *,
+        checkout: bool = False,
+    ) -> BranchInfo:
+        """
+        Name a snapshot as the head of a new branch.
+
+        The branch publishes to its own tag (``br.`` and its name), to the repository the current branch
+        publishes to. Nothing is published by creating it.
+
+        Args:
+            name (str): The new branch.
+            at (OciDigest | str | None): Where it starts: another branch's name, a snapshot this brain
+                holds, or ``None`` for the current snapshot.
+            checkout (bool): Make it current straight away.
+
+        Returns:
+            BranchInfo: The new branch.
+
+        Raises:
+            InvalidBranchNameError: If the name violates the grammar.
+            BranchExistsError: If a branch of that name is already held.
+            BranchNotFoundError: If ``at`` names a branch this brain does not hold.
+            SnapshotError: If ``at`` names a snapshot this brain does not hold.
+        """
+        validate_branch_name(name)
+        table = self._recorded(self._refs())
+        if name in table.branches:
+            raise BranchExistsError(f"a branch named {name!r} already exists")
+        assert self._state is not None  # ``_refs`` refused a brain without a snapshot.
+        start = self._start_of(table, at)
+        current = table.branches[table.current]
+        ref = BranchRef(snapshot=start, tag=tag_for(name), reference=current.reference)
+        self._write_refs(table.model_copy(update={"branches": {**table.branches, name: ref}}))
+        # Retained from the moment it is named, not from the next commit: a prune in between would
+        # otherwise be free to reclaim a start point taken from old history.
+        self._write_head(self._state.snapshot, origin=self._state.origin)
+        if checkout:
+            self.checkout(name)
+        return next(info for info in self.branches() if info.name == name)
+
+    def _start_of(self, table: RefTable, at: OciDigest | str | None) -> OciDigest:
+        assert self._state is not None
+        if at is None:
+            return self._state.snapshot
+        if isinstance(at, str) and not at.startswith("sha256:"):
+            if at not in table.branches:
+                raise BranchNotFoundError(f"no branch named {at!r} to start from")
+            return table.branches[at].snapshot
+        digest = at if isinstance(at, OciDigest) else OciDigest.parse(at)
+        if not self.store.is_resolvable(digest):
+            raise SnapshotError(f"snapshot {digest.short} is not held by this brain")
+        Snapshot.from_document(self.store.get_bytes(digest))
+        return digest
+
+    def checkout(self, name: str) -> Snapshot:
+        """
+        Make another branch current.
+
+        The current head and origin are recorded under the current branch first, then the head pointer
+        moves to the other branch's head and takes its origin. Indices are rebuilt for the version now
+        installed.
+
+        Args:
+            name (str): The branch to make current.
+
+        Returns:
+            Snapshot: The now-current snapshot.
+
+        Raises:
+            BranchNotFoundError: If no branch of that name is held.
+            ReconciliationHaltedError: If a reconciliation is open; it is stated against the current head.
+        """
+        self._require_no_reconciliation(f"check out {name!r}")
+        table = self._recorded(self._refs())
+        if name == table.current:
+            return self._snapshot
+        target = table.branches.get(name)
+        if target is None:
+            raise BranchNotFoundError(f"no branch named {name!r}; create it first")
+        # Ref first, pointer second, bookkeeping last -- the order a commit uses, for the same reason.
+        self._write_refs(table.model_copy(update={"switching": name}))
+        self._write_head(target.snapshot, origin=target.origin)
+        self._write_refs(table.model_copy(update={"current": name, "switching": None}))
+        self._installed_changed(Snapshot.from_document(self.store.get_bytes(target.snapshot)))
+        return self._snapshot
+
+    def _installed_changed(self, snapshot: Snapshot) -> None:
+        """Refresh everything derived from the installed version after the head moved without a commit."""
+        self._snapshot = snapshot
+        self._modules.clear()
+        self._authorship_cache = None
+        self._vouched.clear()
+        self.rebuild_indices()
+        # A travelling index cannot be regenerated by a reader, but the snapshot names the exact payload it
+        # was built for, so it is reloaded from there. Where the snapshot binds none, this client's own
+        # engine builds one over the new composition, which is what a commit would have done.
+        for memory_type, indices in self.indices.items():
+            travelling = [index for index in indices if not index.rebuildable]
+            reference = snapshot.modules.get(memory_type)
+            if not travelling or reference is None:
+                continue
+            layer = self._pack_index(memory_type, reference)
+            if layer is not None:
+                self._load_index(memory_type, layer)
+            else:
+                self._build(self.module(memory_type), travelling)
+
+    def delete_branch(self, name: str, *, force: bool = False) -> None:
+        """
+        Remove a branch's ref. The snapshots stay until a prune finds nothing else naming them.
+
+        Args:
+            name (str): The branch to delete.
+            force (bool): Delete it even when its head is the only name for that work.
+
+        Raises:
+            BranchNotFoundError: If no branch of that name is held.
+            BranchError: If it is the current branch.
+            UnmergedBranchError: If no other branch contains its head, it was never published, and
+                ``force`` is not set.
+        """
+        table = self._recorded(self._refs())
+        ref = table.branches.get(name)
+        if ref is None:
+            raise BranchNotFoundError(f"no branch named {name!r}")
+        if name == table.current:
+            raise BranchError(f"{name!r} is the current branch; check out another one before deleting it")
+        if not force:
+            published = ref.origin is not None and ref.snapshot in self._reachable_from(ref.origin.snapshot)
+            contained = any(
+                ref.snapshot in self._reachable_from(other.snapshot)
+                for other_name, other in table.branches.items()
+                if other_name != name
+            )
+            if not (published or contained):
+                raise UnmergedBranchError(
+                    f"{name!r} is at {ref.snapshot.short}, which no other branch contains and which was never "
+                    f"published; join it first, or pass force=True to delete it anyway"
+                )
+        remaining = {other: other_ref for other, other_ref in table.branches.items() if other != name}
+        self._write_refs(table.model_copy(update={"branches": remaining}))
+        # Rewritten so the deleted head is no longer pinned outside the bound; it stays only while it is
+        # among the recent snapshots the bound keeps anyway.
+        assert self._state is not None
+        self._write_head(self._state.snapshot, origin=self._state.origin)
+
+    def join(
+        self,
+        name: str,
+        strategy: ReconcileStrategy | None = None,
+        reason: str | None = None,
+        *,
+        fast_forward: Literal["auto", "only", "never"] = "auto",
+        validators: Sequence[Validator] | None = None,
+    ) -> JoinResult:
+        """
+        Bring another branch into the current one.
+
+        Nothing is joined when the other head is already contained. When the current head is an ancestor of
+        it, the head pointer moves there and no snapshot is written. Otherwise the two diverged, and the
+        join is a reconciliation against the other branch's head, recorded the way ``strategy`` says.
+
+        Args:
+            name (str): The branch to join in.
+            strategy (ReconcileStrategy | None): How to record a reconciliation, if one is needed. There is
+                no default, for the reason :meth:`reconcile` gives.
+            reason (str | None): Why, recorded with a reconciliation.
+            fast_forward (Literal["auto", "only", "never"]): ``only`` refuses anything but a
+                fast-forward; ``never`` records a reconciliation even where a fast-forward was possible.
+            validators (Sequence[Validator] | None): Checks for incoming derived blocks.
+
+        Returns:
+            JoinResult: What happened.
+
+        Raises:
+            BranchNotFoundError: If no branch of that name is held.
+            BranchError: If ``name`` is the current branch, a reconciliation is needed and no strategy was
+                given, or ``fast_forward="only"`` and the histories diverged.
+            ReconciliationHaltedError: If the reconciliation did not apply cleanly; it stays open.
+        """
+        self._require_no_reconciliation(f"join {name!r}")
+        table = self._recorded(self._refs())
+        if name == table.current:
+            raise BranchError(f"{name!r} is the current branch; there is nothing to join")
+        ref = table.branches.get(name)
+        if ref is None:
+            raise BranchNotFoundError(f"no branch named {name!r}")
+        assert self._state is not None
+        theirs = ref.snapshot
+        if theirs in self.reachable_history():
+            return JoinResult(branch=name, outcome="up-to-date", snapshot=self._state.snapshot)
+
+        ahead = self._state.snapshot in self._reachable_from(theirs)
+        if ahead and fast_forward != "never":
+            self._write_head(theirs, origin=self._state.origin)
+            self._installed_changed(Snapshot.from_document(self.store.get_bytes(theirs)))
+            return JoinResult(branch=name, outcome="fast-forward", snapshot=theirs)
+        if fast_forward == "only":
+            raise BranchError(
+                f"{table.current!r} and {name!r} diverged, so they cannot be joined by fast-forward; "
+                f"choose a reconciliation strategy"
+            )
+        if strategy is None:
+            raise BranchError(
+                f"{table.current!r} and {name!r} diverged; joining them is a reconciliation, and choosing "
+                f"merge, rebase, or squash decides who stays on record as author"
+            )
+        result = self.reconcile(
+            ReconcileRequest(
+                theirs=theirs,
+                strategy=strategy,
+                actor=self.actor,
+                reason=reason or f"join branch {name}",
+            ),
+            validators,
+        )
+        assert self._state is not None
+        return JoinResult(branch=name, outcome="reconciled", snapshot=self._state.snapshot, reconciliation=result)
 
     # --- Reconciliation in progress -------------------------------------------
 
@@ -2633,6 +3135,12 @@ class Brain:
             PruneReport: What was reachable and what was reclaimed.
         """
         retained = self.history()
+        # Branch heads are roots in their own right (paper Section 7.5). They are normally in ``retained``
+        # already; this covers a set that a client unaware of branches truncated past them.
+        held = {snapshot.digest for snapshot in retained}
+        for head in dict.fromkeys(self._branch_heads()):
+            if head not in held and self.store.is_resolvable(head):
+                retained.append(Snapshot.from_document(self.store.get_bytes(head)))
         # A layout has two kinds of root: the snapshots it retains, and the tags it publishes. The second
         # names the manifest and the packed layers, which no snapshot mentions -- so without it, packing an
         # artifact and then pruning leaves index.json pointing at bytes that are gone.
@@ -4462,18 +4970,24 @@ class Brain:
             RollbackError: If the served head is a strict ancestor of the local head and
                 ``allow_rollback`` is false.
         """
+        # An open reconciliation is stated against the current head, and a pull would move it.
+        self._require_no_reconciliation(f"pull {reference}:{tag}")
         await self._require_pin_holds(client, reference, tag)
         manifest, resolved, references, _ = await self._retrieve(client, reference, tag, modules)
         source = resolved.source
+        branch, held = self._pull_destination(tag)
         self._guard_pull_rollback(
             source,
             reference=reference,
             tag=tag,
             allow=allow_rollback,
+            held=held,
         )
         await self._merge_signatures(client, reference, manifest)
         self._apply_verification_policy(source, verification, reference=reference)
         wanted = [reference_.memory_type for reference_ in references]
+        if branch is not None:
+            self._begin_switch(branch, reference=reference, tag=tag)
 
         for memory_type in wanted:
             # The one derived structure a model-agnostic client cannot rebuild, so it travels.
@@ -4511,6 +5025,8 @@ class Brain:
             partial=resolved.is_projection or not complete,
         )
         advanced = self._advance(installed, origin=origin)
+        if branch is not None:
+            self._finish_switch(branch)
 
         # Record the artifact in the layout, the way ``pack`` does. Without it, everything the manifest
         # knows is lost when this process ends -- and the one thing only the manifest knows is where the
@@ -4525,6 +5041,56 @@ class Brain:
         self.rebuild_indices(wanted)
         return advanced
 
+    def _pull_destination(self, tag: str) -> tuple[str | None, Snapshot | None]:
+        """Which branch a pull installs into, and the head that branch holds now (paper Section 7.5).
+
+        Returns ``(None, current head)`` when the pull installs into the current branch, as every pull did
+        before branches: a release tag names no branch, and neither does any tag of a brain with no
+        snapshot yet unless it names a non-default branch. Otherwise the branch to switch to, and its head
+        if this brain already holds one -- which is what the rollback check compares against, since the
+        current head belongs to a different line of work.
+        """
+        table = self._read_refs()
+        default_tag = table.branches[DEFAULT_BRANCH].tag if table and DEFAULT_BRANCH in table.branches else DEFAULT_TAG
+        name = branch_for_tag(tag, default_tag)
+        current = table.current if table is not None else DEFAULT_BRANCH
+        if self._state is None:
+            return (name if name not in (None, DEFAULT_BRANCH) else None), None
+        if name is None or name == current:
+            return None, self._snapshot
+        if table is not None and name in table.branches:
+            return name, Snapshot.from_document(self.store.get_bytes(table.branches[name].snapshot))
+        return name, None
+
+    def _begin_switch(self, name: str, *, reference: str, tag: str) -> None:
+        """Record the current head under its branch, and name the branch a pull is about to fill."""
+        self._vouched.clear()
+        if self._state is None:
+            return  # Nothing is current yet, so there is nothing to record; the pull creates the table.
+        table = self._recorded(self._refs())
+        ref = table.branches.get(name) or BranchRef(snapshot=self._state.snapshot, tag=tag, reference=reference)
+        self._write_refs(
+            table.model_copy(update={"branches": {**table.branches, name: ref}, "switching": name}),
+        )
+
+    def _finish_switch(self, name: str) -> None:
+        """Make the branch a pull just installed into current, with the head and origin it now has."""
+        assert self._state is not None
+        # Read as written: the switch this finishes is the one ``_begin_switch`` left marked.
+        stored = self._read_refs(repair=False)
+        table = stored if stored is not None else RefTable(current=name)
+        origin = self._state.origin
+        ref = BranchRef(
+            snapshot=self._state.snapshot,
+            tag=origin.tag if origin is not None else tag_for(name),
+            reference=origin.reference if origin is not None else None,
+            origin=origin,
+        )
+        self._write_refs(
+            table.model_copy(update={"current": name, "switching": None, "branches": {**table.branches, name: ref}})
+        )
+        self._write_head(self._state.snapshot, origin=origin)
+
     def _guard_pull_rollback(
         self,
         served: Snapshot,
@@ -4532,6 +5098,7 @@ class Brain:
         reference: str,
         tag: str,
         allow: bool,
+        held: Snapshot | None = None,
     ) -> None:
         """Refuse a strict ancestor of the held head, or report an explicit override.
 
@@ -4539,9 +5106,9 @@ class Brain:
         warning in that pruned-history case but does not permit treating uncertainty as proof of a
         rollback, so the pull continues with a distinguishable ``ROLLBACK_UNCHECKED`` report.
         """
-        if self._state is None or served.digest == self._snapshot.digest:
+        if held is None or served.digest == held.digest:
             return
-        relation = descends_from(self.store, self._snapshot, served.digest)
+        relation = descends_from(self.store, held, served.digest)
         if relation is None:
             logging.getLogger(__name__).warning(
                 "ROLLBACK_UNCHECKED: cannot determine whether %s:%s at %s predates held head %s "
@@ -4549,7 +5116,7 @@ class Brain:
                 reference,
                 tag,
                 served.digest.short,
-                self._snapshot.digest.short,
+                held.digest.short,
             )
             return
         if not relation:
@@ -4557,7 +5124,7 @@ class Brain:
 
         detail = (
             f"ROLLBACK: {reference}:{tag} serves {served.digest.short}, a strict ancestor of "
-            f"held head {self._snapshot.digest.short}"
+            f"held head {held.digest.short}"
         )
         if not allow:
             raise RollbackError(f"{detail}; refused. Pass allow_rollback=True to override explicitly")
@@ -4872,8 +5439,9 @@ class Brain:
         Args:
             client (RegistryClient): The transport.
             reference (str | None): Repository reference. Defaults to the origin this brain was pulled
-                from.
-            tag (str | None): Tag to publish under. Defaults to the origin's tag.
+                from, then to where the current branch publishes.
+            tag (str | None): Tag to publish under. Defaults to the current branch's tag in a brain with
+                branches, and to the origin's tag in one without. An explicit tag never renames the branch.
             force (bool): Overwrite a diverged remote. Named for what it does.
 
         Returns:
@@ -4882,6 +5450,8 @@ class Brain:
         Raises:
             DistributionError: If there is nothing to publish, no reference is known, or the remote
                 diverged and ``force`` was not set.
+            LostPublishError: If the tag, re-read after the write, names a snapshot that is neither this
+                one nor its ancestor: another publish replaced this one (paper Section 7.4).
         """
         target, target_tag = self._push_target(reference, tag)
         if self._state is None:
@@ -4893,6 +5463,7 @@ class Brain:
 
         manifest = self.pack(tag=target_tag, modules=modules)
         digest = await client.push(target, target_tag, manifest, self.store)
+        await self._confirm_publish(client, target, target_tag)
         await self._push_signatures(client, target, manifest)
         self._advance(
             self._snapshot,
@@ -4915,6 +5486,13 @@ class Brain:
         origin = self.origin
         target = reference or (origin.reference if origin else None)
         target_tag = tag or (origin.tag if origin else None)
+        table = self._read_refs()
+        if table is not None:
+            # A brain with branches publishes the current branch to its own tag, whatever tag it was last
+            # pulled from or pushed to: an explicit release tag must not become the branch's default.
+            ref = table.branches.get(table.current)
+            target = reference or (origin.reference if origin else None) or (ref.reference if ref else None)
+            target_tag = tag or (ref.tag if ref else tag_for(table.current))
         if target is None or target_tag is None:
             raise DistributionError(
                 "no repository to push to: this brain was not pulled from one, so pass a reference and a tag"
@@ -4971,15 +5549,7 @@ class Brain:
         # one that treats "I could not tell" as "nothing is there" would let an expired credential or a
         # failing registry turn into a push over somebody else's version.
 
-        # A projection's config is not a version in anyone's history. Its document binds the source;
-        # the annotation is only the compatibility path for v0.7 reduced-snapshot projections.
-        if manifest.config.media_type == PROJECTION_MEDIA_TYPE:
-            if not self.store.is_resolvable(manifest.config.digest):
-                await client.pull_blob(reference, manifest.config.digest, self.store)
-            remote = Projection.from_document(self.store.get_bytes(manifest.config.digest)).source
-        else:
-            source = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
-            remote = OciDigest.parse(source) if source else manifest.config.digest
+        remote = await self._served_snapshot(client, reference, manifest)
         # Reachability over every parent, not the first-parent chain: a history this brain merged is
         # contained in it, and publishing over it drops nothing.
         if remote in self.reachable_history():
@@ -4989,6 +5559,53 @@ class Brain:
             f"{reference}:{tag} is at snapshot {remote.short}, which is not in this brain's history; "
             f"the two diverged. Reconcile them -- fetch the remote and merge, rebase, or squash it -- "
             f"or pass force=True to overwrite the remote."
+        )
+
+    async def _served_snapshot(self, client: RegistryClient, reference: str, manifest: BrainManifest) -> OciDigest:
+        """The snapshot a published manifest stands for."""
+        # A projection's config is not a version in anyone's history. Its document binds the source;
+        # the annotation is only the compatibility path for v0.7 reduced-snapshot projections.
+        if manifest.config.media_type == PROJECTION_MEDIA_TYPE:
+            if not self.store.is_resolvable(manifest.config.digest):
+                await client.pull_blob(reference, manifest.config.digest, self.store)
+            return Projection.from_document(self.store.get_bytes(manifest.config.digest)).source
+        source = manifest.annotations.get(ANNOTATION_SOURCE_SNAPSHOT)
+        return OciDigest.parse(source) if source else manifest.config.digest
+
+    async def _confirm_publish(self, client: RegistryClient, reference: str, tag: str) -> None:
+        """Re-read the tag just written, and report a publish someone else replaced (paper Section 7.4).
+
+        OCI has no conditional write on a tag, so this detects the race rather than preventing it. A
+        registry that has not yet served the write answers with an ancestor of what was published, which
+        is retried rather than reported; one that keeps answering so is logged as unconfirmed, because
+        an ancestor is not evidence that anyone else wrote.
+        """
+        published = self._snapshot.digest
+        for attempt in range(PUBLISH_CONFIRM_ATTEMPTS):
+            try:
+                served = await client.resolve(reference, tag)
+            except ReferenceNotFoundError:
+                served = None
+            if served is not None:
+                observed = await self._served_snapshot(client, reference, served)
+                if observed == published:
+                    return
+                if observed not in self.reachable_history():
+                    raise LostPublishError(
+                        f"LOST_PUBLISH: {reference}:{tag} was published at {published.short} and now names "
+                        f"{observed.short}; another publish replaced this one. Nothing was lost locally: fetch "
+                        f"the remote, reconcile, and publish again",
+                        published=str(published),
+                        observed=str(observed),
+                    )
+            await asyncio.sleep(PUBLISH_CONFIRM_DELAY * (attempt + 1))
+        logging.getLogger(__name__).warning(
+            "PUBLISH_UNCONFIRMED: %s:%s still does not serve %s after %d reads; the registry may be slow to "
+            "serve writes",
+            reference,
+            tag,
+            published.short,
+            PUBLISH_CONFIRM_ATTEMPTS,
         )
 
     # --- Introspection ---------------------------------------------------------
