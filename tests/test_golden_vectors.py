@@ -19,9 +19,10 @@ from pydantic import ValidationError as PydanticValidationError
 from boltzmann.blocks.base import Block
 from boltzmann.blocks.memory_type import MemoryType
 from boltzmann.blocks.semantic import SemanticBlock
+from boltzmann.branches import branch_for_tag, tag_for, validate_branch_name
 from boltzmann.conformance import golden
 from boltzmann.constants import PROTOCOL_VERSION
-from boltzmann.exceptions import SerializationError
+from boltzmann.exceptions import InvalidBranchNameError, SerializationError
 from boltzmann.identity.digest import BlockId
 from boltzmann.identity.serialization import SERIALIZATION_ID, canonicalize, parse_json_strict
 from boltzmann.merkle.proof import InclusionProof
@@ -242,6 +243,43 @@ class TestReconciliationVectors:
         """A corpus of results only would let an implementation pass while merging a criss-cross."""
         conditions = {refusal["condition"] for refusal in golden.load("reconciliation.json")["refusals"]}
         assert conditions == {"no_common_ancestor", "multiple_merge_bases"}
+
+
+BRANCH_VECTORS = golden.load("branch_tags.json")["vectors"]
+
+
+class TestBranchTagVectors:
+    """The branch-tag mapping both ways (paper Section 7.5): a name to its tag, and a tag back to its branch."""
+
+    @pytest.mark.parametrize(
+        "vector", [v for v in BRANCH_VECTORS if v["kind"] == "name" and v["accepted"]], ids=lambda v: v["name"]
+    )
+    def test_an_accepted_name_maps_to_the_published_tag_and_back(self, vector: dict) -> None:
+        assert validate_branch_name(vector["branch"]) == vector["branch"]
+        tag = tag_for(vector["branch"], vector["default_tag"])
+        assert tag == vector["tag"]
+        assert branch_for_tag(tag, vector["default_tag"]) == vector["branch"]
+
+    @pytest.mark.parametrize(
+        "vector", [v for v in BRANCH_VECTORS if v["kind"] == "name" and not v["accepted"]], ids=lambda v: v["name"]
+    )
+    def test_a_refused_name_is_refused_here(self, vector: dict) -> None:
+        with pytest.raises(InvalidBranchNameError):
+            validate_branch_name(vector["branch"])
+
+    @pytest.mark.parametrize("vector", [v for v in BRANCH_VECTORS if v["kind"] == "tag"], ids=lambda v: v["name"])
+    def test_a_tag_names_the_published_branch(self, vector: dict) -> None:
+        assert branch_for_tag(vector["tag"], vector["default_tag"]) == vector["branch"]
+
+    def test_both_sides_of_the_tag_length_boundary_are_covered(self) -> None:
+        """An off-by-one bound passes every case but these two."""
+        names = {v["name"] for v in BRANCH_VECTORS}
+        assert {"longest_name", "name_one_too_long"} <= names
+
+    def test_tags_that_name_no_branch_are_covered(self) -> None:
+        """Reading tags loosely lists another runtime's releases, or signature fallbacks, as branches."""
+        unnamed = {v["name"] for v in BRANCH_VECTORS if v["kind"] == "tag" and v["branch"] is None}
+        assert {"a_release_tag", "prefix_main", "referrers_fallback_tag"} <= unnamed
 
 
 class TestTheSchemaRegistry:
